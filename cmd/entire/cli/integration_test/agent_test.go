@@ -10,6 +10,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
@@ -825,6 +826,350 @@ func TestGeminiCLIHelperMethods(t *testing.T) {
 
 		if path != ".gemini/settings.json" {
 			t.Errorf("GetHookConfigPath() = %q, want %q", path, ".gemini/settings.json")
+		}
+	})
+}
+
+// TestFactoryAIDroidAgentDetection verifies Factory AI Droid agent detection.
+// Not parallel - contains subtests that use os.Chdir which is process-global.
+func TestFactoryAIDroidAgentDetection(t *testing.T) {
+
+	t.Run("agent is registered", func(t *testing.T) {
+		t.Parallel()
+
+		agents := agent.List()
+		found := false
+		for _, name := range agents {
+			if name == "factoryai-droid" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("agent.List() = %v, want to contain 'factoryai-droid'", agents)
+		}
+	})
+
+	t.Run("detects presence when .factory exists", func(t *testing.T) {
+		// Not parallel - uses os.Chdir which is process-global
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		// Create .factory directory
+		factoryDir := filepath.Join(env.RepoDir, ".factory")
+		if err := os.MkdirAll(factoryDir, 0o755); err != nil {
+			t.Fatalf("failed to create .factory dir: %v", err)
+		}
+
+		// Change to repo dir for detection
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, err := agent.Get("factoryai-droid")
+		if err != nil {
+			t.Fatalf("Get(factoryai-droid) error = %v", err)
+		}
+
+		present, err := ag.DetectPresence()
+		if err != nil {
+			t.Fatalf("DetectPresence() error = %v", err)
+		}
+		if !present {
+			t.Error("DetectPresence() = false, want true when .factory exists")
+		}
+	})
+}
+
+// TestFactoryAIDroidHookInstallation verifies hook installation via Factory AI Droid agent interface.
+// Note: These tests cannot run in parallel because they use os.Chdir which affects the entire process.
+func TestFactoryAIDroidHookInstallation(t *testing.T) {
+	// Not parallel - tests use os.Chdir which is process-global
+
+	t.Run("installs all required hooks", func(t *testing.T) {
+		// Not parallel - uses os.Chdir
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		// Change to repo dir
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, err := agent.Get("factoryai-droid")
+		if err != nil {
+			t.Fatalf("Get(factoryai-droid) error = %v", err)
+		}
+
+		hookAgent, ok := ag.(agent.HookSupport)
+		if !ok {
+			t.Fatal("factoryai-droid agent does not implement HookSupport")
+		}
+
+		count, err := hookAgent.InstallHooks(false, false)
+		if err != nil {
+			t.Fatalf("InstallHooks() error = %v", err)
+		}
+
+		// Should install 7 hooks: SessionStart, SessionEnd, Stop, UserPromptSubmit, PreToolUse[Task], PostToolUse[Task], PreCompact
+		if count != 7 {
+			t.Errorf("InstallHooks() count = %d, want 7", count)
+		}
+
+		// Verify hooks are installed
+		if !hookAgent.AreHooksInstalled() {
+			t.Error("AreHooksInstalled() = false after InstallHooks()")
+		}
+
+		// Verify settings.json was created
+		settingsPath := filepath.Join(env.RepoDir, ".factory", factoryaidroid.FactorySettingsFileName)
+		if _, err := os.Stat(settingsPath); os.IsNotExist(err) {
+			t.Error("settings.json was not created")
+		}
+
+		// Verify hooks structure in settings.json
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatalf("failed to read settings.json: %v", err)
+		}
+		content := string(data)
+
+		// Verify all hook types are present
+		if !strings.Contains(content, "SessionStart") {
+			t.Error("settings.json should contain SessionStart hook")
+		}
+		if !strings.Contains(content, "SessionEnd") {
+			t.Error("settings.json should contain SessionEnd hook")
+		}
+		if !strings.Contains(content, "Stop") {
+			t.Error("settings.json should contain Stop hook")
+		}
+		if !strings.Contains(content, "UserPromptSubmit") {
+			t.Error("settings.json should contain UserPromptSubmit hook")
+		}
+		if !strings.Contains(content, "PreToolUse") {
+			t.Error("settings.json should contain PreToolUse hook")
+		}
+		if !strings.Contains(content, "PostToolUse") {
+			t.Error("settings.json should contain PostToolUse hook")
+		}
+		if !strings.Contains(content, "PreCompact") {
+			t.Error("settings.json should contain PreCompact hook")
+		}
+
+		// Verify permissions.deny contains metadata deny rule
+		if !strings.Contains(content, "Read(./.entire/metadata/**)") {
+			t.Error("settings.json should contain permissions.deny rule for .entire/metadata/**")
+		}
+	})
+
+	t.Run("idempotent - second install returns 0", func(t *testing.T) {
+		// Not parallel - uses os.Chdir
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, _ := agent.Get("factoryai-droid")
+		hookAgent := ag.(agent.HookSupport)
+
+		// First install
+		_, err := hookAgent.InstallHooks(false, false)
+		if err != nil {
+			t.Fatalf("first InstallHooks() error = %v", err)
+		}
+
+		// Second install should be idempotent
+		count, err := hookAgent.InstallHooks(false, false)
+		if err != nil {
+			t.Fatalf("second InstallHooks() error = %v", err)
+		}
+		if count != 0 {
+			t.Errorf("second InstallHooks() count = %d, want 0 (idempotent)", count)
+		}
+	})
+
+	t.Run("localDev mode uses go run", func(t *testing.T) {
+		// Not parallel - uses os.Chdir
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, _ := agent.Get("factoryai-droid")
+		hookAgent := ag.(agent.HookSupport)
+
+		_, err := hookAgent.InstallHooks(true, false) // localDev = true
+		if err != nil {
+			t.Fatalf("InstallHooks(localDev=true) error = %v", err)
+		}
+
+		// Read settings and verify commands use "go run"
+		settingsPath := filepath.Join(env.RepoDir, ".factory", factoryaidroid.FactorySettingsFileName)
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatalf("failed to read settings.json: %v", err)
+		}
+
+		content := string(data)
+		if !strings.Contains(content, "go run") {
+			t.Error("localDev hooks should use 'go run', but settings.json doesn't contain it")
+		}
+		if !strings.Contains(content, "${FACTORY_PROJECT_DIR}") {
+			t.Error("localDev hooks should use '${FACTORY_PROJECT_DIR}', but settings.json doesn't contain it")
+		}
+	})
+
+	t.Run("production mode uses entire binary", func(t *testing.T) {
+		// Not parallel - uses os.Chdir
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, _ := agent.Get("factoryai-droid")
+		hookAgent := ag.(agent.HookSupport)
+
+		_, err := hookAgent.InstallHooks(false, false) // localDev = false
+		if err != nil {
+			t.Fatalf("InstallHooks(localDev=false) error = %v", err)
+		}
+
+		// Read settings and verify commands use "entire" binary
+		settingsPath := filepath.Join(env.RepoDir, ".factory", factoryaidroid.FactorySettingsFileName)
+		data, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatalf("failed to read settings.json: %v", err)
+		}
+
+		content := string(data)
+		if !strings.Contains(content, "entire hooks factoryai-droid") {
+			t.Error("production hooks should use 'entire hooks factoryai-droid', but settings.json doesn't contain it")
+		}
+	})
+
+	t.Run("force flag reinstalls hooks", func(t *testing.T) {
+		// Not parallel - uses os.Chdir
+		env := NewTestEnv(t)
+		env.InitRepo()
+
+		oldWd, _ := os.Getwd()
+		if err := os.Chdir(env.RepoDir); err != nil {
+			t.Fatalf("failed to chdir: %v", err)
+		}
+		defer func() { _ = os.Chdir(oldWd) }()
+
+		ag, _ := agent.Get("factoryai-droid")
+		hookAgent := ag.(agent.HookSupport)
+
+		// First install
+		_, err := hookAgent.InstallHooks(false, false)
+		if err != nil {
+			t.Fatalf("first InstallHooks() error = %v", err)
+		}
+
+		// Force reinstall should return count > 0
+		count, err := hookAgent.InstallHooks(false, true) // force = true
+		if err != nil {
+			t.Fatalf("force InstallHooks() error = %v", err)
+		}
+		if count != 7 {
+			t.Errorf("force InstallHooks() count = %d, want 7", count)
+		}
+	})
+}
+
+// TestFactoryAIDroidHelperMethods verifies Factory Droid-specific helper methods.
+func TestFactoryAIDroidHelperMethods(t *testing.T) {
+	t.Parallel()
+
+	t.Run("FormatResumeCommand returns droid --session-id", func(t *testing.T) {
+		t.Parallel()
+
+		ag, _ := agent.Get("factoryai-droid")
+		cmd := ag.FormatResumeCommand("abc123")
+
+		if cmd != "droid --session-id abc123" {
+			t.Errorf("FormatResumeCommand() = %q, want %q", cmd, "droid --session-id abc123")
+		}
+	})
+
+	t.Run("GetHookConfigPath returns .factory/settings.json", func(t *testing.T) {
+		t.Parallel()
+
+		ag, _ := agent.Get("factoryai-droid")
+		path := ag.GetHookConfigPath()
+
+		if path != ".factory/settings.json" {
+			t.Errorf("GetHookConfigPath() = %q, want %q", path, ".factory/settings.json")
+		}
+	})
+}
+
+// TestFactoryAIDroidSessionStubs verifies that stub methods return not-implemented errors.
+func TestFactoryAIDroidSessionStubs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReadSession returns not-implemented error", func(t *testing.T) {
+		t.Parallel()
+
+		ag, _ := agent.Get("factoryai-droid")
+		_, err := ag.ReadSession(&agent.HookInput{
+			SessionID:  "test",
+			SessionRef: "/tmp/test.jsonl",
+		})
+		if err == nil {
+			t.Error("ReadSession() should return an error for Factory AI Droid")
+		}
+		if !strings.Contains(err.Error(), "not implemented") {
+			t.Errorf("ReadSession() error = %q, want to contain 'not implemented'", err.Error())
+		}
+	})
+
+	t.Run("WriteSession returns not-implemented error", func(t *testing.T) {
+		t.Parallel()
+
+		ag, _ := agent.Get("factoryai-droid")
+		err := ag.WriteSession(&agent.AgentSession{
+			SessionID:  "test",
+			AgentName:  "factoryai-droid",
+			SessionRef: "/tmp/test.jsonl",
+			NativeData: []byte("data"),
+		})
+		if err == nil {
+			t.Error("WriteSession() should return an error for Factory AI Droid")
+		}
+		if !strings.Contains(err.Error(), "not implemented") {
+			t.Errorf("WriteSession() error = %q, want to contain 'not implemented'", err.Error())
+		}
+	})
+
+	t.Run("GetSessionDir returns not-implemented error", func(t *testing.T) {
+		t.Parallel()
+
+		ag, _ := agent.Get("factoryai-droid")
+		_, err := ag.GetSessionDir("/tmp/repo")
+		if err == nil {
+			t.Error("GetSessionDir() should return an error for Factory AI Droid")
+		}
+		if !strings.Contains(err.Error(), "not implemented") {
+			t.Errorf("GetSessionDir() error = %q, want to contain 'not implemented'", err.Error())
 		}
 	})
 }
