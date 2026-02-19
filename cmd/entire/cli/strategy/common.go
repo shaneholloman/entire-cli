@@ -218,7 +218,7 @@ func isProtectedPath(relPath string) bool {
 
 // protectedDirs returns the list of directories to protect. This combines
 // static infrastructure dirs with agent-reported dirs from the registry.
-// The result is cached via sync.Once since it's called per-file during filepath.Walk.
+// The result is cached via sync.Once since it's called per-file when filtering untracked files.
 //
 // NOTE: The cache is never invalidated. In production this is fine (the agent registry
 // is populated at init time and never changes). However, tests that mutate the agent
@@ -237,24 +237,6 @@ var (
 	protectedDirsOnce  sync.Once
 	protectedDirsCache []string
 )
-
-// homeRelativePath strips the $HOME/ prefix from an absolute path,
-// returning a home-relative path suitable for persisting in metadata.
-// Returns "" if the path is empty or not under $HOME.
-func homeRelativePath(absPath string) string {
-	if absPath == "" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	prefix := home + string(filepath.Separator)
-	if !strings.HasPrefix(absPath, prefix) {
-		return ""
-	}
-	return absPath[len(prefix):]
-}
 
 // isSpecificAgentType returns true if the agent type is a known, specific value
 // (not empty and not the generic "Agent" fallback).
@@ -532,31 +514,6 @@ func ReadAllSessionPromptsFromTree(tree *object.Tree, checkpointPath string, ses
 	prompts[len(prompts)-1] = ReadSessionPromptFromTree(tree, checkpointPath)
 
 	return prompts
-}
-
-// ReadSessionPromptFromShadow reads the first prompt for a session from the shadow branch.
-// Returns an empty string if the prompt cannot be read.
-func ReadSessionPromptFromShadow(repo *git.Repository, baseCommit, worktreeID, sessionID string) string {
-	// Get shadow branch for this base commit using worktree-specific naming
-	shadowBranchName := checkpoint.ShadowBranchNameForCommit(baseCommit, worktreeID)
-	ref, err := repo.Reference(plumbing.NewBranchReferenceName(shadowBranchName), true)
-	if err != nil {
-		return ""
-	}
-
-	commit, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		return ""
-	}
-
-	tree, err := commit.Tree()
-	if err != nil {
-		return ""
-	}
-
-	// Build the path to prompt.txt: .entire/metadata/<session-id>/prompt.txt
-	checkpointPath := paths.EntireMetadataDir + "/" + sessionID
-	return ReadSessionPromptFromTree(tree, checkpointPath)
 }
 
 // GetRemoteMetadataBranchTree returns the tree object for origin/entire/checkpoints/v1.
@@ -1262,51 +1219,42 @@ func HardResetWithProtection(commitHash plumbing.Hash) (shortID string, err erro
 	return shortID, nil
 }
 
-// collectUntrackedFiles collects all untracked files in the working directory.
-// This is used to capture the initial state when starting a session,
-// ensuring untracked files present at session start are preserved during rewind.
-// Excludes protected directories (.git/, .entire/, and agent config directories).
-// Works correctly from any subdirectory within the repository.
+// collectUntrackedFiles collects untracked files in the working directory that are
+// NOT ignored by .gitignore. This is used to capture the initial state when starting
+// a session, ensuring untracked files present at session start are preserved during rewind.
+// Uses "git ls-files --others --exclude-standard -z" to respect .gitignore rules,
+// avoiding bloated session state from large ignored directories like node_modules/.
+// Returns paths relative to the repository root.
 func collectUntrackedFiles() ([]string, error) {
-	// Get repository root to walk from there
 	repoRoot, err := GetWorktreePath()
 	if err != nil {
-		repoRoot = "." // Fallback to current directory
+		repoRoot = "."
 	}
 
-	var untrackedFiles []string
-	err = filepath.Walk(repoRoot, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return nil //nolint:nilerr // Skip filesystem errors during walk
-		}
-
-		// Get path relative to repo root
-		relPath, err := filepath.Rel(repoRoot, path)
-		if err != nil {
-			return nil //nolint:nilerr // Skip paths we can't make relative
-		}
-
-		// Skip directories
-		if info.IsDir() {
-			if isProtectedPath(relPath) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Skip files in protected directories (shouldn't reach here due to SkipDir, but safety check)
-		if isProtectedPath(relPath) {
-			return nil
-		}
-
-		untrackedFiles = append(untrackedFiles, relPath)
-		return nil
-	})
+	cmd := exec.CommandContext(context.Background(), "git", "ls-files", "--others", "--exclude-standard", "-z")
+	cmd.Dir = repoRoot
+	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory: %w", err)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, fmt.Errorf("git ls-files failed: %s: %w", strings.TrimSpace(string(exitErr.Stderr)), err)
+		}
+		return nil, fmt.Errorf("git ls-files failed: %w", err)
 	}
 
-	return untrackedFiles, nil
+	raw := string(output)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var files []string
+	for _, f := range strings.Split(raw, "\x00") {
+		// Defense-in-depth: filter protected paths even though --exclude-standard should already handle them
+		if f != "" && !isProtectedPath(f) {
+			files = append(files, f)
+		}
+	}
+	return files, nil
 }
 
 // ExtractSessionIDFromCommit extracts the session ID from a commit's trailers.

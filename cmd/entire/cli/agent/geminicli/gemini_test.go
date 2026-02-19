@@ -80,14 +80,6 @@ func TestDetectPresence(t *testing.T) {
 	})
 }
 
-func TestGetHookConfigPath(t *testing.T) {
-	ag := &GeminiCLIAgent{}
-	path := ag.GetHookConfigPath()
-	if path != ".gemini/settings.json" {
-		t.Errorf("GetHookConfigPath() = %q, want .gemini/settings.json", path)
-	}
-}
-
 func TestSupportsHooks(t *testing.T) {
 	ag := &GeminiCLIAgent{}
 	if !ag.SupportsHooks() {
@@ -245,15 +237,21 @@ func TestResolveSessionFile(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to default when no match", func(t *testing.T) {
+	t.Run("falls back to Gemini-style filename when no match", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		ag := &GeminiCLIAgent{}
 
 		result := ag.ResolveSessionFile(tmpDir, "0544a0f5-46a6-41b3-a89c-e7804df731b8")
-		expected := filepath.Join(tmpDir, "0544a0f5-46a6-41b3-a89c-e7804df731b8.json")
-		if result != expected {
-			t.Errorf("ResolveSessionFile() = %q, want %q", result, expected)
+		filename := filepath.Base(result)
+		if !strings.HasPrefix(filename, "session-") {
+			t.Errorf("fallback filename %q should start with 'session-'", filename)
+		}
+		if !strings.HasSuffix(filename, "-0544a0f5.json") {
+			t.Errorf("fallback filename %q should end with '-0544a0f5.json'", filename)
+		}
+		if filepath.Dir(result) != tmpDir {
+			t.Errorf("fallback dir = %q, want %q", filepath.Dir(result), tmpDir)
 		}
 	})
 
@@ -262,11 +260,14 @@ func TestResolveSessionFile(t *testing.T) {
 		tmpDir := t.TempDir()
 		ag := &GeminiCLIAgent{}
 
-		// Short ID (less than 8 chars) should use entire ID as prefix
+		// Short ID (less than 8 chars) should use entire ID in filename
 		result := ag.ResolveSessionFile(tmpDir, "abc123")
-		expected := filepath.Join(tmpDir, "abc123.json")
-		if result != expected {
-			t.Errorf("ResolveSessionFile() = %q, want %q", result, expected)
+		filename := filepath.Base(result)
+		if !strings.HasPrefix(filename, "session-") {
+			t.Errorf("fallback filename %q should start with 'session-'", filename)
+		}
+		if !strings.HasSuffix(filename, "-abc123.json") {
+			t.Errorf("fallback filename %q should end with '-abc123.json'", filename)
 		}
 	})
 }
@@ -441,21 +442,25 @@ func TestWriteSession_NoNativeData(t *testing.T) {
 	}
 }
 
-func TestSanitizePathForGemini(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"/Users/test/project", "-Users-test-project"},
-		{"simple", "simple"},
-		{"/path/with spaces/dir", "-path-with-spaces-dir"},
+func TestGetProjectHash(t *testing.T) {
+	t.Parallel()
+
+	// GetProjectHash should return a consistent SHA256 hex string for a given path
+	hash1 := GetProjectHash("/Users/test/project")
+	hash2 := GetProjectHash("/Users/test/project")
+	if hash1 != hash2 {
+		t.Errorf("GetProjectHash should be deterministic: got %q and %q", hash1, hash2)
 	}
 
-	for _, tt := range tests {
-		got := SanitizePathForGemini(tt.input)
-		if got != tt.want {
-			t.Errorf("SanitizePathForGemini(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+	// Should be a 64-char hex string (SHA256)
+	if len(hash1) != 64 {
+		t.Errorf("GetProjectHash should return 64-char hex string, got %d chars: %q", len(hash1), hash1)
+	}
+
+	// Different paths should produce different hashes
+	hash3 := GetProjectHash("/Users/test/other")
+	if hash1 == hash3 {
+		t.Errorf("GetProjectHash should return different hashes for different paths")
 	}
 }
 

@@ -100,16 +100,6 @@ func ClearRepoRootCache() {
 	repoRootMu.Unlock()
 }
 
-// RepoRootOr returns the git repository root directory, or the current directory
-// if not inside a git repository. This is useful for functions that need a fallback.
-func RepoRootOr(fallback string) string {
-	root, err := RepoRoot()
-	if err != nil {
-		return fallback
-	}
-	return root
-}
-
 // AbsPath returns the absolute path for a relative path within the repository.
 // If the path is already absolute, it is returned as-is.
 // Uses RepoRoot() to resolve paths relative to the repository root.

@@ -29,8 +29,8 @@ var _ agent.Agent = (*mockLifecycleAgent)(nil)
 func (m *mockLifecycleAgent) Name() agent.AgentName                  { return m.name }
 func (m *mockLifecycleAgent) Type() agent.AgentType                  { return m.agentType }
 func (m *mockLifecycleAgent) Description() string                    { return "Mock agent for lifecycle tests" }
+func (m *mockLifecycleAgent) IsPreview() bool                        { return false }
 func (m *mockLifecycleAgent) DetectPresence() (bool, error)          { return false, nil }
-func (m *mockLifecycleAgent) GetHookConfigPath() string              { return "" }
 func (m *mockLifecycleAgent) SupportsHooks() bool                    { return true }
 func (m *mockLifecycleAgent) ProtectedDirs() []string                { return nil }
 func (m *mockLifecycleAgent) HookNames() []string                    { return nil }

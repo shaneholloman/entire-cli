@@ -38,6 +38,9 @@ func (f *FactoryAIDroidAgent) Description() string {
 	return "Factory AI Droid - agent-native development platform"
 }
 
+// IsPreview returns true as Factory AI Droid integration is in preview.
+func (f *FactoryAIDroidAgent) IsPreview() bool { return true }
+
 // ProtectedDirs returns directories that Factory AI Droid uses for config/state.
 func (f *FactoryAIDroidAgent) ProtectedDirs() []string { return []string{".factory"} }
 

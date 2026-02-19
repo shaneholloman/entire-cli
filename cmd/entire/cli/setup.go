@@ -763,13 +763,13 @@ func setupAgentHooksNonInteractive(w io.Writer, ag agent.Agent, strategyName str
 
 	if installedHooks == 0 {
 		msg := fmt.Sprintf("Hooks for %s already installed", ag.Description())
-		if agentName == agent.AgentNameGemini {
+		if ag.IsPreview() {
 			msg += " (Preview)"
 		}
 		fmt.Fprintf(w, "%s\n", msg)
 	} else {
 		msg := fmt.Sprintf("Installed %d hooks for %s", installedHooks, ag.Description())
-		if agentName == agent.AgentNameGemini {
+		if ag.IsPreview() {
 			msg += " (Preview)"
 		}
 		fmt.Fprintf(w, "%s\n", msg)

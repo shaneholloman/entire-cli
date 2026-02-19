@@ -728,22 +728,6 @@ func writeTranscriptToAgentSession(content []byte, sessionID string, agent agent
 	return sessionID, nil
 }
 
-// resolveTranscriptPath determines the correct file path for an agent's session transcript.
-// Delegates to strategy.ResolveSessionFilePath after computing the fallback session directory.
-func resolveTranscriptPath(sessionID string, agent agentpkg.Agent) (string, error) {
-	repoRoot, err := paths.RepoRoot()
-	if err != nil {
-		return "", fmt.Errorf("failed to get repository root: %w", err)
-	}
-
-	agentSessionDir, err := agent.GetSessionDir(repoRoot)
-	if err != nil {
-		return "", fmt.Errorf("failed to get agent session directory: %w", err)
-	}
-
-	return strategy.ResolveSessionFilePath(sessionID, agent, agentSessionDir), nil
-}
-
 // restoreTaskCheckpointTranscript restores a truncated transcript for a task checkpoint.
 // Uses GetTaskCheckpointTranscript to fetch the transcript from the strategy.
 //

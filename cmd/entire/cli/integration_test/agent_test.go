@@ -818,16 +818,6 @@ func TestGeminiCLIHelperMethods(t *testing.T) {
 		}
 	})
 
-	t.Run("GetHookConfigPath returns .gemini/settings.json", func(t *testing.T) {
-		t.Parallel()
-
-		ag, _ := agent.Get("gemini")
-		path := ag.GetHookConfigPath()
-
-		if path != ".gemini/settings.json" {
-			t.Errorf("GetHookConfigPath() = %q, want %q", path, ".gemini/settings.json")
-		}
-	})
 }
 
 // TestFactoryAIDroidAgentDetection verifies Factory AI Droid agent detection.
@@ -1114,7 +1104,11 @@ func TestFactoryAIDroidHelperMethods(t *testing.T) {
 		t.Parallel()
 
 		ag, _ := agent.Get("factoryai-droid")
-		path := ag.GetHookConfigPath()
+		droid, ok := ag.(*factoryaidroid.FactoryAIDroidAgent)
+		if !ok {
+			t.Fatal("agent is not *factoryaidroid.FactoryAIDroidAgent")
+		}
+		path := droid.GetHookConfigPath()
 
 		if path != ".factory/settings.json" {
 			t.Errorf("GetHookConfigPath() = %q, want %q", path, ".factory/settings.json")

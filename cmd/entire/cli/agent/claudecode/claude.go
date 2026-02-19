@@ -47,6 +47,8 @@ func (c *ClaudeCodeAgent) Description() string {
 	return "Claude Code - Anthropic's CLI coding assistant"
 }
 
+func (c *ClaudeCodeAgent) IsPreview() bool { return false }
+
 // DetectPresence checks if Claude Code is configured in the repository.
 func (c *ClaudeCodeAgent) DetectPresence() (bool, error) {
 	// Get repo root to check for .claude directory
@@ -68,11 +70,6 @@ func (c *ClaudeCodeAgent) DetectPresence() (bool, error) {
 		return true, nil
 	}
 	return false, nil
-}
-
-// GetHookConfigPath returns the path to Claude's hook config file.
-func (c *ClaudeCodeAgent) GetHookConfigPath() string {
-	return ".claude/settings.json"
 }
 
 // SupportsHooks returns true as Claude Code supports lifecycle hooks.

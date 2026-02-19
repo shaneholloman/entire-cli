@@ -16,8 +16,8 @@ var _ Agent = (*mockAgent)(nil) // Compile-time interface check
 func (m *mockAgent) Name() AgentName               { return mockAgentName }
 func (m *mockAgent) Type() AgentType               { return mockAgentType }
 func (m *mockAgent) Description() string           { return "Mock agent for testing" }
+func (m *mockAgent) IsPreview() bool               { return false }
 func (m *mockAgent) DetectPresence() (bool, error) { return false, nil }
-func (m *mockAgent) GetHookConfigPath() string     { return "" }
 func (m *mockAgent) SupportsHooks() bool           { return false }
 
 //nolint:nilnil // Mock implementation

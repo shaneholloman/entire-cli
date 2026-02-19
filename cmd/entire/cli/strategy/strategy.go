@@ -23,9 +23,6 @@ var ErrNoSession = errors.New("no session info available")
 // ErrNotTaskCheckpoint is returned when a rewind point is not a task checkpoint.
 var ErrNotTaskCheckpoint = errors.New("not a task checkpoint")
 
-// ErrNotImplemented is returned when a feature is not yet implemented.
-var ErrNotImplemented = errors.New("not implemented")
-
 // ErrEmptyRepository is returned when the repository has no commits yet.
 var ErrEmptyRepository = errors.New("repository has no commits yet")
 
