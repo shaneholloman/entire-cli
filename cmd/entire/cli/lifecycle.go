@@ -144,6 +144,9 @@ func handleLifecycleTurnStart(ag agent.Agent, event *agent.Event) error {
 		}
 	}
 
+	// Auto-create trail for non-main branches
+	autoCreateTrailOnTurnStart(event.Prompt)
+
 	return nil
 }
 
@@ -756,6 +759,30 @@ func markSessionEnded(sessionID string) error {
 		return fmt.Errorf("failed to save session state: %w", err)
 	}
 	return nil
+}
+
+// autoCreateTrailOnTurnStart creates a trail if on a non-main branch without one.
+// Non-blocking: logs errors but doesn't fail the session.
+// prompt is the user's prompt text, used for the trail title.
+func autoCreateTrailOnTurnStart(prompt string) {
+	isDefault, branchName, err := IsOnDefaultBranch()
+	if err != nil || isDefault || branchName == "" {
+		return
+	}
+
+	repo, err := strategy.OpenRepository()
+	if err != nil {
+		return
+	}
+
+	baseBranch := strategy.GetDefaultBranchName(repo)
+	if baseBranch == "" {
+		baseBranch = defaultBaseBranch
+	}
+
+	if err := AutoCreateTrail(repo, branchName, baseBranch, prompt); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to auto-create trail: %v\n", err)
+	}
 }
 
 // logFileChanges logs the files modified, created, and deleted during a session.

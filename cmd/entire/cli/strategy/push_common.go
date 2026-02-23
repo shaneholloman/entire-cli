@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v5"
@@ -200,6 +201,12 @@ func fetchAndMergeSessionsCommon(remote, branchName string) error {
 	}
 
 	return nil
+}
+
+// PushTrailsBranch pushes the entire/trails branch to the remote.
+// Reuses the same push/sync logic as session branches.
+func PushTrailsBranch(remote string) error {
+	return pushSessionsBranchCommon(remote, paths.TrailsBranchName)
 }
 
 // createMergeCommitCommon creates a merge commit with multiple parents.
