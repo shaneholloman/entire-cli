@@ -208,64 +208,26 @@ func runTrailCreate(w, errW io.Writer, title, description, base, branch, statusS
 	_, currentBranch, _ := IsOnDefaultBranch() //nolint:errcheck // best-effort detection
 	interactive := !hasFlag("title") && !hasFlag("branch")
 
-	// Step 1: Determine title (interactive: prompt first, derive branch from it)
-	if title == "" && interactive {
-		var inputTitle string
-		form := NewAccessibleForm(
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Trail title").
-					Placeholder("What are you working on?").
-					Value(&inputTitle),
-			),
-		)
-		if formErr := form.Run(); formErr != nil {
-			return fmt.Errorf("form cancelled: %w", formErr)
+	if interactive {
+		// Interactive flow: title → description → branch (derived) → status
+		if err := runTrailCreateInteractive(&title, &description, &branch, &statusStr); err != nil {
+			return err
 		}
-		title = strings.TrimSpace(inputTitle)
-		if title == "" {
-			return errors.New("trail title is required")
-		}
-	}
-
-	// Step 2: Determine branch
-	if branch == "" {
-		switch {
-		case interactive:
-			// Derive branch name from title, let user override
-			suggested := slugifyTitle(title)
-			var inputBranch string
-			form := NewAccessibleForm(
-				huh.NewGroup(
-					huh.NewInput().
-						Title("Branch name").
-						Placeholder(suggested).
-						Value(&inputBranch),
-				),
-			)
-			if formErr := form.Run(); formErr != nil {
-				return fmt.Errorf("form cancelled: %w", formErr)
-			}
-			inputBranch = strings.TrimSpace(inputBranch)
-			if inputBranch != "" {
-				branch = inputBranch
-			} else {
-				branch = suggested
-			}
-		case hasFlag("title"):
-			// --title provided without --branch: derive branch from title
-			branch = slugifyTitle(title)
-		default:
-			branch = currentBranch
-		}
+	} else {
+		// Non-interactive: derive missing values from provided flags
 		if branch == "" {
-			return errors.New("branch name is required")
+			if hasFlag("title") {
+				branch = slugifyTitle(title)
+			} else {
+				branch = currentBranch
+			}
+		}
+		if title == "" {
+			title = trail.HumanizeBranchName(branch)
 		}
 	}
-
-	// If title still empty (non-interactive with --branch only), derive from branch
-	if title == "" {
-		title = trail.HumanizeBranchName(branch)
+	if branch == "" {
+		return errors.New("branch name is required")
 	}
 
 	// Create the branch if it doesn't exist
@@ -584,6 +546,67 @@ func removeString(slice []string, s string) []string {
 		}
 	}
 	return result
+}
+
+// runTrailCreateInteractive runs the interactive form for trail creation.
+// Prompts for title, description, branch (derived from title), and status.
+func runTrailCreateInteractive(title, description, branch, statusStr *string) error {
+	// Step 1: Title and description
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Trail title").
+				Placeholder("What are you working on?").
+				Value(title),
+			huh.NewText().
+				Title("Description (optional)").
+				Value(description),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return fmt.Errorf("form cancelled: %w", err)
+	}
+	*title = strings.TrimSpace(*title)
+	if *title == "" {
+		return errors.New("trail title is required")
+	}
+
+	// Step 2: Branch (derived from title) and status
+	suggested := slugifyTitle(*title)
+	*branch = suggested
+
+	// Build status options, excluding done/closed
+	var statusOptions []huh.Option[string]
+	for _, s := range trail.ValidStatuses() {
+		if s == trail.StatusDone || s == trail.StatusClosed {
+			continue
+		}
+		statusOptions = append(statusOptions, huh.NewOption(string(s), string(s)))
+	}
+	if *statusStr == "" {
+		*statusStr = string(trail.StatusDraft)
+	}
+
+	form = NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Branch name").
+				Placeholder(suggested).
+				Value(branch),
+			huh.NewSelect[string]().
+				Title("Status").
+				Options(statusOptions...).
+				Value(statusStr),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return fmt.Errorf("form cancelled: %w", err)
+	}
+	*branch = strings.TrimSpace(*branch)
+	if *branch == "" {
+		*branch = suggested
+	}
+	return nil
 }
 
 // slugifyTitle converts a title string into a branch-friendly slug.
