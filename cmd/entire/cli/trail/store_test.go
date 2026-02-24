@@ -80,17 +80,17 @@ func TestStore_WriteAndRead(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	metadata := &Metadata{
-		TrailID:     trailID,
-		Branch:      "feature/test",
-		Base:        "main",
-		Title:       "Test trail",
-		Description: "A test trail",
-		Status:      StatusDraft,
-		Author:      "tester",
-		Assignees:   []string{},
-		Labels:      []string{"test"},
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		TrailID:   trailID,
+		Branch:    "feature/test",
+		Base:      "main",
+		Title:     "Test trail",
+		Body:      "A test trail",
+		Status:    StatusDraft,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{"test"},
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	discussion := &Discussion{Comments: []Comment{}}

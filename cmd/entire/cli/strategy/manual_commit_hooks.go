@@ -1959,8 +1959,8 @@ func generateTrailTitleFromTranscript(repo *git.Repository, branchName string, t
 	if err != nil || existing == nil {
 		return
 	}
-	// Only generate once: skip if description already set
-	if existing.Description != "" {
+	// Only generate once: skip if body already set
+	if existing.Body != "" {
 		return
 	}
 
@@ -1977,8 +1977,8 @@ func generateTrailTitleFromTranscript(repo *git.Repository, branchName string, t
 		if result.Title != "" {
 			m.Title = result.Title
 		}
-		if result.Description != "" {
-			m.Description = result.Description
+		if result.Body != "" {
+			m.Body = result.Body
 		}
 	})
 }

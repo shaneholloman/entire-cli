@@ -22,22 +22,22 @@ const trailTitlePromptTemplate = `Analyze this development session transcript an
 Return a JSON object:
 {
   "title": "Short imperative title (max 80 chars)",
-  "description": "1-3 sentence description of what was accomplished and why"
+  "body": "1-3 sentence description of what was accomplished and why"
 }
 
 Guidelines:
 - Title: imperative mood, captures core intent (e.g. "Add user authentication flow")
-- Description: explain the "what" and "why", not the "how"
+- Body: explain the "what" and "why", not the "how"
 - Return ONLY the JSON object`
 
 // trailTitleModel is the model hint for trail title generation.
 // Haiku is fast (~1-2s) and cheap — trail titles are simple tasks.
 const trailTitleModel = "haiku"
 
-// TrailTitleResult contains the LLM-generated title and description for a trail.
+// TrailTitleResult contains the LLM-generated title and body for a trail.
 type TrailTitleResult struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 // GenerateTrailTitle generates a title and description for a trail using the agent's

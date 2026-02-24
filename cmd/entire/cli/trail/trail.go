@@ -97,18 +97,18 @@ func (s Status) IsValid() bool {
 
 // Metadata represents the metadata for a trail, matching the web PR format.
 type Metadata struct {
-	TrailID     ID         `json:"trail_id"`
-	Branch      string     `json:"branch"`
-	Base        string     `json:"base"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      Status     `json:"status"`
-	Author      string     `json:"author"`
-	Assignees   []string   `json:"assignees"`
-	Labels      []string   `json:"labels"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	MergedAt    *time.Time `json:"merged_at,omitempty"`
+	TrailID   ID         `json:"trail_id"`
+	Branch    string     `json:"branch"`
+	Base      string     `json:"base"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	Status    Status     `json:"status"`
+	Author    string     `json:"author"`
+	Assignees []string   `json:"assignees"`
+	Labels    []string   `json:"labels"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	MergedAt  *time.Time `json:"merged_at,omitempty"`
 }
 
 // Discussion holds the discussion/comments for a trail.

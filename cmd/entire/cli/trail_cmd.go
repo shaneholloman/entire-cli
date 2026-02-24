@@ -74,8 +74,8 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 	fmt.Fprintf(w, "  Base:    %s\n", m.Base)
 	fmt.Fprintf(w, "  Status:  %s\n", m.Status)
 	fmt.Fprintf(w, "  Author:  %s\n", m.Author)
-	if m.Description != "" {
-		fmt.Fprintf(w, "  Description: %s\n", m.Description)
+	if m.Body != "" {
+		fmt.Fprintf(w, "  Body:    %s\n", m.Body)
 	}
 	if len(m.Labels) > 0 {
 		fmt.Fprintf(w, "  Labels:  %s\n", strings.Join(m.Labels, ", "))
@@ -176,19 +176,19 @@ func runTrailListAll(w io.Writer, statusFilter string, jsonOutput bool) error {
 }
 
 func newTrailCreateCmd() *cobra.Command {
-	var title, description, base, branch, status string
+	var title, body, base, branch, status string
 	var checkout bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a trail for the current or a new branch",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailCreate(cmd.OutOrStdout(), cmd.ErrOrStderr(), title, description, base, branch, status, checkout)
+			return runTrailCreate(cmd.OutOrStdout(), cmd.ErrOrStderr(), title, body, base, branch, status, checkout)
 		},
 	}
 
 	cmd.Flags().StringVar(&title, "title", "", "Trail title")
-	cmd.Flags().StringVar(&description, "description", "", "Trail description")
+	cmd.Flags().StringVar(&body, "body", "", "Trail body")
 	cmd.Flags().StringVar(&base, "base", "", "Base branch (defaults to detected default branch)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch for the trail (defaults to current branch)")
 	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to draft)")
@@ -198,7 +198,7 @@ func newTrailCreateCmd() *cobra.Command {
 }
 
 //nolint:cyclop // sequential steps for creating a trail — splitting would obscure the flow
-func runTrailCreate(w, errW io.Writer, title, description, base, branch, statusStr string, checkout bool) error {
+func runTrailCreate(w, errW io.Writer, title, body, base, branch, statusStr string, checkout bool) error {
 	repo, err := strategy.OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
@@ -216,8 +216,8 @@ func runTrailCreate(w, errW io.Writer, title, description, base, branch, statusS
 	interactive := !hasFlag("title") && !hasFlag("branch")
 
 	if interactive {
-		// Interactive flow: title → description → branch (derived) → status
-		if err := runTrailCreateInteractive(&title, &description, &branch, &statusStr); err != nil {
+		// Interactive flow: title → body → branch (derived) → status
+		if err := runTrailCreateInteractive(&title, &body, &branch, &statusStr); err != nil {
 			return err
 		}
 	} else {
@@ -278,17 +278,17 @@ func runTrailCreate(w, errW io.Writer, title, description, base, branch, statusS
 
 	now := time.Now()
 	metadata := &trail.Metadata{
-		TrailID:     trailID,
-		Branch:      branch,
-		Base:        base,
-		Title:       title,
-		Description: description,
-		Status:      trailStatus,
-		Author:      authorName,
-		Assignees:   []string{},
-		Labels:      []string{},
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		TrailID:   trailID,
+		Branch:    branch,
+		Base:      base,
+		Title:     title,
+		Body:      body,
+		Status:    trailStatus,
+		Author:    authorName,
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := store.Write(metadata, nil, nil); err != nil {
@@ -337,20 +337,20 @@ func runTrailCreate(w, errW io.Writer, title, description, base, branch, statusS
 }
 
 func newTrailUpdateCmd() *cobra.Command {
-	var statusStr, title, description, branch string
+	var statusStr, title, body, branch string
 	var labelAdd, labelRemove []string
 
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update trail metadata",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailUpdate(cmd.OutOrStdout(), statusStr, title, description, branch, labelAdd, labelRemove)
+			return runTrailUpdate(cmd.OutOrStdout(), statusStr, title, body, branch, labelAdd, labelRemove)
 		},
 	}
 
 	cmd.Flags().StringVar(&statusStr, "status", "", "Update status")
 	cmd.Flags().StringVar(&title, "title", "", "Update title")
-	cmd.Flags().StringVar(&description, "description", "", "Update description")
+	cmd.Flags().StringVar(&body, "body", "", "Update body")
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch to update trail for (defaults to current)")
 	cmd.Flags().StringSliceVar(&labelAdd, "add-label", nil, "Add label(s)")
 	cmd.Flags().StringSliceVar(&labelRemove, "remove-label", nil, "Remove label(s)")
@@ -358,7 +358,7 @@ func newTrailUpdateCmd() *cobra.Command {
 	return cmd
 }
 
-func runTrailUpdate(w io.Writer, statusStr, title, description, branch string, labelAdd, labelRemove []string) error {
+func runTrailUpdate(w io.Writer, statusStr, title, body, branch string, labelAdd, labelRemove []string) error {
 	repo, err := strategy.OpenRepository()
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
@@ -382,7 +382,7 @@ func runTrailUpdate(w io.Writer, statusStr, title, description, branch string, l
 	}
 
 	// Interactive mode when no flags are provided
-	noFlags := statusStr == "" && title == "" && description == "" && labelAdd == nil && labelRemove == nil
+	noFlags := statusStr == "" && title == "" && body == "" && labelAdd == nil && labelRemove == nil
 	if noFlags {
 		// Build status options with current value as default.
 		// Exclude "done" and "closed" unless the trail is already in that status
@@ -400,7 +400,7 @@ func runTrailUpdate(w io.Writer, statusStr, title, description, branch string, l
 		}
 		statusStr = string(metadata.Status)
 		title = metadata.Title
-		description = metadata.Description
+		body = metadata.Body
 
 		form := NewAccessibleForm(
 			huh.NewGroup(
@@ -412,8 +412,8 @@ func runTrailUpdate(w io.Writer, statusStr, title, description, branch string, l
 					Title("Title").
 					Value(&title),
 				huh.NewText().
-					Title("Description").
-					Value(&description),
+					Title("Body").
+					Value(&body),
 			),
 		)
 		if formErr := form.Run(); formErr != nil {
@@ -436,8 +436,8 @@ func runTrailUpdate(w io.Writer, statusStr, title, description, branch string, l
 		if title != "" {
 			m.Title = title
 		}
-		if description != "" {
-			m.Description = description
+		if body != "" {
+			m.Body = body
 		}
 		for _, l := range labelAdd {
 			if !containsString(m.Labels, l) {
@@ -572,9 +572,9 @@ func removeString(slice []string, s string) []string {
 }
 
 // runTrailCreateInteractive runs the interactive form for trail creation.
-// Prompts for title, description, branch (derived from title), and status.
-func runTrailCreateInteractive(title, description, branch, statusStr *string) error {
-	// Step 1: Title and description
+// Prompts for title, body, branch (derived from title), and status.
+func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
+	// Step 1: Title and body
 	form := NewAccessibleForm(
 		huh.NewGroup(
 			huh.NewInput().
@@ -582,8 +582,8 @@ func runTrailCreateInteractive(title, description, branch, statusStr *string) er
 				Placeholder("What are you working on?").
 				Value(title),
 			huh.NewText().
-				Title("Description (optional)").
-				Value(description),
+				Title("Body (optional)").
+				Value(body),
 		),
 	)
 	if err := form.Run(); err != nil {
