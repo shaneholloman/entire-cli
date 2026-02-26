@@ -44,16 +44,19 @@ const MaxCommitTraversalDepth = 1000
 var errStop = errors.New("stop iteration")
 
 // reconcileOnce ensures metadata branch reconciliation runs at most once per process.
-var reconcileOnce sync.Once //nolint:gochecknoglobals // intentional per-process gate
+// reconcileResult caches the outcome so all callers see the same error (or nil).
+var ( //nolint:gochecknoglobals // intentional per-process gate
+	reconcileOnce   sync.Once
+	reconcileResult error //nolint:errname // not a sentinel — cached function result
+)
 
 // EnsureMetadataReconciled checks for and repairs disconnected local/remote metadata
 // branches. Safe to call multiple times — uses sync.Once internally.
 func EnsureMetadataReconciled(repo *git.Repository) error {
-	var reconcileErr error
 	reconcileOnce.Do(func() {
-		reconcileErr = ReconcileDisconnectedMetadataBranch(repo)
+		reconcileResult = ReconcileDisconnectedMetadataBranch(repo)
 	})
-	return reconcileErr
+	return reconcileResult
 }
 
 // IsEmptyRepository returns true if the repository has no commits yet.
