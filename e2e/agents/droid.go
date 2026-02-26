@@ -60,12 +60,21 @@ type droidSettings struct {
 }
 
 type droidCustomModel struct {
+	DisplayName    string `json:"displayName"`
 	Model          string `json:"model"`
 	BaseURL        string `json:"baseUrl"`
 	APIKey         string `json:"apiKey"`
 	Provider       string `json:"provider"`
 	MaxOutputToken int    `json:"maxOutputTokens"`
 }
+
+const (
+	// Droid v0.63+ expects custom model selection using custom:<model-id>.
+	// The displayName in settings is not accepted by --model.
+	droidCustomModelDisplayName = "claude-haiku-custom"
+	droidCustomModelBaseID      = "claude-haiku-4-5-20251001"
+	defaultDroidModel           = "custom:" + droidCustomModelBaseID
+)
 
 func (d *Droid) Bootstrap() error {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -95,7 +104,8 @@ func (d *Droid) Bootstrap() error {
 
 	// Replace or add the BYOK model entry.
 	byokModel := droidCustomModel{
-		Model:          "claude-haiku-4-5-20251001",
+		DisplayName:    droidCustomModelDisplayName,
+		Model:          droidCustomModelBaseID,
 		BaseURL:        "https://api.anthropic.com",
 		APIKey:         apiKey,
 		Provider:       "anthropic",
@@ -120,8 +130,6 @@ func (d *Droid) Bootstrap() error {
 	}
 	return os.WriteFile(settingsPath, data, 0o644)
 }
-
-const defaultDroidModel = "claude-haiku-4-5-20251001"
 
 func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
 	cfg := &runConfig{Model: defaultDroidModel}
