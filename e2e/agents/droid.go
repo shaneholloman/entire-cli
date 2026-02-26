@@ -134,8 +134,8 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 		model = defaultDroidModel
 	}
 
-	args := []string{"exec", "--auto", "high", "--model", model, prompt}
-	displayArgs := []string{"exec", "--auto", "high", "--model", model, fmt.Sprintf("%q", prompt)}
+	args := []string{"exec", "--skip-permissions-unsafe", "--model", model, prompt}
+	displayArgs := []string{"exec", "--skip-permissions-unsafe", "--model", model, fmt.Sprintf("%q", prompt)}
 
 	cmd := exec.CommandContext(ctx, d.Binary(), args...)
 	cmd.Dir = dir
@@ -172,7 +172,7 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 
 func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("droid-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, nil, "env", "ENTIRE_TEST_TTY=0", d.Binary(), "--model", defaultDroidModel, "--auto", "high")
+	s, err := NewTmuxSession(name, dir, nil, "env", "ENTIRE_TEST_TTY=0", d.Binary(), "--model", defaultDroidModel, "--skip-permissions-unsafe")
 	if err != nil {
 		return nil, err
 	}
