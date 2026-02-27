@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude, opencode, gemini]
+        agent: [claude-code, opencode, gemini-cli]
 
     steps:
       - name: Checkout repository
@@ -33,9 +33,9 @@ jobs:
       - name: Install agent CLI
         run: |
           case "${{ matrix.agent }}" in
-            claude)   curl -fsSL https://claude.ai/install.sh | bash ;;
-            opencode) curl -fsSL https://opencode.ai/install | bash ;;
-            gemini)   npm install -g @google/gemini-cli ;;
+            claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
+            opencode)    curl -fsSL https://opencode.ai/install | bash ;;
+            gemini-cli)  npm install -g @google/gemini-cli ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
@@ -49,8 +49,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          E2E_CONCURRENT_TEST_LIMIT: ${{ matrix.agent == 'gemini' && '6' || '' }}
-        run: mise run test:e2e:${{ matrix.agent }}
+          E2E_CONCURRENT_TEST_LIMIT: ${{ matrix.agent == 'gemini-cli' && '6' || '' }}
+        run: mise run test:e2e --agent ${{ matrix.agent }}
 
       - name: Upload artifacts
         if: always()
