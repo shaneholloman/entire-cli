@@ -5,11 +5,11 @@ End-to-end tests for the `entire` CLI against real agents (Claude Code, Gemini C
 ## Commands
 
 ```bash
-mise run test:e2e TestFoo              # run filtered (or omit filter for all agents)
-mise run test:e2e:claude TestFoo       # Claude Code only
-mise run test:e2e:gemini TestFoo       # Gemini CLI only (sequential, avoids rate limits)
-mise run test:e2e:opencode TestFoo     # OpenCode only
-go build ./...                         # compile check (no agent CLI needed)
+mise run test:e2e [filter]                          # run filtered (or omit filter for all agents)
+mise run test:e2e --agent claude-code [filter]       # Claude Code only
+mise run test:e2e --agent gemini-cli [filter]        # Gemini CLI only
+mise run test:e2e --agent opencode [filter]          # OpenCode only
+go build ./...                                      # compile check (no agent CLI needed)
 ```
 
 **Do NOT run E2E tests proactively.** They make real API calls that consume tokens and cost money. Only run when explicitly asked.
@@ -39,7 +39,7 @@ e2e/
 2. Register it in `init()` with `Register(&YourAgent{})`.
 3. Add a `Bootstrap()` method for any CI-specific setup (auth config, warmup).
 4. Add a `RegisterGate("<name>", N)` call if concurrency needs limiting.
-5. Add a `test:e2e:<name>` task in `mise.toml`.
+5. Ensure the agent name is accepted by `mise run test:e2e --agent <name>`.
 6. Add the agent to `.github/workflows/e2e.yml` matrix and `e2e-isolated.yml` options.
 
 ## Environment Variables

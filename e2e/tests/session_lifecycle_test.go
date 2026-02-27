@@ -64,7 +64,7 @@ func TestSessionDepletedManualEditNoCheckpoint(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "depleted.go")
 
-		s.Git(t, "add", "depleted.go")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add depleted.go")
 		testutil.WaitForCheckpoint(t, s, 15*time.Second)
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
@@ -101,7 +101,7 @@ func TestTrailerRemovalSkipsCondensation(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "trailer_test.go")
 
-		s.Git(t, "add", "trailer_test.go")
+		s.Git(t, "add", ".")
 		s.Git(t, "-c", "core.hooksPath=/dev/null", "commit", "-m", "Add trailer_test (no checkpoint)")
 
 		testutil.AssertNoCheckpointTrailer(t, s.Dir, "HEAD")

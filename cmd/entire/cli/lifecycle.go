@@ -406,15 +406,12 @@ func handleLifecycleCompaction(ctx context.Context, ag agent.Agent, event *agent
 			fmt.Fprintf(os.Stderr, "Warning: compaction transition failed: %v\n", transErr)
 		}
 
-		// Reset transcript offset since the transcript may be truncated/reorganized
-		sessionState.CheckpointTranscriptStart = 0
-
 		if saveErr := strategy.SaveSessionState(ctx, sessionState); saveErr != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to save session state after compaction: %v\n", saveErr)
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Context compaction: transcript offset reset\n")
+	fmt.Fprintf(os.Stderr, "Context compaction detected\n")
 	return nil
 }
 

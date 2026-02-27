@@ -89,6 +89,9 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 	var shadowBranches []string
 
 	err = refs.ForEach(func(ref *plumbing.Reference) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		// Only look at branch references
 		if !ref.Name().IsBranch() {
 			return nil

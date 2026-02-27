@@ -1,10 +1,72 @@
 package cli
 
 import (
+	"bytes"
+	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/spf13/cobra"
 )
+
+func TestVersionFlag_OutputMatchesVersionCmd(t *testing.T) {
+	t.Parallel()
+
+	// Run "entire --version"
+	root := NewRootCmd()
+	var flagOut bytes.Buffer
+	root.SetOut(&flagOut)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--version"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("entire --version failed: %v", err)
+	}
+
+	// Run "entire version"
+	root2 := NewRootCmd()
+	var cmdOut bytes.Buffer
+	root2.SetOut(&cmdOut)
+	root2.SetErr(&bytes.Buffer{})
+	root2.SetArgs([]string{"version"})
+	if err := root2.Execute(); err != nil {
+		t.Fatalf("entire version failed: %v", err)
+	}
+
+	if flagOut.String() != cmdOut.String() {
+		t.Errorf("output mismatch:\n--version: %q\nversion:   %q", flagOut.String(), cmdOut.String())
+	}
+}
+
+func TestVersionFlag_ContainsExpectedInfo(t *testing.T) {
+	t.Parallel()
+
+	root := NewRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--version"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("entire --version failed: %v", err)
+	}
+
+	output := out.String()
+
+	checks := []struct {
+		name     string
+		contains string
+	}{
+		{"version number", versioninfo.Version},
+		{"go version", runtime.Version()},
+		{"os", runtime.GOOS},
+		{"arch", runtime.GOARCH},
+	}
+	for _, c := range checks {
+		if !strings.Contains(output, c.contains) {
+			t.Errorf("--version output missing %s (%q):\n%s", c.name, c.contains, output)
+		}
+	}
+}
 
 func TestPersistentPostRun_SkipsHiddenParent(t *testing.T) {
 	t.Parallel()

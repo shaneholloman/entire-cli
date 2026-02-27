@@ -1764,21 +1764,21 @@ func TestIsAncestorOf(t *testing.T) {
 
 	t.Run("commit is ancestor of later commit", func(t *testing.T) {
 		// commit1 should be an ancestor of commit2
-		if !strategy.IsAncestorOf(repo, commit1, commit2) {
+		if !strategy.IsAncestorOf(context.Background(), repo, commit1, commit2) {
 			t.Error("expected commit1 to be ancestor of commit2")
 		}
 	})
 
 	t.Run("commit is not ancestor of earlier commit", func(t *testing.T) {
 		// commit2 should NOT be an ancestor of commit1
-		if strategy.IsAncestorOf(repo, commit2, commit1) {
+		if strategy.IsAncestorOf(context.Background(), repo, commit2, commit1) {
 			t.Error("expected commit2 to NOT be ancestor of commit1")
 		}
 	})
 
 	t.Run("commit is ancestor of itself", func(t *testing.T) {
 		// A commit should be considered an ancestor of itself
-		if !strategy.IsAncestorOf(repo, commit1, commit1) {
+		if !strategy.IsAncestorOf(context.Background(), repo, commit1, commit1) {
 			t.Error("expected commit to be ancestor of itself")
 		}
 	})
@@ -2673,7 +2673,7 @@ func TestGetAssociatedCommits(t *testing.T) {
 	}
 
 	// Test: should find the one commit with matching checkpoint
-	commits, err := getAssociatedCommits(repo, checkpointID, false)
+	commits, err := getAssociatedCommits(context.Background(), repo, checkpointID, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits error: %v", err)
 	}
@@ -2732,7 +2732,7 @@ func TestGetAssociatedCommits_NoMatches(t *testing.T) {
 
 	// Search for a checkpoint ID that doesn't exist (valid format: 12 hex chars)
 	checkpointID := id.MustCheckpointID("aaaa11112222")
-	commits, err := getAssociatedCommits(repo, checkpointID, false)
+	commits, err := getAssociatedCommits(context.Background(), repo, checkpointID, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits error: %v", err)
 	}
@@ -2817,7 +2817,7 @@ func TestGetAssociatedCommits_MultipleMatches(t *testing.T) {
 	}
 
 	// Test: should find both commits with matching checkpoint
-	commits, err := getAssociatedCommits(repo, checkpointID, false)
+	commits, err := getAssociatedCommits(context.Background(), repo, checkpointID, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits error: %v", err)
 	}
@@ -3053,7 +3053,7 @@ func TestGetBranchCheckpoints_WithMergeFromMain(t *testing.T) {
 
 	// Test getAssociatedCommits - should find BOTH feature checkpoint commits
 	// by walking first-parent chain (skipping the merge's second parent into main)
-	commits1, err := getAssociatedCommits(repo, cpID1, false)
+	commits1, err := getAssociatedCommits(context.Background(), repo, cpID1, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits for cpID1 error: %v", err)
 	}
@@ -3061,7 +3061,7 @@ func TestGetBranchCheckpoints_WithMergeFromMain(t *testing.T) {
 		t.Errorf("expected 1 commit for cpID1 (first feature checkpoint), got %d", len(commits1))
 	}
 
-	commits2, err := getAssociatedCommits(repo, cpID2, false)
+	commits2, err := getAssociatedCommits(context.Background(), repo, cpID2, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits for cpID2 error: %v", err)
 	}
@@ -3178,7 +3178,7 @@ func TestGetBranchCheckpoints_MergeCommitAtHEAD(t *testing.T) {
 	// HEAD is the merge commit itself.
 	// getAssociatedCommits should walk: merge -> featureCommit -> initial
 	// and find the checkpoint on featureCommit.
-	commits, err := getAssociatedCommits(repo, cpID, false)
+	commits, err := getAssociatedCommits(context.Background(), repo, cpID, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits error: %v", err)
 	}
@@ -3282,7 +3282,7 @@ func TestWalkFirstParentCommits_SkipsMergeParents(t *testing.T) {
 	// Walk should visit: M (merge) -> B (feature) -> A (initial)
 	// It should NOT visit C (main work), because that's the second parent of the merge.
 	var visited []string
-	err = walkFirstParentCommits(repo, mergeHash, 0, func(c *object.Commit) error {
+	err = walkFirstParentCommits(context.Background(), repo, mergeHash, 0, func(c *object.Commit) error {
 		visited = append(visited, strings.Split(c.Message, "\n")[0])
 		return nil
 	})
@@ -3429,7 +3429,7 @@ func TestGetAssociatedCommits_SearchAllFindsMergedBranchCommits(t *testing.T) {
 
 	// Without --search-all (first-parent only): should NOT find the feature commit
 	// because it's on the second parent of the merge
-	commits, err := getAssociatedCommits(repo, checkpointID, false)
+	commits, err := getAssociatedCommits(context.Background(), repo, checkpointID, false)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits error: %v", err)
 	}
@@ -3438,7 +3438,7 @@ func TestGetAssociatedCommits_SearchAllFindsMergedBranchCommits(t *testing.T) {
 	}
 
 	// With --search-all (full DAG walk): SHOULD find the feature commit
-	commits, err = getAssociatedCommits(repo, checkpointID, true)
+	commits, err = getAssociatedCommits(context.Background(), repo, checkpointID, true)
 	if err != nil {
 		t.Fatalf("getAssociatedCommits --search-all error: %v", err)
 	}

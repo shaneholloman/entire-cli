@@ -23,7 +23,7 @@ func TestMultiSessionManualCommit(t *testing.T) {
 			t.Fatalf("agent prompt 2 failed: %v", err)
 		}
 
-		s.Git(t, "add", "docs/")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add md files about red and blue")
 
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")

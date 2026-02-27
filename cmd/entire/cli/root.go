@@ -28,9 +28,10 @@ Environment Variables:
 
 func NewRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "entire",
-		Short: "Entire CLI",
-		Long:  "The command-line interface for Entire" + gettingStarted + accessibilityHelp,
+		Use:     "entire",
+		Short:   "Entire CLI",
+		Long:    "The command-line interface for Entire" + gettingStarted + accessibilityHelp,
+		Version: versioninfo.Version,
 		// Let main.go handle error printing to avoid duplication
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -85,20 +86,27 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newSendAnalyticsCmd())
 	cmd.AddCommand(newCurlBashPostInstallCmd())
 
+	cmd.SetVersionTemplate(versionString())
+
 	// Replace default help command with custom one that supports -t flag
 	cmd.SetHelpCommand(NewHelpCmd(cmd))
 
 	return cmd
 }
 
+func versionString() string {
+	return fmt.Sprintf("Entire CLI %s (%s)\nGo version: %s\nOS/Arch: %s/%s\n",
+		versioninfo.Version, versioninfo.Commit, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}
+
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Show build information",
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Printf("Entire CLI %s (%s)\n", versioninfo.Version, versioninfo.Commit)
-			fmt.Printf("Go version: %s\n", runtime.Version())
-			fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		Run: func(cmd *cobra.Command, _ []string) {
+			// Use OutOrStdout explicitly — cobra's cmd.Print() defaults to
+			// stderr in v1.10+, but version output should go to stdout.
+			fmt.Fprint(cmd.OutOrStdout(), versionString())
 		},
 	}
 }

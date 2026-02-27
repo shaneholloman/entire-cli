@@ -23,7 +23,7 @@ func TestSubagentCommitFlow(t *testing.T) {
 		}
 		testutil.AssertFileExists(t, s.Dir, "docs/red.md")
 
-		s.Git(t, "add", "docs/")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add red.md via subagent")
 
 		testutil.WaitForCheckpoint(t, s, 15*time.Second)

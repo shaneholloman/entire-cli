@@ -5,52 +5,18 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 )
 
-var (
-	buildOnce sync.Once
-	binPath   string
-)
-
-// BinPath returns the path to the entire binary. On first call it checks
-// E2E_ENTIRE_BIN; if unset it builds the binary from source. Fatal on failure.
+// BinPath returns the path to the entire binary from E2E_ENTIRE_BIN.
+// The mise test:e2e tasks set this automatically via `mise run build`.
 func BinPath() string {
-	buildOnce.Do(resolveBin)
-	return binPath
-}
-
-func resolveBin() {
-	if p := os.Getenv("E2E_ENTIRE_BIN"); p != "" {
-		binPath = p
-		return
+	p := os.Getenv("E2E_ENTIRE_BIN")
+	if p == "" {
+		log.Fatal("entire: E2E_ENTIRE_BIN not set — run tests via `mise run test:e2e`")
 	}
-
-	// Build from source. Find module root relative to this source file.
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		log.Fatal("entire: cannot determine source file path")
-	}
-	// thisFile = .../cli/e2e/entire/entire.go → module root = .../cli/
-	moduleRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-
-	tmpDir, err := os.MkdirTemp("", "entire-e2e-*")
-	if err != nil {
-		log.Fatalf("entire: create temp dir: %v", err)
-	}
-
-	bin := filepath.Join(tmpDir, "entire")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/entire")
-	cmd.Dir = moduleRoot
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Fatalf("entire: build from source: %v\n%s", err, out)
-	}
-	binPath = bin
+	return p
 }
 
 // RewindPoint represents a single entry from `entire rewind --list`.

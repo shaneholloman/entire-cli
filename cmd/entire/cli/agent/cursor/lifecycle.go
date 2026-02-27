@@ -8,20 +8,22 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
 // ParseHookEvent translates a Cursor hook into a normalized lifecycle Event.
 // Returns nil if the hook has no lifecycle significance.
-func (c *CursorAgent) ParseHookEvent(_ context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
+func (c *CursorAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
 	switch hookName {
 	case HookNameSessionStart:
 		return c.parseSessionStart(stdin)
 	case HookNameBeforeSubmitPrompt:
-		return c.parseTurnStart(stdin)
+		return c.parseTurnStart(ctx, stdin)
 	case HookNameStop:
-		return c.parseTurnEnd(stdin)
+		return c.parseTurnEnd(ctx, stdin)
 	case HookNameSessionEnd:
-		return c.parseSessionEnd(stdin)
+		return c.parseSessionEnd(ctx, stdin)
 	case HookNamePreCompact:
 		return c.parsePreCompact(stdin)
 	case HookNameSubagentStart:
@@ -48,8 +50,30 @@ func (c *CursorAgent) ReadTranscript(sessionRef string) ([]byte, error) {
 
 // --- Internal hook parsing functions ---
 
+// resolveTranscriptRef returns the transcript path from the hook input, or computes
+// it dynamically when the hook doesn't provide one (Cursor CLI pattern).
+func (c *CursorAgent) resolveTranscriptRef(ctx context.Context, conversationID, rawPath string) string {
+	if rawPath != "" {
+		return rawPath
+	}
+
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		logging.Warn(ctx, "cursor: failed to get worktree root for transcript resolution", "err", err)
+		return ""
+	}
+
+	sessionDir, err := c.GetSessionDir(repoRoot)
+	if err != nil {
+		logging.Warn(ctx, "cursor: failed to get session dir for transcript resolution", "err", err)
+		return ""
+	}
+
+	return c.ResolveSessionFile(sessionDir, conversationID)
+}
+
 func (c *CursorAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionStartRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +85,7 @@ func (c *CursorAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
 	}, nil
 }
 
-func (c *CursorAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) {
+func (c *CursorAgent) parseTurnStart(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
 	raw, err := agent.ReadAndParseHookInput[beforeSubmitPromptInputRaw](stdin)
 	if err != nil {
 		return nil, err
@@ -69,34 +93,34 @@ func (c *CursorAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) {
 	return &agent.Event{
 		Type:       agent.TurnStart,
 		SessionID:  raw.ConversationID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptRef(ctx, raw.ConversationID, raw.TranscriptPath),
 		Prompt:     raw.Prompt,
 		Timestamp:  time.Now(),
 	}, nil
 }
 
-func (c *CursorAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
+func (c *CursorAgent) parseTurnEnd(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
+	raw, err := agent.ReadAndParseHookInput[stopHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
 	return &agent.Event{
 		Type:       agent.TurnEnd,
 		SessionID:  raw.ConversationID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptRef(ctx, raw.ConversationID, raw.TranscriptPath),
 		Timestamp:  time.Now(),
 	}, nil
 }
 
-func (c *CursorAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
+func (c *CursorAgent) parseSessionEnd(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
+	raw, err := agent.ReadAndParseHookInput[sessionEndRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
 	return &agent.Event{
 		Type:       agent.SessionEnd,
 		SessionID:  raw.ConversationID,
-		SessionRef: raw.TranscriptPath,
+		SessionRef: c.resolveTranscriptRef(ctx, raw.ConversationID, raw.TranscriptPath),
 		Timestamp:  time.Now(),
 	}, nil
 }

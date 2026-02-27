@@ -12,33 +12,31 @@ import (
 	"time"
 )
 
-// isolatedConfigDir creates a temp directory that mirrors ~/.claude via
-// symlinks but omits CLAUDE.md and skills/ so that test runs don't inherit
-// the operator's personal instructions or custom skills.
-func isolatedConfigDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
-	}
-	src := filepath.Join(home, ".claude")
-
+// cleanConfigDir creates an isolated temp directory for CLAUDE_CONFIG_DIR so
+// that E2E test runs don't inherit any user settings (CLAUDE.md, skills,
+// projects, plugins, etc.).
+//
+// On CI, it symlinks .claude.json (which Bootstrap() wrote with the API key
+// and hasCompletedOnboarding). Locally, it writes a minimal .claude.json to
+// skip the onboarding flow — Keychain-based auth works without any other files.
+func cleanConfigDir() (string, error) {
 	dst, err := os.MkdirTemp("", "claude-config-*")
 	if err != nil {
 		return "", err
 	}
 
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return dst, fmt.Errorf("read %s: %w", src, err)
+	if os.Getenv("CI") != "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			src := filepath.Join(home, ".claude", ".claude.json")
+			if _, err := os.Stat(src); err == nil {
+				_ = os.Symlink(src, filepath.Join(dst, ".claude.json"))
+			}
+		}
+	} else {
+		_ = os.WriteFile(filepath.Join(dst, ".claude.json"),
+			[]byte(`{"hasCompletedOnboarding":true}`), 0o644)
 	}
 
-	skip := map[string]bool{"CLAUDE.md": true, "skills": true}
-	for _, e := range entries {
-		if skip[e.Name()] {
-			continue
-		}
-		_ = os.Symlink(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()))
-	}
 	return dst, nil
 }
 
@@ -69,11 +67,7 @@ func (c *Claude) EntireAgent() string        { return "claude-code" }
 func (c *Claude) PromptPattern() string      { return `❯` }
 func (c *Claude) TimeoutMultiplier() float64 { return 1.0 }
 
-func (c *Claude) IsTransientError(out Output, err error) bool {
-	if err == nil {
-		return false
-	}
-	combined := out.Stdout + out.Stderr
+func (c *Claude) IsTransientError(out Output, _ error) bool {
 	transientPatterns := []string{
 		"overloaded",
 		"rate limit",
@@ -83,7 +77,7 @@ func (c *Claude) IsTransientError(out Output, err error) bool {
 		"ETIMEDOUT",
 	}
 	for _, p := range transientPatterns {
-		if strings.Contains(combined, p) {
+		if strings.Contains(out.Stderr, p) {
 			return true
 		}
 	}
@@ -119,6 +113,12 @@ func (c *Claude) RunPrompt(ctx context.Context, dir string, prompt string, opts 
 		o(cfg)
 	}
 
+	configDir, err := cleanConfigDir()
+	if err != nil {
+		return Output{}, fmt.Errorf("create clean config dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(configDir) }()
+
 	env := append(cleanEnv(),
 		"ACCESSIBLE=1",
 		"ENTIRE_TEST_TTY=0",
@@ -129,19 +129,8 @@ func (c *Claude) RunPrompt(ctx context.Context, dir string, prompt string, opts 
 		// time).  That's no good, so for the E2E tests, we tell Claude not to make calls to auto-update
 		// itself, clone its plugins, etc.
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		"CLAUDE_CONFIG_DIR="+configDir,
 	)
-
-	// On CI (no macOS Keychain), use an isolated config dir so Claude Code
-	// picks up ANTHROPIC_API_KEY from the environment instead of trying OAuth.
-	// Locally, we skip CLAUDE_CONFIG_DIR so the Keychain-based auth works.
-	if os.Getenv("CI") != "" {
-		configDir, err := isolatedConfigDir()
-		if err != nil {
-			return Output{}, fmt.Errorf("create isolated config dir: %w", err)
-		}
-		defer func() { _ = os.RemoveAll(configDir) }()
-		env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
-	}
 
 	args := []string{"-p", prompt, "--model", cfg.Model, "--dangerously-skip-permissions"}
 	displayArgs := []string{"-p", fmt.Sprintf("%q", prompt), "--model", cfg.Model, "--dangerously-skip-permissions"}
@@ -159,7 +148,7 @@ func (c *Claude) RunPrompt(ctx context.Context, dir string, prompt string, opts 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		exitErr := &exec.ExitError{}
@@ -181,6 +170,11 @@ func (c *Claude) RunPrompt(ctx context.Context, dir string, prompt string, opts 
 func (c *Claude) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("claude-test-%d", time.Now().UnixNano())
 
+	configDir, err := cleanConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("create clean config dir: %w", err)
+	}
+
 	envArgs := []string{
 		"ACCESSIBLE=1",
 		"ENTIRE_TEST_TTY=0",
@@ -191,32 +185,17 @@ func (c *Claude) StartSession(ctx context.Context, dir string) (Session, error) 
 		// time).  That's no good, so for the E2E tests, we tell Claude not to make calls to auto-update
 		// itself, clone its plugins, etc.
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
-	}
-
-	// On CI (no macOS Keychain), use an isolated config dir so Claude Code
-	// picks up ANTHROPIC_API_KEY from the environment instead of trying OAuth.
-	// Locally, we skip CLAUDE_CONFIG_DIR so the Keychain-based auth works.
-	var configDir string
-	if os.Getenv("CI") != "" {
-		var err error
-		configDir, err = isolatedConfigDir()
-		if err == nil {
-			envArgs = append(envArgs, "CLAUDE_CONFIG_DIR="+configDir)
-		}
+		"CLAUDE_CONFIG_DIR=" + configDir,
 	}
 
 	args := append([]string{"env"}, envArgs...)
 	args = append(args, c.Binary(), "--dangerously-skip-permissions")
 	s, err := NewTmuxSession(name, dir, []string{"CLAUDECODE"}, args[0], args[1:]...)
 	if err != nil {
-		if configDir != "" {
-			_ = os.RemoveAll(configDir)
-		}
+		_ = os.RemoveAll(configDir)
 		return nil, err
 	}
-	if configDir != "" {
-		s.OnClose(func() { _ = os.RemoveAll(configDir) })
-	}
+	s.OnClose(func() { _ = os.RemoveAll(configDir) })
 
 	// Dismiss startup dialogs until we reach the input prompt.
 	for range 5 {

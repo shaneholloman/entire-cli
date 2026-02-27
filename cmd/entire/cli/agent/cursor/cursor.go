@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -66,8 +67,20 @@ func (c *CursorAgent) GetSessionID(input *agent.HookInput) string {
 }
 
 // ResolveSessionFile returns the path to a Cursor session file.
-// Cursor uses JSONL format like Claude Code.
+// Cursor IDE uses a nested layout: <dir>/<id>/<id>.jsonl
+// Cursor CLI uses a flat layout: <dir>/<id>.jsonl
+// We prefer nested if the file OR directory exists (the directory may be created
+// before the file is flushed), otherwise fall back to flat.
 func (c *CursorAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {
+	nestedDir := filepath.Join(sessionDir, agentSessionID)
+	nested := filepath.Join(nestedDir, agentSessionID+".jsonl")
+	if _, err := os.Stat(nested); err == nil {
+		return nested
+	}
+	// IDE creates the directory before the transcript file — predict nested path.
+	if info, err := os.Stat(nestedDir); err == nil && info.IsDir() {
+		return nested
+	}
 	return filepath.Join(sessionDir, agentSessionID+".jsonl")
 }
 
@@ -86,7 +99,7 @@ func (c *CursorAgent) GetSessionDir(repoPath string) (string, error) {
 	}
 
 	projectDir := sanitizePathForCursor(repoPath)
-	return filepath.Join(homeDir, ".cursor", "projects", projectDir), nil
+	return filepath.Join(homeDir, ".cursor", "projects", projectDir, "agent-transcripts"), nil
 }
 
 // ReadSession reads a session from Cursor's storage (JSONL transcript file).
@@ -146,6 +159,7 @@ func (c *CursorAgent) FormatResumeCommand(_ string) string {
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
 func sanitizePathForCursor(path string) string {
+	path = strings.TrimLeft(path, "/")
 	return nonAlphanumericRegex.ReplaceAllString(path, "-")
 }
 

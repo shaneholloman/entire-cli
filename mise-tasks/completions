@@ -1,0 +1,11 @@
+#!/bin/bash
+#MISE description="Generate entire shell completions"
+#MISE quiet=true
+
+set -euo pipefail
+
+rm -rf completions
+mkdir completions
+for sh in bash zsh fish; do
+    go run ./cmd/entire/main.go completion "$sh" >"completions/entire.$sh"
+done

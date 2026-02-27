@@ -49,14 +49,31 @@ func NewTmuxSession(name string, dir string, unsetEnv []string, command string, 
 }
 
 func (s *TmuxSession) Send(input string) error {
-	s.stableAtSend = stableContent(s.Capture())
+	preSend := stableContent(s.Capture())
 	// Send text and Enter separately — Claude's TUI can swallow Enter
 	// if it arrives before the input handler finishes processing the text.
 	if err := s.SendKeys(input); err != nil {
 		return err
 	}
 	time.Sleep(200 * time.Millisecond)
-	return s.SendKeys("Enter")
+	if err := s.SendKeys("Enter"); err != nil {
+		return err
+	}
+
+	// Wait for the terminal to reflect the echoed input, then snapshot.
+	// This ensures WaitFor compares against post-echo content, preventing
+	// false matches on prompt characters (e.g. ❯) in the echoed input.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		current := stableContent(s.Capture())
+		if current != preSend {
+			s.stableAtSend = current
+			return nil
+		}
+	}
+	s.stableAtSend = stableContent(s.Capture())
+	return nil
 }
 
 // SendKeys sends raw tmux key names without appending Enter.

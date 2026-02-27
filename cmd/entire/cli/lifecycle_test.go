@@ -258,7 +258,7 @@ func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {
 
 // --- handleLifecycleCompaction tests ---
 
-func TestHandleLifecycleCompaction_ResetsTranscriptOffset(t *testing.T) {
+func TestHandleLifecycleCompaction_PreservesTranscriptOffset(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir()
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
@@ -281,10 +281,10 @@ func TestHandleLifecycleCompaction_ResetsTranscriptOffset(t *testing.T) {
 
 	sessionID := "compaction-test-session"
 
-	// Create session state with non-zero transcript offset
+	// Create session state with non-zero transcript offset (set by prior condensation)
 	sessionState := &strategy.SessionState{
 		SessionID:                 sessionID,
-		CheckpointTranscriptStart: 50, // Non-zero offset to be reset
+		CheckpointTranscriptStart: 50,
 	}
 	if err := strategy.SaveSessionState(context.Background(), sessionState); err != nil {
 		t.Fatalf("Failed to save session state: %v", err)
@@ -297,14 +297,15 @@ func TestHandleLifecycleCompaction_ResetsTranscriptOffset(t *testing.T) {
 		SessionRef: transcriptPath,
 	}
 
-	// handleLifecycleCompaction resets the transcript offset regardless of other operations.
-	// It fires EventCompaction which stays in ACTIVE phase and resets CheckpointTranscriptStart.
+	// Compaction should NOT reset the transcript offset.
+	// Many agents (e.g., Gemini) fire pre-compress as a no-op after every tool call;
+	// resetting the offset causes stale files to re-appear in carry-forward.
 	err := handleLifecycleCompaction(context.Background(), ag, event)
 	if err != nil {
 		t.Logf("handleLifecycleCompaction returned error (expected in minimal test): %v", err)
 	}
 
-	// Verify CheckpointTranscriptStart was reset to 0
+	// Verify CheckpointTranscriptStart was preserved (not reset to 0)
 	loadedState, loadErr := strategy.LoadSessionState(context.Background(), sessionID)
 	if loadErr != nil {
 		t.Fatalf("Failed to load session state after compaction: %v", loadErr)
@@ -312,8 +313,8 @@ func TestHandleLifecycleCompaction_ResetsTranscriptOffset(t *testing.T) {
 	if loadedState == nil {
 		t.Fatal("Session state is nil after compaction")
 	}
-	if loadedState.CheckpointTranscriptStart != 0 {
-		t.Errorf("CheckpointTranscriptStart = %d, want 0 (should be reset on compaction)",
+	if loadedState.CheckpointTranscriptStart != 50 {
+		t.Errorf("CheckpointTranscriptStart = %d, want 50 (compaction should preserve offset)",
 			loadedState.CheckpointTranscriptStart)
 	}
 }

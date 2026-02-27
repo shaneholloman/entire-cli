@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/entireio/cli/e2e/agents"
 	"github.com/entireio/cli/e2e/testutil"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,7 +37,7 @@ func TestAgentContinuesAfterCommit(t *testing.T) {
 			t.Fatalf("agent prompt 2 failed: %v", err)
 		}
 
-		s.Git(t, "add", "docs/")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add blue.md")
 
 		// Wait for checkpoint branch to advance past the first checkpoint.
@@ -128,7 +129,8 @@ func TestDirtyWorkingTree(t *testing.T) {
 func TestRapidSequentialCommits(t *testing.T) {
 	testutil.ForEachAgent(t, 4*time.Minute, func(t *testing.T, s *testutil.RepoState, ctx context.Context) {
 		_, err := s.RunPrompt(t, ctx,
-			"create three separate markdown files: docs/red.md about red, docs/blue.md about blue, docs/green.md about green. Commit each file separately right after creating it — three separate git commits. Do not ask for confirmation, just make the changes.")
+			"create three separate markdown files: docs/red.md about red, docs/blue.md about blue, docs/green.md about green. Commit each file separately right after creating it — three separate git commits. Do not ask for confirmation, just make the changes.",
+			agents.WithPromptTimeout(120*time.Second))
 		if err != nil {
 			t.Fatalf("agent failed: %v", err)
 		}

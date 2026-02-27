@@ -748,7 +748,9 @@ type taskCheckpointData struct {
 //	├── 1/                 # Second session
 //	└── ...
 func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	tree, err := s.getSessionsBranchTree()
 	if err != nil {
@@ -785,7 +787,9 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 // Returns the session's metadata, transcript, prompts, and context.
 // Returns an error if the checkpoint or session doesn't exist.
 func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	tree, err := s.getSessionsBranchTree()
 	if err != nil {
@@ -889,7 +893,9 @@ func (s *GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.C
 //
 
 func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	tree, err := s.getSessionsBranchTree()
 	if err != nil {
@@ -1026,7 +1032,9 @@ func LookupSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string
 // UpdateSummary updates the summary field in the latest session's metadata.
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
 func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	// Ensure sessions branch exists
 	if err := s.ensureSessionsBranch(); err != nil {
@@ -1607,7 +1615,9 @@ type Author struct {
 // Returns the author of the commit that introduced this checkpoint's metadata.json file.
 // Returns empty Author if the checkpoint is not found or the sessions branch doesn't exist.
 func (s *GitStore) GetCheckpointAuthor(ctx context.Context, checkpointID id.CheckpointID) (Author, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return Author{}, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	ref, err := s.repo.Reference(refName, true)
@@ -1632,6 +1642,9 @@ func (s *GitStore) GetCheckpointAuthor(ctx context.Context, checkpointID id.Chec
 	var foundCommit *object.Commit
 
 	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		tree, treeErr := c.Tree()
 		if treeErr != nil {
 			return nil //nolint:nilerr // Skip commits we can't read, continue searching

@@ -83,7 +83,7 @@ func TestRewindAfterCommit(t *testing.T) {
 		oldID := shadowPoint.ID
 
 		// User commits the file.
-		s.Git(t, "add", "docs/")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add red.md")
 
 		testutil.WaitForCheckpoint(t, s, 15*time.Second)

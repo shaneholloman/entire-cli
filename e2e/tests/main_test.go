@@ -25,9 +25,12 @@ func TestMain(m *testing.M) {
 	_ = os.MkdirAll(runDir, 0o755)
 	testutil.SetRunDir(runDir)
 
-	// Resolve the entire binary (builds from source if E2E_ENTIRE_BIN is unset).
+	// Resolve the entire binary (set by mise run build via E2E_ENTIRE_BIN).
 	entireBin := entire.BinPath()
 
+	// Prepend the binary's directory to PATH so that git hooks and agent
+	// hooks (which call bare "entire") resolve to the same binary the test
+	// harness uses, not a system-installed one.
 	os.Setenv("PATH", filepath.Dir(entireBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	// Preflight: verify required dependencies before running any tests.
@@ -50,12 +53,13 @@ func TestMain(m *testing.M) {
 	version := "unknown"
 	if out, err := exec.Command(entireBin, "version").Output(); err == nil {
 		version = string(out)
-		_ = os.WriteFile(filepath.Join(runDir, "entire-version.txt"), out, 0o644)
 	}
 
-	fmt.Fprintf(os.Stderr, "entire binary:  %s\n", entireBin)
-	fmt.Fprintf(os.Stderr, "entire version: %s", version)
-	fmt.Fprintf(os.Stderr, "artifact dir:   %s\n", runDir)
+	// Write preflight info to artifact dir only — gotestsum swallows both
+	// stdout and stderr, so the test-e2e script cats this file at the end.
+	preflight := fmt.Sprintf("entire binary:  %s\nentire version: %s\n",
+		entireBin, version)
+	_ = os.WriteFile(filepath.Join(runDir, "entire-version.txt"), []byte(preflight), 0o644)
 
 	// Don't look at user's Git config, ignore everything except the project-local Git settings.
 	// This avoids oddball configs in ~/.gitconfig messing with our E2E tests.

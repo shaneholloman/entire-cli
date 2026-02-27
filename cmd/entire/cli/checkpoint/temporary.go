@@ -144,7 +144,9 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 // Returns nil if the shadow branch doesn't exist.
 // worktreeID should be empty for main worktree or the internal git worktree name for linked worktrees.
 func (s *GitStore) ReadTemporary(ctx context.Context, baseCommit, worktreeID string) (*ReadTemporaryResult, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	shadowBranchName := ShadowBranchNameForCommit(baseCommit, worktreeID)
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
@@ -174,7 +176,9 @@ func (s *GitStore) ReadTemporary(ctx context.Context, baseCommit, worktreeID str
 
 // ListTemporary lists all shadow branches with their checkpoint info.
 func (s *GitStore) ListTemporary(ctx context.Context) ([]TemporaryInfo, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	iter, err := s.repo.Branches()
 	if err != nil {
@@ -183,6 +187,9 @@ func (s *GitStore) ListTemporary(ctx context.Context) ([]TemporaryInfo, error) {
 
 	var results []TemporaryInfo
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		branchName := ref.Name().Short()
 		if !strings.HasPrefix(branchName, ShadowBranchPrefix) {
 			return nil
@@ -431,7 +438,9 @@ func (s *GitStore) ListCheckpointsForBranch(ctx context.Context, branchName, ses
 // listCheckpointsForBranch lists checkpoint commits for a specific shadow branch name.
 // This is an internal helper used by ListTemporaryCheckpoints, ListCheckpointsForBranch, and ListAllTemporaryCheckpoints.
 func (s *GitStore) listCheckpointsForBranch(ctx context.Context, shadowBranchName, sessionID string, limit int) ([]TemporaryCheckpointInfo, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	refName := plumbing.NewBranchReferenceName(shadowBranchName)
 
@@ -449,6 +458,9 @@ func (s *GitStore) listCheckpointsForBranch(ctx context.Context, shadowBranchNam
 	count := 0
 
 	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		if count >= limit*5 { // Scan more to allow for session filtering
 			return errStop
 		}
@@ -508,7 +520,9 @@ func (s *GitStore) listCheckpointsForBranch(ctx context.Context, shadowBranchNam
 // This is used for checkpoint lookup when the base commit is unknown (e.g., HEAD advanced since session start).
 // The sessionID filter, if provided, limits results to commits from that session.
 func (s *GitStore) ListAllTemporaryCheckpoints(ctx context.Context, sessionID string, limit int) ([]TemporaryCheckpointInfo, error) {
-	_ = ctx // Reserved for future use
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
 
 	// List all shadow branches
 	branches, err := s.ListTemporary(ctx)
@@ -523,6 +537,9 @@ func (s *GitStore) ListAllTemporaryCheckpoints(ctx context.Context, sessionID st
 		// Use the branch name directly to get checkpoints
 		branchCheckpoints, branchErr := s.listCheckpointsForBranch(ctx, branch.BranchName, sessionID, limit)
 		if branchErr != nil {
+			if errors.Is(branchErr, context.Canceled) || errors.Is(branchErr, context.DeadlineExceeded) {
+				return nil, branchErr
+			}
 			continue // Skip branches we can't read
 		}
 		results = append(results, branchCheckpoints...)

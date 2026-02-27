@@ -40,7 +40,7 @@ go.work.sum
 
 # Build output directory
 /dist/
-completions
+/completions/
 
 
 # E2E test artifacts

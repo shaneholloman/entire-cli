@@ -53,10 +53,10 @@ Integration tests use the `//go:build integration` build tag and are located in 
 **IMPORTANT: Do NOT run E2E tests proactively.** E2E tests make real API calls to agents, which consume tokens and cost money. Only run them when the user explicitly asks for E2E testing.
 
 ```bash
-mise run test:e2e TestFoo           # All agents, filtered
-mise run test:e2e:claude TestFoo    # Claude Code only
-mise run test:e2e:gemini TestFoo    # Gemini CLI only
-mise run test:e2e:opencode TestFoo  # OpenCode only
+mise run test:e2e [filter]                          # All agents, filtered
+mise run test:e2e --agent claude-code [filter]       # Claude Code only
+mise run test:e2e --agent gemini-cli [filter]        # Gemini CLI only
+mise run test:e2e --agent opencode [filter]          # OpenCode only
 ```
 
 E2E tests:

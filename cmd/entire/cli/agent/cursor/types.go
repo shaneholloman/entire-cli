@@ -33,11 +33,10 @@ type CursorHookEntry struct {
 	Matcher string `json:"matcher,omitempty"`
 }
 
-// sessionInfoRaw is the JSON structure from SessionStart/SessionEnd/Stop hooks.
-// Cursor occasionally provides session_id, so we ignore it.
-// Cursor always provides conversation_id.
-// session_id and conversation_id are identical and interchangeable.
-type sessionInfoRaw struct {
+// sessionStartRaw is the JSON structure from SessionStart hooks.
+// IDE includes composer_mode ("agent"), CLI omits it.
+// IDE model is "default", CLI has actual model name.
+type sessionStartRaw struct {
 	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
@@ -47,6 +46,50 @@ type sessionInfoRaw struct {
 	WorkspaceRoots []string `json:"workspace_roots"`
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
+
+	// hook specific
+	IsBackgroundAgent bool   `json:"is_background_agent"`
+	ComposerMode      string `json:"composer_mode"` // IDE-only: "agent"
+}
+
+// stopHookInputRaw is the JSON structure from Stop hooks.
+// IDE provides transcript_path; CLI sends null.
+// Both provide status and loop_count.
+type stopHookInputRaw struct {
+	// common
+	ConversationID string   `json:"conversation_id"`
+	GenerationID   string   `json:"generation_id"`
+	Model          string   `json:"model"`
+	HookEventName  string   `json:"hook_event_name"`
+	CursorVersion  string   `json:"cursor_version"`
+	WorkspaceRoots []string `json:"workspace_roots"`
+	UserEmail      string   `json:"user_email"`
+	TranscriptPath string   `json:"transcript_path"`
+
+	// hook specific
+	Status    string      `json:"status"`
+	LoopCount json.Number `json:"loop_count"`
+}
+
+// sessionEndRaw is the JSON structure from SessionEnd hooks.
+// IDE provides transcript_path; CLI sends null.
+// Both provide reason, duration_ms, is_background_agent, final_status.
+type sessionEndRaw struct {
+	// common
+	ConversationID string   `json:"conversation_id"`
+	GenerationID   string   `json:"generation_id"`
+	Model          string   `json:"model"`
+	HookEventName  string   `json:"hook_event_name"`
+	CursorVersion  string   `json:"cursor_version"`
+	WorkspaceRoots []string `json:"workspace_roots"`
+	UserEmail      string   `json:"user_email"`
+	TranscriptPath string   `json:"transcript_path"`
+
+	// hook specific
+	Reason            string      `json:"reason"`
+	DurationMs        json.Number `json:"duration_ms"`
+	IsBackgroundAgent bool        `json:"is_background_agent"`
+	FinalStatus       string      `json:"final_status"`
 }
 
 // beforeSubmitPromptInputRaw is the JSON structure from BeforeSubmitPrompt hooks.

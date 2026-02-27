@@ -289,7 +289,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	author, _ := store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
-	associatedCommits, _ := getAssociatedCommits(repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
+	associatedCommits, _ := getAssociatedCommits(ctx, repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
 
 	// Format and output
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full)
@@ -458,7 +458,7 @@ func explainTemporaryCheckpoint(ctx context.Context, w io.Writer, repo *git.Repo
 // Searches commits on the current branch for Entire-Checkpoint trailer matches.
 // When searchAll is true, uses full DAG walk with no depth limit (may be slow).
 // This finds checkpoint commits on merged feature branches (second parents of merges).
-func getAssociatedCommits(repo *git.Repository, checkpointID id.CheckpointID, searchAll bool) ([]associatedCommit, error) {
+func getAssociatedCommits(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID, searchAll bool) ([]associatedCommit, error) {
 	head, err := repo.Head()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
@@ -495,6 +495,9 @@ func getAssociatedCommits(repo *git.Repository, checkpointID id.CheckpointID, se
 		defer iter.Close()
 
 		err = iter.ForEach(func(c *object.Commit) error {
+			if err := ctx.Err(); err != nil {
+				return err //nolint:wrapcheck // Propagating context cancellation
+			}
 			cpID, found := trailers.ParseCheckpoint(c.Message)
 			if found && cpID.String() == targetID {
 				collectCommit(c)
@@ -504,9 +507,9 @@ func getAssociatedCommits(repo *git.Repository, checkpointID id.CheckpointID, se
 	} else {
 		// First-parent walk with depth limit and branch filtering.
 		// Avoids walking into main's history through merge commit parents.
-		reachableFromMain := computeReachableFromMain(repo)
+		reachableFromMain := computeReachableFromMain(ctx, repo)
 
-		err = walkFirstParentCommits(repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
+		err = walkFirstParentCommits(ctx, repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
 			// Once we hit a commit reachable from main on the first-parent chain,
 			// all earlier ancestors are also shared-with-main, so stop scanning.
 			if reachableFromMain[c.Hash] {
@@ -809,7 +812,7 @@ func getCurrentWorktreeHash(ctx context.Context) string {
 // On the default branch itself, returns an empty map (no filtering needed).
 // Only first-parent commits are included — commits from side branches merged into main are excluded,
 // since those could be feature branch commits that shouldn't be filtered out.
-func computeReachableFromMain(repo *git.Repository) map[plumbing.Hash]bool {
+func computeReachableFromMain(ctx context.Context, repo *git.Repository) map[plumbing.Hash]bool {
 	reachableFromMain := make(map[plumbing.Hash]bool)
 
 	isOnDefault, _ := strategy.IsOnDefaultBranch(repo)
@@ -836,7 +839,7 @@ func computeReachableFromMain(repo *git.Repository) map[plumbing.Hash]bool {
 	}
 
 	// Walk main's first-parent chain to build the set
-	_ = walkFirstParentCommits(repo, mainBranchHash, strategy.MaxCommitTraversalDepth, func(c *object.Commit) error { //nolint:errcheck // Best-effort
+	_ = walkFirstParentCommits(ctx, repo, mainBranchHash, strategy.MaxCommitTraversalDepth, func(c *object.Commit) error { //nolint:errcheck // Best-effort
 		reachableFromMain[c.Hash] = true
 		return nil
 	})
@@ -849,13 +852,16 @@ func computeReachableFromMain(repo *git.Repository) map[plumbing.Hash]bool {
 // This avoids the full DAG traversal that repo.Log() does, which follows ALL parents
 // of merge commits and can walk into unrelated branch history (e.g., main's full
 // history after merging main into a feature branch).
-func walkFirstParentCommits(repo *git.Repository, from plumbing.Hash, limit int, fn func(*object.Commit) error) error {
+func walkFirstParentCommits(ctx context.Context, repo *git.Repository, from plumbing.Hash, limit int, fn func(*object.Commit) error) error {
 	current, err := repo.CommitObject(from)
 	if err != nil {
 		return fmt.Errorf("failed to get commit %s: %w", from, err)
 	}
 
 	for count := 0; limit <= 0 || count < limit; count++ {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		if err := fn(current); err != nil {
 			if errors.Is(err, errStopIteration) {
 				return nil
@@ -965,6 +971,9 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 
 		count := 0
 		err = iter.ForEach(func(c *object.Commit) error {
+			if err := ctx.Err(); err != nil {
+				return err //nolint:wrapcheck // Propagating context cancellation
+			}
 			if count >= commitScanLimit {
 				return storer.ErrStop
 			}
@@ -975,9 +984,9 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	} else {
 		// On feature branches, use first-parent walk with branch filtering.
 		// This avoids walking into main's full history through merge commit parents.
-		reachableFromMain := computeReachableFromMain(repo)
+		reachableFromMain := computeReachableFromMain(ctx, repo)
 
-		err = walkFirstParentCommits(repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
+		err = walkFirstParentCommits(ctx, repo, head.Hash(), commitScanLimit, func(c *object.Commit) error {
 			// Once we hit a commit reachable from main on the first-parent chain,
 			// all earlier ancestors are also shared-with-main, so stop scanning.
 			if reachableFromMain[c.Hash] {
@@ -1030,7 +1039,7 @@ func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository,
 		}
 
 		// Check if this shadow branch's base commit is reachable from current HEAD
-		if !isShadowBranchReachable(repo, sb.BaseCommit, headHash, isOnDefault) {
+		if !isShadowBranchReachable(ctx, repo, sb.BaseCommit, headHash, isOnDefault) {
 			continue
 		}
 
@@ -1050,7 +1059,7 @@ func getReachableTemporaryCheckpoints(ctx context.Context, repo *git.Repository,
 // isShadowBranchReachable checks if a shadow branch's base commit is reachable from HEAD.
 // For default branches, all shadow branches are considered reachable.
 // For feature branches, we check if any commit with the base commit prefix is in HEAD's history.
-func isShadowBranchReachable(repo *git.Repository, baseCommit string, headHash plumbing.Hash, isOnDefault bool) bool {
+func isShadowBranchReachable(ctx context.Context, repo *git.Repository, baseCommit string, headHash plumbing.Hash, isOnDefault bool) bool {
 	// For default branch: all shadow branches are potentially relevant
 	if isOnDefault {
 		return true
@@ -1058,7 +1067,7 @@ func isShadowBranchReachable(repo *git.Repository, baseCommit string, headHash p
 
 	// Check if base commit hash prefix matches any commit in HEAD's first-parent chain
 	found := false
-	_ = walkFirstParentCommits(repo, headHash, commitScanLimit, func(c *object.Commit) error { //nolint:errcheck // Best-effort
+	_ = walkFirstParentCommits(ctx, repo, headHash, commitScanLimit, func(c *object.Commit) error { //nolint:errcheck // Best-effort
 		if strings.HasPrefix(c.Hash.String(), baseCommit) {
 			found = true
 			return errStopIteration
@@ -1132,6 +1141,10 @@ func runExplainBranchWithFilter(ctx context.Context, w io.Writer, noPager bool, 
 	// Get checkpoints for this branch (strategy-agnostic)
 	points, err := getBranchCheckpoints(ctx, repo, branchCheckpointsLimit)
 	if err != nil {
+		// If context was cancelled (e.g. user hit Ctrl+C), exit silently
+		if ctx.Err() != nil {
+			return NewSilentError(ctx.Err())
+		}
 		// Log the error but continue with empty list so user sees helpful message
 		logging.Warn(ctx, "failed to get branch checkpoints", "error", err)
 		points = nil
@@ -1296,6 +1309,11 @@ func outputWithPager(w io.Writer, content string) {
 				pager = "less"
 			}
 
+			// Use context.Background() intentionally — pagers are interactive
+			// processes that handle signals (including SIGINT) themselves.
+			// Using the cancellable ctx would cause exec.CommandContext to
+			// SIGKILL the pager on Ctrl+C, preventing it from restoring
+			// terminal state (raw mode, echo, etc.).
 			cmd := exec.CommandContext(context.Background(), pager)
 			cmd.Stdin = strings.NewReader(content)
 			cmd.Stdout = f

@@ -57,11 +57,11 @@ func WaitForFileExists(t *testing.T, dir string, glob string, timeout time.Durat
 }
 
 // AssertNewCommits polls until at least `atLeast` new commits exist since setup,
-// or fails after 10 seconds. Polling handles the race where an interactive
+// or fails after 20 seconds. Polling handles the race where an interactive
 // agent's prompt pattern appears before its git commit lands on disk.
 func AssertNewCommits(t *testing.T, s *RepoState, atLeast int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		out := GitOutput(t, s.Dir, "log", "--oneline", s.HeadBefore+"..HEAD")
 		var lines []string
@@ -72,7 +72,7 @@ func AssertNewCommits(t *testing.T, s *RepoState, atLeast int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("expected at least %d new commit(s), got %d after 10s", atLeast, len(lines))
+			t.Fatalf("expected at least %d new commit(s), got %d after 20s", atLeast, len(lines))
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

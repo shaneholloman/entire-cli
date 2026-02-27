@@ -25,7 +25,7 @@ func TestCheckpointMetadataDeepValidation(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "validated.go")
 
-		s.Git(t, "add", "validated.go")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add validated.go")
 		testutil.WaitForCheckpoint(t, s, 15*time.Second)
 

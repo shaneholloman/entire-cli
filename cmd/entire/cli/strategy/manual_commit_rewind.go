@@ -179,6 +179,9 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 	count := 0
 
 	err = iter.ForEach(func(c *object.Commit) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		if count >= logsOnlyScanLimit {
 			return errStop
 		}
@@ -290,6 +293,9 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 	// Build set of files in the checkpoint tree (excluding metadata)
 	checkpointFiles := make(map[string]bool)
 	err = tree.Files().ForEach(func(f *object.File) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		if !strings.HasPrefix(f.Name, entireDir) {
 			checkpointFiles[f.Name] = true
 		}
@@ -317,6 +323,9 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 	trackedFiles := make(map[string]bool)
 	//nolint:errcheck // Error is not critical for rewind
 	_ = headTree.Files().ForEach(func(f *object.File) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		trackedFiles[f.Name] = true
 		return nil
 	})
@@ -360,6 +369,9 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 
 	// Restore files from checkpoint
 	err = tree.Files().ForEach(func(f *object.File) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		// Skip metadata directories - these are for checkpoint storage, not working dir
 		if strings.HasPrefix(f.Name, entireDir) {
 			return nil
@@ -489,6 +501,9 @@ func (s *ManualCommitStrategy) PreviewRewind(ctx context.Context, point RewindPo
 	checkpointFiles := make(map[string]bool)
 	var filesToRestore []string
 	err = tree.Files().ForEach(func(f *object.File) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		if !strings.HasPrefix(f.Name, entireDir) {
 			checkpointFiles[f.Name] = true
 			filesToRestore = append(filesToRestore, f.Name)
@@ -517,6 +532,9 @@ func (s *ManualCommitStrategy) PreviewRewind(ctx context.Context, point RewindPo
 	trackedFiles := make(map[string]bool)
 	//nolint:errcheck // Error is not critical for preview
 	_ = headTree.Files().ForEach(func(f *object.File) error {
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		trackedFiles[f.Name] = true
 		return nil
 	})

@@ -1,0 +1,33 @@
+#!/bin/sh
+#MISE description="Run E2E tests: mise run test:e2e --agent claude-code [filter]"
+#MISE quiet=true
+#USAGE flag "--agent <agent>" help="Agent (claude-code, gemini-cli, opencode)" default="" env="E2E_AGENT"
+#USAGE arg "[filter]" help="Test name filter (regex)" default=""
+
+set -eu
+
+export E2E_AGENT="${usage_agent:-}"
+
+# Build from source with version info unless a pre-built binary is provided.
+if [ -z "${E2E_ENTIRE_BIN:-}" ]; then
+  mise run build
+  export E2E_ENTIRE_BIN="$PWD/entire"
+fi
+
+E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/$(date +%Y-%m-%dT%H-%M-%S)"
+export E2E_ARTIFACT_DIR
+mkdir -p "$E2E_ARTIFACT_DIR"
+echo "artifacts: $E2E_ARTIFACT_DIR"
+
+filter="${usage_filter:-}"
+
+gotestsum --format dots --jsonfile "$E2E_ARTIFACT_DIR/test-events.json" -- \
+  -tags=e2e -count=1 -timeout=30m \
+  ${filter:+-run "$filter"} \
+  ./e2e/tests/... || rc=$?
+
+go run ./e2e/cmd/testreport -color -o "$E2E_ARTIFACT_DIR/report.txt" "$E2E_ARTIFACT_DIR/test-events.json"
+echo ""
+cat "$E2E_ARTIFACT_DIR/entire-version.txt" 2>/dev/null
+echo "artifacts: $E2E_ARTIFACT_DIR"
+exit "${rc:-0}"

@@ -47,7 +47,7 @@ func TestSingleSessionManualCommit(t *testing.T) {
 			t.Fatalf("agent failed: %v", err)
 		}
 
-		s.Git(t, "add", "docs/")
+		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add md file about red")
 
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")

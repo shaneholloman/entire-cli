@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -16,6 +18,7 @@ type Option func(*runConfig)
 type runConfig struct {
 	Model          string
 	PermissionMode string
+	PromptTimeout  time.Duration
 }
 
 func WithModel(model string) Option {
@@ -24,6 +27,10 @@ func WithModel(model string) Option {
 
 func WithPermissionMode(mode string) Option {
 	return func(c *runConfig) { c.PermissionMode = mode }
+}
+
+func WithPromptTimeout(d time.Duration) Option {
+	return func(c *runConfig) { c.PromptTimeout = d }
 }
 
 type Agent interface {
@@ -62,7 +69,12 @@ func Register(a Agent) {
 
 // RegisterGate sets a concurrency limit for an agent's tests.
 // Tests call AcquireSlot/ReleaseSlot to respect this limit.
-func RegisterGate(name string, max int) {
+// The limit can be overridden via E2E_CONCURRENT_TEST_LIMIT.
+func RegisterGate(name string, defaultMax int) {
+	max := defaultMax
+	if v, err := strconv.Atoi(os.Getenv("E2E_CONCURRENT_TEST_LIMIT")); err == nil && v > 0 {
+		max = v
+	}
 	gates[name] = make(chan struct{}, max)
 }
 

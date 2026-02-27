@@ -30,9 +30,6 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - name: Build entire CLI
-        run: go build -o /usr/local/bin/entire ./cmd/entire
-
       - name: Install agent CLI
         run: |
           case "${{ matrix.agent }}" in
@@ -55,12 +52,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
-          E2E_ENTIRE_BIN: /usr/local/bin/entire
+          E2E_CONCURRENT_TEST_LIMIT: ${{ matrix.agent == 'gemini' && '6' || '' }}
         run: mise run test:e2e:${{ matrix.agent }}
 
       - name: Upload artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-artifacts-${{ matrix.agent }}
           path: e2e/artifacts/

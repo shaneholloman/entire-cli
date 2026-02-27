@@ -27,6 +27,7 @@ type RepoState struct {
 	CheckpointBefore string
 	ConsoleLog       *os.File
 	session          agents.Session // interactive session, if started via StartSession
+	skipArtifacts    bool           // suppresses artifact capture on scenario restart
 }
 
 // SetupRepo creates a fresh git repository in a temporary directory, seeds it
@@ -105,7 +106,9 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 
 	t.Cleanup(func() {
 		_ = consoleLog.Close()
-		CaptureArtifacts(t, state)
+		if !state.skipArtifacts {
+			CaptureArtifacts(t, state)
+		}
 	})
 
 	return state
@@ -223,6 +226,12 @@ func ensureGitInfoExcludeContains(repoDir, entry string) error {
 // ForEachAgent runs fn as a parallel subtest for every registered agent.
 // It handles repo setup, concurrency gating, context timeout, and cleanup.
 // The timeout is scaled by each agent's TimeoutMultiplier.
+//
+// If RunPrompt detects a transient API error (e.g. rate limit, token refresh
+// failure), it panics with errScenarioRestart. ForEachAgent recovers from the
+// panic and restarts the entire scenario with a fresh repository, up to
+// maxScenarioRestarts times. This avoids stale CLI session state from the
+// failed attempt poisoning the retry.
 func ForEachAgent(t *testing.T, timeout time.Duration, fn func(t *testing.T, s *RepoState, ctx context.Context)) {
 	t.Helper()
 	t.Parallel()
@@ -232,8 +241,6 @@ func ForEachAgent(t *testing.T, timeout time.Duration, fn func(t *testing.T, s *
 	}
 	for _, agent := range all {
 		t.Run(agent.Name(), func(t *testing.T) {
-			s := SetupRepo(t, agent)
-
 			// Use the global test deadline for slot wait so we don't
 			// skip prematurely — only bail if the whole binary is dying.
 			slotCtx := context.Background()
@@ -250,31 +257,76 @@ func ForEachAgent(t *testing.T, timeout time.Duration, fn func(t *testing.T, s *
 			// Per-test timeout starts after slot is acquired, scaled
 			// by the agent's multiplier (e.g. 2.5× for gemini).
 			scaled := time.Duration(float64(timeout) * agent.TimeoutMultiplier())
-			ctx, cancel := context.WithTimeout(context.Background(), scaled)
-			defer cancel()
-			fn(t, s, ctx)
+
+			var prevState *RepoState
+			for attempt := range maxScenarioRestarts + 1 {
+				s := SetupRepo(t, agent)
+				ctx, cancel := context.WithTimeout(context.Background(), scaled)
+
+				// On restart, suppress artifact capture from the previous
+				// failed attempt so it doesn't overwrite the final one.
+				if prevState != nil {
+					prevState.skipArtifacts = true
+				}
+
+				restarted := runScenario(t, s, ctx, fn)
+				cancel()
+
+				if !restarted {
+					return
+				}
+				prevState = s
+				if attempt >= maxScenarioRestarts {
+					t.Fatalf("exhausted %d scenario attempts due to transient API errors", maxScenarioRestarts+1)
+				}
+				t.Logf("transient error, restarting scenario (attempt %d/%d)", attempt+2, maxScenarioRestarts+1)
+			}
 		})
 	}
 }
 
+// runScenario runs the test function and recovers from errScenarioRestart
+// panics triggered by transient API errors in RunPrompt. Returns true if
+// the scenario should be restarted with a fresh repository.
+func runScenario(t *testing.T, s *RepoState, ctx context.Context, fn func(t *testing.T, s *RepoState, ctx context.Context)) (restarted bool) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(errScenarioRestart); ok {
+				restarted = true
+				return
+			}
+			panic(r) // re-panic for unexpected panics
+		}
+	}()
+	fn(t, s, ctx)
+	return false
+}
+
+const maxScenarioRestarts = 2 // restart up to 2 times = 3 total attempts
+
+// errScenarioRestart is panicked by RunPrompt when a transient API error is
+// detected. ForEachAgent recovers from this panic and restarts the test
+// scenario with a fresh repository, avoiding stale CLI state from the failed
+// attempt.
+type errScenarioRestart struct {
+	msg string
+}
+
 // RunPrompt runs an agent prompt, logs the command and output to ConsoleLog,
-// and returns the result. If the agent reports a transient API error, the
-// prompt is retried once after a short delay. The caller should still check err.
+// and returns the result. If the agent reports a transient API error, it
+// panics with errScenarioRestart to trigger a full scenario restart in
+// ForEachAgent (see runScenario).
 func (s *RepoState) RunPrompt(t *testing.T, ctx context.Context, prompt string, opts ...agents.Option) (agents.Output, error) {
 	t.Helper()
 	out, err := s.Agent.RunPrompt(ctx, s.Dir, prompt, opts...)
 	s.logPromptResult(out)
 
 	if err != nil && s.Agent.IsTransientError(out, err) {
-		t.Logf("transient API error detected, retrying in 5s: %v", err)
-		s.ConsoleLog.WriteString("> [retry] transient error, waiting 5s...\n")
-		select {
-		case <-time.After(5 * time.Second):
-		case <-ctx.Done():
-			return out, err
-		}
-		out, err = s.Agent.RunPrompt(ctx, s.Dir, prompt, opts...)
-		s.logPromptResult(out)
+		errMsg := fmt.Sprintf("transient API error (stderr: %s)", strings.TrimSpace(out.Stderr))
+		t.Logf("%s — restarting scenario", errMsg)
+		fmt.Fprintf(s.ConsoleLog, "> [transient] %s — restarting scenario\n", errMsg)
+		panic(errScenarioRestart{msg: errMsg})
 	}
 
 	return out, err

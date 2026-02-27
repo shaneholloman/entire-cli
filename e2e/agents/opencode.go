@@ -35,11 +35,7 @@ func (a *openCodeAgent) EntireAgent() string        { return "opencode" }
 func (a *openCodeAgent) PromptPattern() string      { return `(Ask anything|▣)` }
 func (a *openCodeAgent) TimeoutMultiplier() float64 { return 2.0 }
 
-func (a *openCodeAgent) IsTransientError(out Output, err error) bool {
-	if err == nil {
-		return false
-	}
-	combined := out.Stdout + out.Stderr
+func (a *openCodeAgent) IsTransientError(out Output, _ error) bool {
 	transientPatterns := []string{
 		"overloaded",
 		"rate limit",
@@ -50,23 +46,11 @@ func (a *openCodeAgent) IsTransientError(out Output, err error) bool {
 		"Token refresh failed",
 	}
 	for _, p := range transientPatterns {
-		if strings.Contains(combined, p) {
+		if strings.Contains(out.Stderr, p) {
 			return true
 		}
 	}
 	return false
-}
-
-// detectStderrError checks stderr for error patterns that indicate the agent
-// failed despite exiting 0. Returns the first matching line, or "".
-func detectStderrError(stderr string) string {
-	for _, line := range strings.Split(stderr, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "Error:") || strings.HasPrefix(trimmed, "error:") {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func (a *openCodeAgent) Bootstrap() error {
@@ -142,13 +126,6 @@ func (a *openCodeAgent) RunPrompt(ctx context.Context, dir string, prompt string
 			out.ExitCode = -1
 		}
 		return out, err
-	}
-
-	// OpenCode sometimes exits 0 despite fatal errors (auth failures, etc.)
-	// that appear only in stderr. Detect these and return an error so the
-	// test framework can retry or fail early.
-	if msg := detectStderrError(stderr.String()); msg != "" {
-		return out, fmt.Errorf("opencode exited 0 but stderr indicates failure: %s", msg)
 	}
 
 	return out, nil

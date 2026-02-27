@@ -3536,3 +3536,62 @@ func TestCondenseSession_FilesTouchedNoFallback_NoOverlap(t *testing.T) {
 
 	t.Logf("No fallback applied: files_touched = %v (correctly empty), result = %+v", metadata.FilesTouched, result)
 }
+
+// TestExtractFilesFromLiveTranscript_RespectsOffset verifies that after condensation
+// sets CheckpointTranscriptStart = N, extractFilesFromLiveTranscript only returns
+// files from messages at index N and beyond, not from the beginning.
+//
+// This is a regression test for a bug where compaction events (pre-compress hooks)
+// unconditionally reset CheckpointTranscriptStart to 0, causing already-condensed
+// files to re-appear in carry-forward and break sequential commit scenarios.
+func TestExtractFilesFromLiveTranscript_RespectsOffset(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	s := &ManualCommitStrategy{}
+
+	// Create a Gemini-format transcript with 3 file writes at different message indices:
+	//   msg 0: user prompt
+	//   msg 1: gemini writes red.md      (already condensed)
+	//   msg 2: user prompt
+	//   msg 3: gemini writes blue.md     (already condensed)
+	//   msg 4: user prompt
+	//   msg 5: gemini writes green.md    (new, should be extracted)
+	transcript := `{
+  "messages": [
+    {"type": "user", "content": [{"text": "create red.md"}]},
+    {"type": "gemini", "content": "", "toolCalls": [{"name": "write_file", "args": {"file_path": "docs/red.md"}}]},
+    {"type": "user", "content": [{"text": "create blue.md"}]},
+    {"type": "gemini", "content": "", "toolCalls": [{"name": "write_file", "args": {"file_path": "docs/blue.md"}}]},
+    {"type": "user", "content": [{"text": "create green.md"}]},
+    {"type": "gemini", "content": "", "toolCalls": [{"name": "write_file", "args": {"file_path": "docs/green.md"}}]}
+  ]
+}`
+
+	transcriptPath := filepath.Join(dir, "transcript.json")
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("failed to write transcript: %v", err)
+	}
+
+	// Simulate state after 2 condensations: offset points past blue.md's message
+	state := &SessionState{
+		SessionID:                 "test-offset-session",
+		TranscriptPath:            transcriptPath,
+		AgentType:                 agent.AgentTypeGemini,
+		WorktreePath:              dir,
+		CheckpointTranscriptStart: 4, // Past red.md (msg 1) and blue.md (msg 3)
+	}
+
+	// With correct offset (4): should only find green.md
+	files := s.extractFilesFromLiveTranscript(context.Background(), state)
+	if len(files) != 1 || files[0] != "docs/green.md" {
+		t.Errorf("extractFilesFromLiveTranscript(offset=4) = %v, want [docs/green.md]", files)
+	}
+
+	// With reset offset (0): would incorrectly find all 3 files (the bug)
+	state.CheckpointTranscriptStart = 0
+	allFiles := s.extractFilesFromLiveTranscript(context.Background(), state)
+	if len(allFiles) != 3 {
+		t.Errorf("extractFilesFromLiveTranscript(offset=0) got %d files, want 3: %v", len(allFiles), allFiles)
+	}
+}

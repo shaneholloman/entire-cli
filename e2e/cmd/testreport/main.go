@@ -217,6 +217,24 @@ func renderReport(parents []*parentTest, color bool) string {
 		b.WriteString("\n")
 	}
 
+	// Footer banner
+	if failed > 0 {
+		banner := fmt.Sprintf("💥 FAILED (%d/%d passed) 💥", passed, total)
+		if color {
+			fmt.Fprintf(&b, "%s%s%s\n", colorRed, banner, colorReset)
+		} else {
+			b.WriteString(banner + "\n")
+		}
+	} else {
+		banner := fmt.Sprintf("🎉 ALL %d TESTS PASSED 🎉", total)
+		if color {
+			fmt.Fprintf(&b, "%s%s%s\n", colorGreen, banner, colorReset)
+		} else {
+			b.WriteString(banner + "\n")
+		}
+	}
+	b.WriteString("\n")
+
 	return b.String()
 }
 

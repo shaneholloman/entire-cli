@@ -79,7 +79,7 @@ func EnsureSetup(ctx context.Context) error {
 // IsAncestorOf checks if commit is an ancestor of (or equal to) target.
 // Returns true if target can reach commit by following parent links.
 // Limits search to MaxCommitTraversalDepth commits to avoid excessive traversal.
-func IsAncestorOf(repo *git.Repository, commit, target plumbing.Hash) bool {
+func IsAncestorOf(ctx context.Context, repo *git.Repository, commit, target plumbing.Hash) bool {
 	if commit == target {
 		return true
 	}
@@ -93,6 +93,9 @@ func IsAncestorOf(repo *git.Repository, commit, target plumbing.Hash) bool {
 	found := false
 	count := 0
 	_ = iter.ForEach(func(c *object.Commit) error { //nolint:errcheck // Best-effort search, errors are non-fatal
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // Propagating context cancellation
+		}
 		count++
 		if count > MaxCommitTraversalDepth {
 			return errStop
