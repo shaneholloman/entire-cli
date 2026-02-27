@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
@@ -117,7 +119,8 @@ func CapturePrePromptState(ctx context.Context, ag agent.Agent, sessionID, sessi
 	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok && sessionRef != "" {
 		pos, posErr := analyzer.GetTranscriptPosition(sessionRef)
 		if posErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to get transcript position: %v\n", posErr)
+			logging.Warn(logging.WithComponent(ctx, "state"), "failed to get transcript position",
+				slog.String("error", posErr.Error()))
 		} else {
 			transcriptOffset = pos
 		}
@@ -141,8 +144,9 @@ func CapturePrePromptState(ctx context.Context, ag agent.Agent, sessionID, sessi
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Captured state before prompt: %d untracked files, transcript offset: %d\n",
-		len(untrackedFiles), transcriptOffset)
+	logging.Debug(logging.WithComponent(ctx, "state"), "captured state before prompt",
+		slog.Int("untracked_files", len(untrackedFiles)),
+		slog.Int("transcript_offset", transcriptOffset))
 	return nil
 }
 
@@ -447,7 +451,8 @@ func CapturePreTaskState(ctx context.Context, toolUseID string) error {
 		return fmt.Errorf("failed to write state file: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Captured state before task: %d untracked files\n", len(untrackedFiles))
+	logging.Debug(logging.WithComponent(ctx, "state"), "captured state before task",
+		slog.Int("untracked_files", len(untrackedFiles)))
 	return nil
 }
 

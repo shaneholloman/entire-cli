@@ -57,27 +57,30 @@ func handleClaudeCodePostTodoFromReader(ctx context.Context, reader io.Reader) e
 
 	// Skip on default branch to avoid polluting main/master history
 	if skip, branchName := ShouldSkipOnDefaultBranch(ctx); skip {
-		fmt.Fprintf(os.Stderr, "Entire: skipping incremental checkpoint on branch '%s'\n", branchName)
+		logging.Info(logCtx, "skipping incremental checkpoint on default branch",
+			slog.String("branch", branchName))
 		return nil
 	}
 
 	// Detect file changes since last checkpoint
 	changes, err := DetectFileChanges(ctx, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to detect changed files: %v\n", err)
+		logging.Warn(logCtx, "failed to detect changed files",
+			slog.String("error", err.Error()))
 		return nil
 	}
 
 	// If no file changes, skip creating a checkpoint
 	if len(changes.Modified) == 0 && len(changes.New) == 0 && len(changes.Deleted) == 0 {
-		fmt.Fprintf(os.Stderr, "[entire] No file changes detected, skipping incremental checkpoint\n")
+		logging.Info(logCtx, "no file changes detected, skipping incremental checkpoint")
 		return nil
 	}
 
 	// Get git author
 	author, err := GetGitAuthor(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to get git author: %v\n", err)
+		logging.Warn(logCtx, "failed to get git author",
+			slog.String("error", err.Error()))
 		return nil
 	}
 
@@ -135,11 +138,14 @@ func handleClaudeCodePostTodoFromReader(ctx context.Context, reader io.Reader) e
 
 	// Save incremental task step
 	if err := strat.SaveTaskStep(ctx, taskStepCtx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save incremental task step: %v\n", err)
+		logging.Warn(logCtx, "failed to save incremental task step",
+			slog.String("error", err.Error()))
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "[entire] Created incremental checkpoint #%d for %s (task: %s)\n",
-		seq, input.ToolName, taskToolUseID[:min(12, len(taskToolUseID))])
+	logging.Info(logCtx, "created incremental checkpoint",
+		slog.Int("sequence", seq),
+		slog.String("tool_name", input.ToolName),
+		slog.String("task", taskToolUseID[:min(12, len(taskToolUseID))]))
 	return nil
 }

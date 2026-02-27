@@ -1,31 +1,41 @@
 package agent
 
 import (
-	"fmt"
-	"os"
+	"context"
+	"log/slog"
+
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
-func CalculateTokenUsage(ag Agent, transcriptData []byte, transcriptLinesAtStart int, subagentsDir string) *TokenUsage {
+// CalculateTokenUsage calculates token usage from transcript data.
+// Returns nil if the agent doesn't support token calculation or on error.
+// Errors are debug-logged because callers treat nil token usage as "no data available".
+func CalculateTokenUsage(ctx context.Context, ag Agent, transcriptData []byte, transcriptLinesAtStart int, subagentsDir string) *TokenUsage {
 	if ag == nil {
 		return nil
 	}
+
 	// Calculate token usage - prefer SubagentAwareExtractor to include subagent tokens
-	var tokenUsage *TokenUsage
 	if subagentExtractor, ok := ag.(SubagentAwareExtractor); ok {
-		usage, tokenErr := subagentExtractor.CalculateTotalTokenUsage(transcriptData, transcriptLinesAtStart, subagentsDir)
-		if tokenErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to calculate token usage (with subagents): %v\n", tokenErr)
-		} else {
-			tokenUsage = usage
+		usage, err := subagentExtractor.CalculateTotalTokenUsage(transcriptData, transcriptLinesAtStart, subagentsDir)
+		if err != nil {
+			logging.Debug(ctx, "failed subagent aware token extraction",
+				slog.String("error", err.Error()))
+			return nil
 		}
-	} else if calculator, ok := ag.(TokenCalculator); ok {
-		// Fall back to basic token calculation (main transcript only)
-		usage, tokenErr := calculator.CalculateTokenUsage(transcriptData, transcriptLinesAtStart)
-		if tokenErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to calculate token usage: %v\n", tokenErr)
-		} else {
-			tokenUsage = usage
-		}
+		return usage
 	}
-	return tokenUsage
+
+	if calculator, ok := ag.(TokenCalculator); ok {
+		// Fall back to basic token calculation (main transcript only)
+		usage, err := calculator.CalculateTokenUsage(transcriptData, transcriptLinesAtStart)
+		if err != nil {
+			logging.Debug(ctx, "failed token extraction",
+				slog.String("error", err.Error()))
+			return nil
+		}
+		return usage
+	}
+
+	return nil
 }

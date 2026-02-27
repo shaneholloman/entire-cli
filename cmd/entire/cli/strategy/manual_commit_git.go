@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 
@@ -109,7 +108,6 @@ func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) e
 			slog.Int("checkpoint_count", state.StepCount),
 			slog.String("shadow_branch", shadowBranchName),
 		)
-		fmt.Fprintf(os.Stderr, "Skipped checkpoint (no changes since last checkpoint)\n")
 		return nil
 	}
 
@@ -142,9 +140,11 @@ func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) e
 	}
 
 	if !branchExisted {
-		fmt.Fprintf(os.Stderr, "Created shadow branch '%s' and committed changes\n", shadowBranchName)
+		logging.Info(logging.WithComponent(ctx, "checkpoint"), "created shadow branch and committed changes",
+			slog.String("shadow_branch", shadowBranchName))
 	} else {
-		fmt.Fprintf(os.Stderr, "Committed changes to shadow branch '%s'\n", shadowBranchName)
+		logging.Info(logging.WithComponent(ctx, "checkpoint"), "committed changes to shadow branch",
+			slog.String("shadow_branch", shadowBranchName))
 	}
 
 	// Log checkpoint creation
@@ -259,9 +259,11 @@ func (s *ManualCommitStrategy) SaveTaskStep(ctx context.Context, step TaskStepCo
 	}
 
 	if !branchExisted {
-		fmt.Fprintf(os.Stderr, "Created shadow branch '%s' and committed task checkpoint\n", shadowBranchName)
+		logging.Info(logging.WithComponent(ctx, "checkpoint"), "created shadow branch and committed task checkpoint",
+			slog.String("shadow_branch", shadowBranchName))
 	} else {
-		fmt.Fprintf(os.Stderr, "Committed task checkpoint to shadow branch '%s'\n", shadowBranchName)
+		logging.Info(logging.WithComponent(ctx, "checkpoint"), "committed task checkpoint to shadow branch",
+			slog.String("shadow_branch", shadowBranchName))
 	}
 
 	// Log task checkpoint creation

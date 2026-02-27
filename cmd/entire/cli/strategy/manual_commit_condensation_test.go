@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -23,7 +24,7 @@ func TestCalculateTokenUsage_CursorReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
 	}
-	result := agent.CalculateTokenUsage(ag, transcript, 0, "")
+	result := agent.CalculateTokenUsage(context.Background(), ag, transcript, 0, "")
 	if result != nil {
 		t.Errorf("CalculateTokenUsage(Cursor) = %+v, want nil", result)
 	}
@@ -36,7 +37,7 @@ func TestCalculateTokenUsage_EmptyData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(ClaudeCode) error: %v", err)
 	}
-	result := agent.CalculateTokenUsage(ag, nil, 0, "")
+	result := agent.CalculateTokenUsage(context.Background(), ag, nil, 0, "")
 	if result == nil {
 		t.Fatal("CalculateTokenUsage(empty) = nil, want non-nil empty struct")
 	}
@@ -59,7 +60,7 @@ func TestCalculateTokenUsage_ClaudeCodeBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(ClaudeCode) error: %v", err)
 	}
-	result := agent.CalculateTokenUsage(ag, data, 0, "")
+	result := agent.CalculateTokenUsage(context.Background(), ag, data, 0, "")
 	if result == nil {
 		t.Fatal("CalculateTokenUsage(ClaudeCode) = nil, want non-nil")
 	}
@@ -87,8 +88,8 @@ func TestCalculateTokenUsage_ClaudeCodeWithOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(ClaudeCode) error: %v", err)
 	}
-	full := agent.CalculateTokenUsage(ag, data, 0, "")
-	sliced := agent.CalculateTokenUsage(ag, data, 2, "")
+	full := agent.CalculateTokenUsage(context.Background(), ag, data, 0, "")
+	sliced := agent.CalculateTokenUsage(context.Background(), ag, data, 2, "")
 
 	if full == nil || sliced == nil {
 		t.Fatal("expected non-nil results")
@@ -173,7 +174,7 @@ func TestCalculateTokenUsage_CursorRealTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
 	}
-	result := agent.CalculateTokenUsage(ag, []byte(cursorSampleTranscript), 0, "")
+	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 0, "")
 	if result != nil {
 		t.Errorf("CalculateTokenUsage(Cursor, real transcript) = %+v, want nil", result)
 	}
@@ -187,7 +188,7 @@ func TestCalculateTokenUsage_CursorWithOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
 	}
-	result := agent.CalculateTokenUsage(ag, []byte(cursorSampleTranscript), 3, "")
+	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 3, "")
 	if result != nil {
 		t.Errorf("CalculateTokenUsage(Cursor, offset=3) = %+v, want nil", result)
 	}

@@ -3,9 +3,10 @@ package strategy
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -51,7 +52,8 @@ func (s *ManualCommitStrategy) migrateShadowBranchIfNeeded(ctx context.Context, 
 		// Old shadow branch doesn't exist - just update state.BaseCommit
 		// This can happen if this is the first checkpoint after HEAD changed
 		state.BaseCommit = currentHead
-		fmt.Fprintf(os.Stderr, "Updated session base commit to %s (HEAD changed during session)\n", currentHead[:7])
+		logging.Info(logging.WithComponent(ctx, "migration"), "updated session base commit (HEAD changed during session)",
+			slog.String("new_base", currentHead[:7]))
 		return true, nil //nolint:nilerr // err is "reference not found" which is fine - just need to update state
 	}
 
@@ -65,13 +67,17 @@ func (s *ManualCommitStrategy) migrateShadowBranchIfNeeded(ctx context.Context, 
 	}
 
 	// Delete old reference via CLI (go-git v5's RemoveReference doesn't persist with packed refs/worktrees)
+	logCtx := logging.WithComponent(ctx, "migration")
 	if err := DeleteBranchCLI(ctx, oldShadowBranch); err != nil {
 		// Non-fatal: log but continue - the important thing is the new branch exists
-		fmt.Fprintf(os.Stderr, "Warning: failed to remove old shadow branch %s: %v\n", oldShadowBranch, err)
+		logging.Warn(logCtx, "failed to remove old shadow branch",
+			slog.String("shadow_branch", oldShadowBranch),
+			slog.String("error", err.Error()))
 	}
 
-	fmt.Fprintf(os.Stderr, "Moved shadow branch from %s to %s (HEAD changed during session)\n",
-		oldShadowBranch, newShadowBranch)
+	logging.Info(logCtx, "moved shadow branch (HEAD changed during session)",
+		slog.String("from", oldShadowBranch),
+		slog.String("to", newShadowBranch))
 
 	// Update state with new base commit
 	state.BaseCommit = currentHead

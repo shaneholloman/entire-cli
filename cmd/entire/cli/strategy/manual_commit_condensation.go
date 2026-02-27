@@ -493,7 +493,7 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 
 	// Calculate token usage from the extracted transcript portion
 	if len(data.Transcript) > 0 {
-		data.TokenUsage = agent.CalculateTokenUsage(ag, data.Transcript, checkpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
+		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, checkpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
 	}
 
 	return data, nil
@@ -537,7 +537,7 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 
 	// Calculate token usage from the extracted transcript portion
 	if len(data.Transcript) > 0 {
-		data.TokenUsage = agent.CalculateTokenUsage(ag, data.Transcript, state.CheckpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
+		data.TokenUsage = agent.CalculateTokenUsage(ctx, ag, data.Transcript, state.CheckpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
 	}
 
 	return data, nil
