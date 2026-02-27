@@ -476,19 +476,15 @@ func TestWaitForTranscriptFlush_RecentFile_WaitsForSentinel(t *testing.T) {
 	}
 }
 
-func TestWaitForTranscriptFlush_NonexistentFile_SkipsWait(t *testing.T) {
+func TestWaitForTranscriptFlush_NonexistentFile_ReturnsImmediately(t *testing.T) {
 	t.Parallel()
 
-	// File doesn't exist — Stat fails, should still proceed without blocking
+	// File doesn't exist — os.Stat fails, return immediately (nothing to poll).
 	start := time.Now()
 	waitForTranscriptFlush(context.Background(), "/nonexistent/transcript.jsonl", time.Now())
 	elapsed := time.Since(start)
 
-	// Should complete quickly (polling loop runs but checkStopSentinel returns false on os.Open failure)
-	// With the stale check, os.Stat fails so we fall through to the poll loop,
-	// but each poll iteration also fails quickly, so it still takes ~3s.
-	// The key thing is it doesn't hang.
-	if elapsed > 5*time.Second {
-		t.Errorf("expected completion within 5s for nonexistent file, but took %v", elapsed)
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("expected immediate return for nonexistent file, but took %v", elapsed)
 	}
 }
