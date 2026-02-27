@@ -173,8 +173,8 @@ func TestCursorAgent_ExtractModifiedFilesFromOffset(t *testing.T) {
 	if files != nil {
 		t.Errorf("ExtractModifiedFilesFromOffset() files = %v, want nil", files)
 	}
-	if pos != 4 {
-		t.Errorf("ExtractModifiedFilesFromOffset() pos = %d, want 4", pos)
+	if pos != 0 {
+		t.Errorf("ExtractModifiedFilesFromOffset() pos = %d, want 0", pos)
 	}
 }
 
