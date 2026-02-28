@@ -127,6 +127,17 @@ export const EntirePlugin: Plugin = async ({ $, directory }) => {
           })
           break
         }
+
+        case "session.idle": {
+          // session.idle fires during shutdown with the session ID, even after
+          // the plugin is reloaded (which clears in-memory state). This recovers
+          // currentSessionID so the session.status fallback has a valid ID.
+          const sessionID = (event as any).properties?.sessionID
+          if (sessionID) {
+            currentSessionID = sessionID
+          }
+          break
+        }
       }
     },
   }
