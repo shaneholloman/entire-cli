@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -532,6 +533,48 @@ func isOnlySeparators(s string) bool {
 		}
 	}
 	return true
+}
+
+// ReadLatestSessionPromptFromCommittedTree reads the first prompt from a committed checkpoint's
+// latest session on the metadata branch tree. This navigates the sharded directory layout:
+// <cpID.Path()>/<latestSessionIndex>/prompt.txt
+//
+// This is an O(1) tree lookup that avoids reading the full transcript.
+// sessionCount is the number of sessions in the checkpoint (from CommittedInfo.SessionCount).
+func ReadLatestSessionPromptFromCommittedTree(tree *object.Tree, cpID id.CheckpointID, sessionCount int) string {
+	cpPath := cpID.Path()
+	cpTree, err := tree.Tree(cpPath)
+	if err != nil {
+		return ""
+	}
+
+	// Find the latest session subdirectory.
+	// Sessions use 0-based indexing: 0/, 1/, 2/, etc.
+	latestIndex := sessionCount - 1
+	if latestIndex < 0 {
+		latestIndex = 0
+	}
+	sessionPath := strconv.Itoa(latestIndex)
+	sessionTree, err := cpTree.Tree(sessionPath)
+	if err != nil {
+		// Fall back to session 0 if the computed index doesn't exist
+		sessionTree, err = cpTree.Tree("0")
+		if err != nil {
+			return ""
+		}
+	}
+
+	file, err := sessionTree.File(paths.PromptFileName)
+	if err != nil {
+		return ""
+	}
+
+	content, err := file.Contents()
+	if err != nil {
+		return ""
+	}
+
+	return ExtractFirstPrompt(content)
 }
 
 // ReadAllSessionPromptsFromTree reads the first prompt for all sessions in a multi-session checkpoint.

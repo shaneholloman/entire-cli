@@ -780,6 +780,11 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	committedFileSet := filesChangedInCommit(commit, headTree, parentTree)
 
 	for _, state := range sessions {
+		// Skip fully-condensed ended sessions — no work remains.
+		// These sessions only persist for LastCheckpointID (amend trailer reuse).
+		if state.FullyCondensed && state.Phase == session.PhaseEnded {
+			continue
+		}
 		s.postCommitProcessSession(ctx, repo, state, &transitionCtx, checkpointID,
 			head, commit, newHead, headTree, parentTree, committedFileSet,
 			shadowBranchesToDelete, uncondensedActiveOnBranch)
@@ -947,6 +952,13 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		}
 	}
 
+	// Mark ENDED sessions as fully condensed when no carry-forward remains.
+	// PostCommit will skip these sessions entirely on future commits.
+	// They persist only for LastCheckpointID (amend trailer restoration).
+	if handler.condensed && state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 {
+		state.FullyCondensed = true
+	}
+
 	// Save the updated state
 	if err := s.saveSessionState(ctx, state); err != nil {
 		logging.Warn(logCtx, "failed to update session state",
@@ -1093,6 +1105,10 @@ func (s *ManualCommitStrategy) filterSessionsWithNewContent(ctx context.Context,
 	var result []*SessionState
 
 	for _, state := range sessions {
+		// Skip fully-condensed ended sessions — no new content possible.
+		if state.FullyCondensed && state.Phase == session.PhaseEnded {
+			continue
+		}
 		hasNew, err := s.sessionHasNewContent(ctx, repo, state)
 		if err != nil {
 			// On error, include the session (fail open for hooks)

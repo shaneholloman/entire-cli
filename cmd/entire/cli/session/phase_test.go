@@ -503,18 +503,53 @@ func TestApplyTransition_CallsHandlerForWarnStaleSession(t *testing.T) {
 func TestApplyTransition_ClearsEndedAt(t *testing.T) {
 	t.Parallel()
 
-	endedAt := time.Now().Add(-time.Hour)
-	state := &State{Phase: PhaseEnded, EndedAt: &endedAt}
-	handler := &mockActionHandler{}
-	result := TransitionResult{
-		NewPhase: PhaseIdle,
-		Actions:  []Action{ActionClearEndedAt},
+	tests := []struct {
+		name           string
+		fullyCondensed bool
+		newPhase       Phase
+		actions        []Action
+	}{
+		{
+			name:     "SessionStart_to_IDLE",
+			newPhase: PhaseIdle,
+			actions:  []Action{ActionClearEndedAt},
+		},
+		{
+			name:     "TurnStart_to_ACTIVE",
+			newPhase: PhaseActive,
+			actions:  []Action{ActionClearEndedAt, ActionUpdateLastInteraction},
+		},
+		{
+			name:           "TurnStart_clears_FullyCondensed",
+			fullyCondensed: true,
+			newPhase:       PhaseActive,
+			actions:        []Action{ActionClearEndedAt, ActionUpdateLastInteraction},
+		},
+		{
+			name:           "SessionStart_clears_FullyCondensed",
+			fullyCondensed: true,
+			newPhase:       PhaseIdle,
+			actions:        []Action{ActionClearEndedAt},
+		},
 	}
 
-	err := ApplyTransition(context.Background(), state, result, handler)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.NoError(t, err)
-	assert.Nil(t, state.EndedAt)
+			endedAt := time.Now().Add(-time.Hour)
+			state := &State{Phase: PhaseEnded, EndedAt: &endedAt, FullyCondensed: tt.fullyCondensed}
+			handler := &mockActionHandler{}
+			result := TransitionResult{NewPhase: tt.newPhase, Actions: tt.actions}
+
+			err := ApplyTransition(context.Background(), state, result, handler)
+
+			require.NoError(t, err)
+			assert.Nil(t, state.EndedAt)
+			assert.False(t, state.FullyCondensed,
+				"FullyCondensed must be cleared when ActionClearEndedAt runs")
+		})
+	}
 }
 
 func TestApplyTransition_ReturnsHandlerError_ButRunsCommonActions(t *testing.T) {

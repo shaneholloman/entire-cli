@@ -114,6 +114,13 @@ type State struct {
 	// sessions that have been condensed at least once. Cleared on new prompt.
 	LastCheckpointID id.CheckpointID `json:"last_checkpoint_id,omitempty"`
 
+	// FullyCondensed indicates this session has been condensed and has no remaining
+	// carry-forward files. PostCommit skips fully-condensed sessions entirely.
+	// Set after successful condensation when no files remain for carry-forward
+	// and the session phase is ENDED. Cleared on session reactivation (ENDED →
+	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
+	FullyCondensed bool `json:"fully_condensed,omitempty"`
+
 	// AgentType identifies the agent that created this session (e.g., "Claude Code", "Gemini CLI", "Cursor")
 	AgentType types.AgentType `json:"agent_type,omitempty"`
 

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v5"
@@ -1096,6 +1097,149 @@ func TestEnsureMetadataBranch(t *testing.T) {
 		}
 		if len(tree.Entries) != 0 {
 			t.Errorf("expected empty tree, got %d entries", len(tree.Entries))
+		}
+	})
+}
+
+// buildCommittedTree creates a git tree with the sharded committed checkpoint layout
+// used by entire/checkpoints/v1. files is a map of path -> content relative to the tree root.
+// Example: {"a3/b2c4d5e6f7/0/prompt.txt": "Hello"} creates the nested directory structure.
+func buildCommittedTree(t *testing.T, files map[string]string) *object.Tree {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("failed to init repo: %v", err)
+	}
+
+	for path, content := range files {
+		absPath := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			t.Fatalf("failed to create directory for %s: %v", path, err)
+		}
+		if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", path, err)
+		}
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	if _, err := wt.Add("."); err != nil {
+		t.Fatalf("failed to add files: %v", err)
+	}
+	commitHash, err := wt.Commit("test tree", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
+	})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		t.Fatalf("failed to get commit: %v", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("failed to get tree: %v", err)
+	}
+	return tree
+}
+
+func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
+	t.Parallel()
+
+	// Checkpoint ID "a3b2c4d5e6f7" -> path "a3/b2c4d5e6f7"
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	t.Run("single session reads from 0/prompt.txt", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "Implement login feature",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 1)
+		if got != "Implement login feature" {
+			t.Errorf("got %q, want %q", got, "Implement login feature")
+		}
+	})
+
+	t.Run("multi session reads from latest session", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "First session prompt",
+			"a3/b2c4d5e6f7/1/prompt.txt": "Second session prompt",
+			"a3/b2c4d5e6f7/2/prompt.txt": "Third session prompt",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 3)
+		if got != "Third session prompt" {
+			t.Errorf("got %q, want %q", got, "Third session prompt")
+		}
+	})
+
+	t.Run("falls back to session 0 when computed index missing", func(t *testing.T) {
+		t.Parallel()
+		// Tree only has session 0, but sessionCount says 3
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "Fallback prompt",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 3)
+		if got != "Fallback prompt" {
+			t.Errorf("got %q, want %q", got, "Fallback prompt")
+		}
+	})
+
+	t.Run("returns empty for missing prompt.txt", func(t *testing.T) {
+		t.Parallel()
+		// Session directory exists but no prompt.txt
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/metadata.json": `{"session_id":"test"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 1)
+		if got != "" {
+			t.Errorf("got %q, want empty string", got)
+		}
+	})
+
+	t.Run("returns empty for missing checkpoint path", func(t *testing.T) {
+		t.Parallel()
+		// Tree has a different checkpoint ID
+		tree := buildCommittedTree(t, map[string]string{
+			"ff/aabbccddee/0/prompt.txt": "Wrong checkpoint",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 1)
+		if got != "" {
+			t.Errorf("got %q, want empty string", got)
+		}
+	})
+
+	t.Run("returns empty for zero session count", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "Some prompt",
+		})
+
+		// sessionCount=0 triggers latestIndex=max(0-1,0)=0, should still read session 0
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 0)
+		if got != "Some prompt" {
+			t.Errorf("got %q, want %q", got, "Some prompt")
+		}
+	})
+
+	t.Run("extracts first prompt from multi-prompt content", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "First prompt\n\n---\n\nSecond prompt",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 1)
+		if got != "First prompt" {
+			t.Errorf("got %q, want %q", got, "First prompt")
 		}
 	})
 }

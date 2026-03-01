@@ -921,6 +921,11 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	// Check if we're on the default branch (needed for getReachableTemporaryCheckpoints)
 	isOnDefault, _ := strategy.IsOnDefaultBranch(repo)
 
+	// Fetch metadata branch tree once for reading session prompts (cheap tree lookups).
+	// This avoids calling ReadLatestSessionContent per checkpoint which reads+parses
+	// the full JSONL transcript — extremely slow with hundreds of checkpoints.
+	metadataTree, _ := strategy.GetMetadataBranchTree(repo) //nolint:errcheck // Best-effort, continue without prompts
+
 	var points []strategy.RewindPoint
 
 	collectCheckpoint := func(c *object.Commit) {
@@ -945,14 +950,11 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 			ToolUseID:        cpInfo.ToolUseID,
 			Agent:            cpInfo.Agent,
 		}
-		// Read session prompt from metadata branch (best-effort)
-		content, _ := store.ReadLatestSessionContent(ctx, cpID) //nolint:errcheck  // Best-effort
-		if content != nil {
-			scopedTranscript := scopeTranscriptForCheckpoint(content.Transcript, content.Metadata.GetTranscriptStart(), content.Metadata.Agent)
-			scopedPrompts := extractPromptsFromTranscript(scopedTranscript, content.Metadata.Agent)
-			if len(scopedPrompts) > 0 && scopedPrompts[0] != "" {
-				point.SessionPrompt = scopedPrompts[0]
-			}
+		// Read session prompt from metadata branch tree (best-effort).
+		// Read prompt.txt directly from the latest session subdirectory instead of
+		// parsing the full transcript — prompt.txt is tiny vs multi-MB transcripts.
+		if metadataTree != nil {
+			point.SessionPrompt = strategy.ReadLatestSessionPromptFromCommittedTree(metadataTree, cpID, cpInfo.SessionCount)
 		}
 
 		points = append(points, point)
@@ -1080,16 +1082,22 @@ func isShadowBranchReachable(ctx context.Context, repo *git.Repository, baseComm
 }
 
 // convertTemporaryCheckpoint converts a TemporaryCheckpointInfo to a RewindPoint.
-// Returns nil if the checkpoint should be skipped (no code changes or can't be read).
+// Returns nil if the checkpoint should be skipped (no tree changes or can't be read).
+//
+// Filtering uses hasAnyChanges (O(1) tree hash comparison) rather than hasCodeChanges
+// (O(files) full diff). This means metadata-only checkpoints (.entire/ changes without
+// code changes) are kept — only true no-ops (identical tree as parent) are dropped.
+// This trade-off is intentional for list-view performance.
 func convertTemporaryCheckpoint(repo *git.Repository, tc checkpoint.TemporaryCheckpointInfo) *strategy.RewindPoint {
 	shadowCommit, commitErr := repo.CommitObject(tc.CommitHash)
 	if commitErr != nil {
 		return nil
 	}
 
-	// Filter out checkpoints with no code changes (only .entire/ metadata changed)
-	// This also filters out the first checkpoint which is just a baseline copy
-	if !hasCodeChanges(shadowCommit) {
+	// Skip no-op commits where the tree is identical to the parent's.
+	// Note: this keeps metadata-only changes (e.g. transcript updates in .entire/)
+	// since those produce a different tree hash. See hasAnyChanges godoc.
+	if !hasAnyChanges(shadowCommit) {
 		return nil
 	}
 
@@ -1573,13 +1581,11 @@ func transcriptOffset(transcriptBytes []byte, agentType types.AgentType) int {
 }
 
 // hasCodeChanges returns true if the commit has changes to non-metadata files.
-// Used by getBranchCheckpoints to filter out metadata-only temporary checkpoints.
+// Uses a full tree diff to distinguish code changes from .entire/ metadata-only changes.
 // Returns false only if the commit has a parent AND only modified .entire/ metadata files.
 //
-// First commits (no parent) are always considered to have code changes since they
-// capture the working copy state at session start - real uncommitted work.
-//
-// This filters out periodic transcript saves that don't change code.
+// WARNING: This is expensive via go-git (resolves many tree/blob objects from packfiles).
+// For list views with many checkpoints, use hasAnyChanges instead.
 func hasCodeChanges(commit *object.Commit) bool {
 	// First commit on shadow branch captures working copy state - always meaningful
 	if commit.NumParents() == 0 {
@@ -1619,4 +1625,19 @@ func hasCodeChanges(commit *object.Commit) bool {
 	}
 
 	return false
+}
+
+// hasAnyChanges is a lightweight alternative to hasCodeChanges that compares
+// tree hashes without doing a full diff. Returns true if the commit's tree
+// differs from its parent's tree. This may include metadata-only changes,
+// but is O(1) instead of O(files) — suitable for list views.
+func hasAnyChanges(commit *object.Commit) bool {
+	if commit.NumParents() == 0 {
+		return true
+	}
+	parent, err := commit.Parent(0)
+	if err != nil {
+		return true
+	}
+	return commit.TreeHash != parent.TreeHash
 }

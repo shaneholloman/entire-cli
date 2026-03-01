@@ -3561,6 +3561,266 @@ func TestGetBranchCheckpoints_DefaultBranchFindsMergedCheckpoints(t *testing.T) 
 	}
 }
 
+func TestGetBranchCheckpoints_ReadsPromptFromCommittedCheckpoint(t *testing.T) {
+	// Verifies that getBranchCheckpoints populates RewindPoint.SessionPrompt
+	// from prompt.txt on entire/checkpoints/v1 (committed checkpoint) without
+	// needing to read/parse the full transcript.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	// Create initial commit
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := w.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	_, err = w.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create initial commit: %v", err)
+	}
+
+	// Create a checkpoint ID and write committed checkpoint with prompt data
+	cpID, err := id.NewCheckpointID("aabb11223344")
+	if err != nil {
+		t.Fatalf("failed to create checkpoint ID: %v", err)
+	}
+
+	expectedPrompt := "Refactor the authentication module to use JWT tokens"
+	store := checkpoint.NewGitStore(repo)
+	if err := store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "2026-02-27-test-session",
+		Strategy:     "manual-commit",
+		FilesTouched: []string{"auth.go"},
+		Prompts:      []string{expectedPrompt},
+	}); err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+
+	// Create a user commit with the Entire-Checkpoint trailer
+	if err := os.WriteFile(testFile, []byte("updated with auth changes"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := w.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	commitMsg := trailers.FormatCheckpoint("Refactor auth module", cpID)
+	_, err = w.Commit(commitMsg, &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create commit with checkpoint trailer: %v", err)
+	}
+
+	// Call getBranchCheckpoints and verify prompt is populated
+	points, err := getBranchCheckpoints(context.Background(), repo, 10)
+	if err != nil {
+		t.Fatalf("getBranchCheckpoints() error = %v", err)
+	}
+
+	var foundCommitted bool
+	for _, p := range points {
+		if p.CheckpointID == cpID {
+			foundCommitted = true
+			if !p.IsLogsOnly {
+				t.Error("expected committed checkpoint to have IsLogsOnly=true")
+			}
+			if p.SessionPrompt != expectedPrompt {
+				t.Errorf("expected SessionPrompt = %q, got %q", expectedPrompt, p.SessionPrompt)
+			}
+			break
+		}
+	}
+
+	if !foundCommitted {
+		t.Errorf("expected to find committed checkpoint %s, got %d points", cpID, len(points))
+	}
+}
+
+func TestHasAnyChanges_FirstCommitReturnsTrue(t *testing.T) {
+	// First commit (no parent) should always return true
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := w.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	commitHash, err := w.Commit("first commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create commit: %v", err)
+	}
+
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		t.Fatalf("failed to get commit object: %v", err)
+	}
+
+	if !hasAnyChanges(commit) {
+		t.Error("hasAnyChanges() should return true for first commit (no parent)")
+	}
+}
+
+func TestHasAnyChanges_MetadataOnlyChangeReturnsTrue(t *testing.T) {
+	// Unlike hasCodeChanges, hasAnyChanges uses tree hash comparison and
+	// does not filter out .entire/ metadata files. A metadata-only change
+	// should return true because the tree hash differs from the parent's.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	// Create first commit
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := w.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	_, err = w.Commit("first commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create first commit: %v", err)
+	}
+
+	// Create second commit with only .entire/ metadata changes
+	metadataDir := filepath.Join(tmpDir, ".entire", "metadata", "session-123")
+	if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+		t.Fatalf("failed to create metadata dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataDir, "full.jsonl"), []byte(`{"test": true}`), 0o644); err != nil {
+		t.Fatalf("failed to write metadata file: %v", err)
+	}
+	if _, err := w.Add(".entire"); err != nil {
+		t.Fatalf("failed to add .entire: %v", err)
+	}
+	commitHash, err := w.Commit("metadata only commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create second commit: %v", err)
+	}
+
+	commit, err := repo.CommitObject(commitHash)
+	if err != nil {
+		t.Fatalf("failed to get commit object: %v", err)
+	}
+
+	// hasAnyChanges compares tree hashes, so metadata-only changes DO count
+	// (unlike hasCodeChanges which filters .entire/ files)
+	if !hasAnyChanges(commit) {
+		t.Error("hasAnyChanges() should return true for metadata-only changes (tree hash differs)")
+	}
+}
+
+func TestHasAnyChanges_NoOpTreeChangeReturnsFalse(t *testing.T) {
+	// When a commit has the same tree hash as its parent (no-op commit),
+	// hasAnyChanges should return false
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	// Create first commit
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("initial"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := w.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	firstHash, err := w.Commit("first commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to create first commit: %v", err)
+	}
+
+	// Create a second commit with the exact same tree (allow-empty equivalent)
+	firstCommit, err := repo.CommitObject(firstHash)
+	if err != nil {
+		t.Fatalf("failed to get first commit: %v", err)
+	}
+
+	sig := object.Signature{
+		Name:  "Test",
+		Email: "test@example.com",
+		When:  time.Now(),
+	}
+	emptyCommit := object.Commit{
+		Author:       sig,
+		Committer:    sig,
+		Message:      "no-op commit with same tree",
+		TreeHash:     firstCommit.TreeHash,
+		ParentHashes: []plumbing.Hash{firstHash},
+	}
+	obj := repo.Storer.NewEncodedObject()
+	if err := emptyCommit.Encode(obj); err != nil {
+		t.Fatalf("failed to encode commit: %v", err)
+	}
+	secondHash, err := repo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		t.Fatalf("failed to store commit: %v", err)
+	}
+
+	secondCommit, err := repo.CommitObject(secondHash)
+	if err != nil {
+		t.Fatalf("failed to get second commit: %v", err)
+	}
+
+	// Same tree hash as parent → no changes
+	if hasAnyChanges(secondCommit) {
+		t.Error("hasAnyChanges() should return false when tree hash matches parent (no-op commit)")
+	}
+}
+
 // createCommitWithTree creates a commit with a specific tree and parent hashes.
 func createCommitWithTree(t *testing.T, repo *git.Repository, treeHash plumbing.Hash, parents []plumbing.Hash, message string) plumbing.Hash {
 	t.Helper()

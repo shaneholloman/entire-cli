@@ -322,6 +322,7 @@ func ApplyTransition(ctx context.Context, state *State, result TransitionResult,
 			state.LastInteractionTime = &now
 		case ActionClearEndedAt:
 			state.EndedAt = nil
+			state.FullyCondensed = false
 
 		// Strategy-specific actions: skip remaining after the first handler error.
 		case ActionCondense:
