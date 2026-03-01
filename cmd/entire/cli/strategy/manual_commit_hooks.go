@@ -58,25 +58,25 @@ func hasTTY() bool {
 	return true
 }
 
-// ttyConfirmResult represents the outcome of a TTY confirmation prompt.
-type ttyConfirmResult int
+// ttyResult represents the outcome of a TTY confirmation prompt.
+type ttyResult int
 
 const (
-	ttyConfirmYes    ttyConfirmResult = iota // User confirmed (y/yes/enter with default=yes)
-	ttyConfirmNo                             // User declined (n/no)
-	ttyConfirmAlways                         // User chose "always" (a/always)
+	ttyResultLink       ttyResult = iota // Link: add the checkpoint trailer
+	ttyResultSkip                        // Skip: don't add the trailer
+	ttyResultLinkAlways                  // Link and remember: add trailer + save "always" preference
 )
 
-// askConfirmTTY prompts the user for a yes/no/always confirmation via /dev/tty.
-// This works even when stdin is redirected (e.g., git commit -m).
-// Returns ttyConfirmYes, ttyConfirmNo, or ttyConfirmAlways.
-// If TTY is unavailable, returns ttyConfirmYes when defaultYes is true, ttyConfirmNo otherwise.
+// askConfirmTTY prompts the user via /dev/tty whether to link a commit to session context.
+// This requires a controlling terminal — callers must check hasTTY() first and handle
+// the no-TTY case (agent subprocesses, CI) themselves.
+//
 // header is displayed as the first line (e.g., "Entire: Active Claude Code session").
 // detail lines are displayed indented below the header.
-func askConfirmTTY(header string, details []string, prompt string, defaultYes bool) ttyConfirmResult {
-	defaultResult := ttyConfirmNo
+func askConfirmTTY(header string, details []string, prompt string, defaultYes bool) ttyResult {
+	defaultResult := ttyResultSkip
 	if defaultYes {
-		defaultResult = ttyConfirmYes
+		defaultResult = ttyResultLink
 	}
 
 	// In test mode, don't try to interact with the real TTY — just use the default.
@@ -86,18 +86,11 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 		return defaultResult
 	}
 
-	// Gemini CLI sets GEMINI_CLI=1 when running shell commands (including git commit).
-	// The agent can't respond to TTY prompts, so use the default to avoid hanging.
-	// See: https://geminicli.com/docs/tools/shell/
-	if os.Getenv("GEMINI_CLI") != "" {
-		return defaultResult
-	}
-
-	// Open /dev/tty for both reading and writing
+	// Open /dev/tty for both reading and writing.
 	// This is the controlling terminal, which works even when stdin/stderr are redirected
+	// (e.g., human runs git commit -m where stdin is not a pipe).
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		// Can't open TTY (e.g., running in CI), use default
 		return defaultResult
 	}
 	defer tty.Close()
@@ -126,11 +119,11 @@ func askConfirmTTY(header string, details []string, prompt string, defaultYes bo
 	response = strings.TrimSpace(strings.ToLower(response))
 	switch response {
 	case "y", "yes":
-		return ttyConfirmYes
+		return ttyResultLink
 	case "n", "no":
-		return ttyConfirmNo
+		return ttyResultSkip
 	case "a", "always":
-		return ttyConfirmAlways
+		return ttyResultLinkAlways
 	default:
 		// Empty or invalid input - use default
 		return defaultResult
@@ -419,13 +412,16 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// Add trailer differently based on commit source
 	switch source {
 	case "message":
-		// Using -m or -F: behavior depends on commit_linking setting
-		if commitLinking == settings.CommitLinkingAlways {
-			// Auto-link: add trailer without prompting
+		// Using -m or -F: behavior depends on TTY availability and commit_linking setting
+		switch {
+		case !hasTTY():
+			// No TTY (agent subprocess, CI) — auto-link without prompting
 			message = addCheckpointTrailer(message, checkpointID)
-		} else {
-			// Prompt mode: ask user interactively whether to add trailer
-			// (comments won't be stripped by git in this mode)
+		case commitLinking == settings.CommitLinkingAlways:
+			// User previously chose "always" — auto-link without prompting
+			message = addCheckpointTrailer(message, checkpointID)
+		default:
+			// Human at terminal — prompt interactively
 			header := "Entire: Active " + string(agentType) + " session detected"
 			var details []string
 			if displayPrompt != "" {
@@ -433,16 +429,15 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 			}
 
 			result := askConfirmTTY(header, details, "Link this commit to session context?", true)
-			if result == ttyConfirmNo {
-				// User declined - don't add trailer
+			if result == ttyResultSkip {
 				logging.Debug(logCtx, "prepare-commit-msg: user declined trailer",
 					slog.String("strategy", "manual-commit"),
 					slog.String("source", source),
 				)
 				return nil
 			}
-			if result == ttyConfirmAlways {
-				// User chose "always" - persist to settings.local.json (non-fatal if it fails)
+			if result == ttyResultLinkAlways {
+				// Persist preference so future commits auto-link (non-fatal if it fails)
 				if saveErr := saveCommitLinkingAlways(ctx); saveErr != nil {
 					logging.Warn(logCtx, "prepare-commit-msg: failed to save commit_linking=always",
 						slog.String("error", saveErr.Error()),
