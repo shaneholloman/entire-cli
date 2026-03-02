@@ -248,7 +248,9 @@ func waitForTranscriptFlush(ctx context.Context, transcriptPath string, hookStar
 	const staleThreshold = 2 * time.Minute
 	info, err := os.Stat(transcriptPath)
 	if err != nil {
-		return // file doesn't exist, nothing to wait for
+		// Most likely the file doesn't exist; other errors (permission, etc.)
+		// would also prevent polling, so skip the wait either way.
+		return
 	}
 	fileAge := time.Since(info.ModTime())
 	if fileAge > staleThreshold {
