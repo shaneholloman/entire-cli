@@ -1992,3 +1992,154 @@ func TestPostCommit_EndedSession_SkipsSentinelWait(t *testing.T) {
 	require.NoError(t, err, "entire/checkpoints/v1 branch should exist after condensation")
 	assert.NotNil(t, sessionsRef)
 }
+
+// TestPostCommit_EndedSession_SetsFullyCondensed verifies that an ENDED session
+// is marked FullyCondensed after condensation when no carry-forward files remain.
+func TestPostCommit_EndedSession_SetsFullyCondensed(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-postcommit-ended-fully-condensed"
+
+	// Initialize session and save a checkpoint
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Set phase to ENDED with files touched (the committed file matches shadow branch)
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	now := time.Now()
+	state.Phase = session.PhaseEnded
+	state.EndedAt = &now
+	state.FilesTouched = []string{"test.txt"}
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Create a commit that includes test.txt — this commits the only touched file,
+	// so carry-forward will be empty afterward.
+	commitWithCheckpointTrailer(t, repo, dir, "fc01fc01fc01")
+
+	// Run PostCommit
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Verify FullyCondensed is set
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.True(t, state.FullyCondensed,
+		"ENDED session with no carry-forward should be marked FullyCondensed")
+	assert.Equal(t, session.PhaseEnded, state.Phase)
+	assert.Empty(t, state.FilesTouched,
+		"FilesTouched should be empty after all files were committed")
+}
+
+// TestPostCommit_FullyCondensedEndedSession_SkippedOnNextCommit verifies that
+// a FullyCondensed ENDED session is skipped entirely on subsequent commits,
+// avoiding redundant shadow branch resolution and condensation attempts.
+func TestPostCommit_FullyCondensedEndedSession_SkippedOnNextCommit(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-postcommit-skip-fully-condensed"
+
+	// Initialize session and save a checkpoint
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Set phase to ENDED with files touched
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	now := time.Now()
+	state.Phase = session.PhaseEnded
+	state.EndedAt = &now
+	state.FilesTouched = []string{"test.txt"}
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// First commit — condenses the ENDED session and marks it FullyCondensed
+	commitWithCheckpointTrailer(t, repo, dir, "fc02fc02fc02")
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Verify it's now fully condensed
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.True(t, state.FullyCondensed)
+
+	// Record the LastCheckpointID — this should persist (the reason the session exists)
+	lastCPID := state.LastCheckpointID
+
+	// Second commit — the fully-condensed session should be skipped entirely.
+	// Create a new file so there's something to commit.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("other"), 0o644))
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add("other.txt")
+	require.NoError(t, err)
+	commitMsg := "second commit\n\n" + trailers.CheckpointTrailerKey + ": fc03fc03fc03\n"
+	_, err = wt.Commit(commitMsg, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test",
+			Email: "test@test.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	// Run PostCommit again
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Verify state is unchanged — the session was skipped, not re-processed
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.True(t, state.FullyCondensed,
+		"FullyCondensed should still be true after being skipped")
+	assert.Equal(t, session.PhaseEnded, state.Phase)
+	assert.Equal(t, lastCPID, state.LastCheckpointID,
+		"LastCheckpointID should be preserved across skipped commits")
+}
+
+// TestPostCommit_NonEndedSession_NotMarkedFullyCondensed verifies that ACTIVE
+// and IDLE sessions are never marked FullyCondensed, even when condensed with
+// no carry-forward. Only ENDED sessions get the flag.
+func TestPostCommit_NonEndedSession_NotMarkedFullyCondensed(t *testing.T) {
+	for _, phase := range []session.Phase{session.PhaseActive, session.PhaseIdle} {
+		t.Run(string(phase), func(t *testing.T) {
+			dir := setupGitRepo(t)
+			t.Chdir(dir)
+
+			repo, err := git.PlainOpen(dir)
+			require.NoError(t, err)
+
+			s := &ManualCommitStrategy{}
+			sessionID := "test-postcommit-" + string(phase) + "-not-fully-condensed"
+
+			// Initialize session and save a checkpoint
+			setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+			state, err := s.loadSessionState(context.Background(), sessionID)
+			require.NoError(t, err)
+			state.Phase = phase
+			state.FilesTouched = []string{"test.txt"}
+			require.NoError(t, s.saveSessionState(context.Background(), state))
+
+			// Commit the file
+			commitWithCheckpointTrailer(t, repo, dir, "fc04fc04fc04")
+
+			// Run PostCommit
+			err = s.PostCommit(context.Background())
+			require.NoError(t, err)
+
+			// Verify FullyCondensed is NOT set
+			state, err = s.loadSessionState(context.Background(), sessionID)
+			require.NoError(t, err)
+			assert.False(t, state.FullyCondensed,
+				"%s sessions must never be marked FullyCondensed", phase)
+		})
+	}
+}

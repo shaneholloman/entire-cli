@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -259,13 +259,13 @@ func (env *TestEnv) InitEntireWithOptions(strategyOptions map[string]any) {
 // InitEntireWithAgent initializes an Entire test environment with a specific agent.
 // The agent name is for test documentation only — the CLI resolves the agent from
 // hook commands and checkpoint metadata, not from settings.json.
-func (env *TestEnv) InitEntireWithAgent(_ agent.AgentName) {
+func (env *TestEnv) InitEntireWithAgent(_ types.AgentName) {
 	env.T.Helper()
 	env.initEntireInternal(nil)
 }
 
 // InitEntireWithAgentAndOptions initializes Entire with the specified strategy, agent, and options.
-func (env *TestEnv) InitEntireWithAgentAndOptions(_ agent.AgentName, strategyOptions map[string]any) {
+func (env *TestEnv) InitEntireWithAgentAndOptions(_ types.AgentName, strategyOptions map[string]any) {
 	env.T.Helper()
 	env.initEntireInternal(strategyOptions)
 }

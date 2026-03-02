@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 var (
 	registryMu sync.RWMutex
-	registry   = make(map[AgentName]Factory)
+	registry   = make(map[types.AgentName]Factory)
 )
 
 // Factory creates a new agent instance
@@ -17,7 +19,7 @@ type Factory func() Agent
 
 // Register adds an agent factory to the registry.
 // Called from init() in each agent implementation.
-func Register(name AgentName, factory Factory) {
+func Register(name types.AgentName, factory Factory) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	registry[name] = factory
@@ -26,7 +28,7 @@ func Register(name AgentName, factory Factory) {
 // Get retrieves an agent by name.
 //
 
-func Get(name AgentName) (Agent, error) {
+func Get(name types.AgentName) (Agent, error) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
@@ -38,11 +40,11 @@ func Get(name AgentName) (Agent, error) {
 }
 
 // List returns all registered agent names in sorted order.
-func List() []AgentName {
+func List() []types.AgentName {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 
-	names := make([]AgentName, 0, len(registry))
+	names := make([]types.AgentName, 0, len(registry))
 	for name := range registry {
 		names = append(names, name)
 	}
@@ -92,35 +94,27 @@ func Detect(ctx context.Context) (Agent, error) {
 	return detected[0], nil
 }
 
-// AgentName is the registry key type for agents (e.g., "claude-code", "gemini").
-//
-//nolint:revive // stuttering is intentional - distinguishes from AgentType when both are used
-type AgentName string
-
-// AgentType is the display name type stored in metadata/trailers (e.g., "Claude Code", "Gemini CLI").
-//
-//nolint:revive // stuttering is intentional - distinguishes from AgentName when both are used
-type AgentType string
-
 // Agent name constants (registry keys)
 const (
-	AgentNameClaudeCode AgentName = "claude-code"
-	AgentNameCursor     AgentName = "cursor"
-	AgentNameGemini     AgentName = "gemini"
-	AgentNameOpenCode   AgentName = "opencode"
+	AgentNameClaudeCode     types.AgentName = "claude-code"
+	AgentNameCursor         types.AgentName = "cursor"
+	AgentNameGemini         types.AgentName = "gemini"
+	AgentNameOpenCode       types.AgentName = "opencode"
+	AgentNameFactoryAIDroid types.AgentName = "factoryai-droid"
 )
 
 // Agent type constants (type identifiers stored in metadata/trailers)
 const (
-	AgentTypeClaudeCode AgentType = "Claude Code"
-	AgentTypeCursor     AgentType = "Cursor"
-	AgentTypeGemini     AgentType = "Gemini CLI"
-	AgentTypeOpenCode   AgentType = "OpenCode"
-	AgentTypeUnknown    AgentType = "Agent" // Fallback for backwards compatibility
+	AgentTypeClaudeCode     types.AgentType = "Claude Code"
+	AgentTypeCursor         types.AgentType = "Cursor"
+	AgentTypeGemini         types.AgentType = "Gemini CLI"
+	AgentTypeOpenCode       types.AgentType = "OpenCode"
+	AgentTypeFactoryAIDroid types.AgentType = "Factory AI Droid"
+	AgentTypeUnknown        types.AgentType = "Agent" // Fallback for backwards compatibility
 )
 
 // DefaultAgentName is the registry key for the default agent.
-const DefaultAgentName AgentName = AgentNameClaudeCode
+const DefaultAgentName types.AgentName = AgentNameClaudeCode
 
 // GetByAgentType retrieves an agent by its type identifier.
 //
@@ -132,7 +126,7 @@ const DefaultAgentName AgentName = AgentNameClaudeCode
 //   - Cost is ~400ns worst case vs milliseconds for I/O operations
 //
 // Only optimize if agent count exceeds 100 or profiling shows this as a bottleneck.
-func GetByAgentType(agentType AgentType) (Agent, error) {
+func GetByAgentType(agentType types.AgentType) (Agent, error) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 

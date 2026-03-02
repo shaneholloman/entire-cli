@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
@@ -38,7 +39,7 @@ type CheckpointInfo struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	CheckpointsCount int             `json:"checkpoints_count"`
 	FilesTouched     []string        `json:"files_touched"`
-	Agent            agent.AgentType `json:"agent,omitempty"` // Human-readable agent name (e.g., "Claude Code")
+	Agent            types.AgentType `json:"agent,omitempty"` // Human-readable agent name (e.g., "Claude Code")
 	IsTask           bool            `json:"is_task,omitempty"`
 	ToolUseID        string          `json:"tool_use_id,omitempty"`
 	SessionCount     int             `json:"session_count,omitempty"` // Number of sessions (1 if omitted)

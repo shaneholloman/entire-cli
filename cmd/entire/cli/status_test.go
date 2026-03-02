@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 
 	"github.com/go-git/go-git/v5"
@@ -388,7 +389,7 @@ func TestWriteActiveSessions(t *testing.T) {
 			StartedAt:           now.Add(-2 * time.Hour),
 			LastInteractionTime: &recentInteraction,
 			FirstPrompt:         "Fix auth bug in login flow",
-			AgentType:           agent.AgentType("Claude Code"),
+			AgentType:           types.AgentType("Claude Code"),
 			TokenUsage: &agent.TokenUsage{
 				InputTokens:  800,
 				OutputTokens: 400,
@@ -515,7 +516,7 @@ func TestWriteActiveSessions_ActiveTimeOmittedWhenClose(t *testing.T) {
 		StartedAt:           startedAt,
 		LastInteractionTime: &lastInteraction,
 		FirstPrompt:         "test prompt",
-		AgentType:           agent.AgentType("Claude Code"),
+		AgentType:           types.AgentType("Claude Code"),
 	}
 
 	if err := store.Save(context.Background(), state); err != nil {

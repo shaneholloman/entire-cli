@@ -1,6 +1,10 @@
 package agent
 
-import "time"
+import (
+	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+)
 
 // AgentSession represents a coding session's data.
 // Each agent stores data in its native format (JSONL, SQLite, Markdown, etc.)
@@ -13,7 +17,7 @@ import "time"
 //nolint:revive // AgentSession is clearer than Session in context of the package
 type AgentSession struct {
 	SessionID  string
-	AgentName  AgentName
+	AgentName  types.AgentName
 	RepoPath   string
 	SessionRef string // Path/reference to session in agent's storage
 	StartTime  time.Time

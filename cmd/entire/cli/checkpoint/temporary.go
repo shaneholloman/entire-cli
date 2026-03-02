@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -571,7 +572,7 @@ var errStop = errors.New("stop iteration")
 // commitHash is the commit to read from, metadataDir is the path within the tree.
 // agentType is used for reassembling chunked transcripts in the correct format.
 // Handles both chunked and non-chunked transcripts.
-func (s *GitStore) GetTranscriptFromCommit(ctx context.Context, commitHash plumbing.Hash, metadataDir string, agentType agent.AgentType) ([]byte, error) {
+func (s *GitStore) GetTranscriptFromCommit(ctx context.Context, commitHash plumbing.Hash, metadataDir string, agentType types.AgentType) ([]byte, error) {
 	commit, err := s.repo.CommitObject(commitHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit: %w", err)

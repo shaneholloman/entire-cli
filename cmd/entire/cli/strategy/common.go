@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -69,7 +71,8 @@ func EnsureSetup(ctx context.Context) error {
 
 	// Install generic hooks (they delegate to strategy at runtime)
 	if !IsGitHookInstalled(ctx) {
-		if _, err := InstallGitHook(ctx, true, isLocalDev(ctx)); err != nil {
+		localDev, absoluteHookPath := hookSettingsFromConfig(ctx)
+		if _, err := InstallGitHook(ctx, true, localDev, absoluteHookPath); err != nil {
 			return fmt.Errorf("failed to install git hooks: %w", err)
 		}
 	}
@@ -269,7 +272,7 @@ var (
 
 // resolveAgentType picks the best agent type from the context and existing state.
 // Priority: existing state > context value.
-func resolveAgentType(ctxAgentType agent.AgentType, state *SessionState) agent.AgentType {
+func resolveAgentType(ctxAgentType types.AgentType, state *SessionState) types.AgentType {
 	if state != nil && state.AgentType != "" {
 		return state.AgentType
 	}
@@ -491,7 +494,7 @@ func ReadSessionPromptFromTree(tree *object.Tree, checkpointPath string) string 
 // If metadata.json doesn't exist (shadow branches), it falls back to detecting the agent
 // from the presence of agent-specific config files (.gemini/settings.json or .claude/).
 // Returns agent.AgentTypeUnknown if the agent type cannot be determined.
-func ReadAgentTypeFromTree(tree *object.Tree, checkpointPath string) agent.AgentType {
+func ReadAgentTypeFromTree(tree *object.Tree, checkpointPath string) types.AgentType {
 	// First, try to read from metadata.json (present in condensed/committed checkpoints)
 	metadataPath := checkpointPath + "/" + paths.MetadataFileName
 	if file, err := tree.File(metadataPath); err == nil {
@@ -530,6 +533,48 @@ func isOnlySeparators(s string) bool {
 		}
 	}
 	return true
+}
+
+// ReadLatestSessionPromptFromCommittedTree reads the first prompt from a committed checkpoint's
+// latest session on the metadata branch tree. This navigates the sharded directory layout:
+// <cpID.Path()>/<latestSessionIndex>/prompt.txt
+//
+// This is an O(1) tree lookup that avoids reading the full transcript.
+// sessionCount is the number of sessions in the checkpoint (from CommittedInfo.SessionCount).
+func ReadLatestSessionPromptFromCommittedTree(tree *object.Tree, cpID id.CheckpointID, sessionCount int) string {
+	cpPath := cpID.Path()
+	cpTree, err := tree.Tree(cpPath)
+	if err != nil {
+		return ""
+	}
+
+	// Find the latest session subdirectory.
+	// Sessions use 0-based indexing: 0/, 1/, 2/, etc.
+	latestIndex := sessionCount - 1
+	if latestIndex < 0 {
+		latestIndex = 0
+	}
+	sessionPath := strconv.Itoa(latestIndex)
+	sessionTree, err := cpTree.Tree(sessionPath)
+	if err != nil {
+		// Fall back to session 0 if the computed index doesn't exist
+		sessionTree, err = cpTree.Tree("0")
+		if err != nil {
+			return ""
+		}
+	}
+
+	file, err := sessionTree.File(paths.PromptFileName)
+	if err != nil {
+		return ""
+	}
+
+	content, err := file.Contents()
+	if err != nil {
+		return ""
+	}
+
+	return ExtractFirstPrompt(content)
 }
 
 // ReadAllSessionPromptsFromTree reads the first prompt for all sessions in a multi-session checkpoint.
@@ -955,78 +1000,6 @@ func splitLines(content []byte) []string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-// StageFilesContext describes what type of staging operation this is (for messages).
-type StageFilesContext string
-
-const (
-	// StageForSession is used when staging files for a session checkpoint.
-	StageForSession StageFilesContext = "session"
-	// StageForTask is used when staging files for a task checkpoint.
-	StageForTask StageFilesContext = "task"
-)
-
-// StageFiles stages modified, new, and deleted files to the git worktree.
-//
-// This function handles three categories of file changes:
-//  1. Modified files: existing files that have been changed
-//  2. New files: files that were created during the session
-//  3. Deleted files: files that were removed during the session
-//
-// Error Handling Strategy:
-//   - Individual file staging errors are logged to stderr but don't fail the operation
-//   - This ensures that partial staging succeeds even if some files have issues
-//   - If a modified file no longer exists, it's treated as a deletion
-//
-// The stageCtx parameter is used for user-facing messages to indicate whether
-// this is staging for a session checkpoint or a task checkpoint.
-func StageFiles(worktree *git.Worktree, modified, newFiles, deleted []string, stageCtx StageFilesContext) {
-	// Get worktree root for resolving file paths
-	// This is critical because fileExists() uses os.Stat() which resolves relative to CWD,
-	// but worktree.Add/Remove resolve relative to repo root. If CWD != repo root,
-	// fileExists() could return false for existing files, causing worktree.Remove()
-	// to incorrectly delete them.
-	repoRoot := worktree.Filesystem.Root()
-
-	// Stage modified files
-	for _, file := range modified {
-		// Resolve path relative to repo root for existence check
-		absPath := filepath.Join(repoRoot, file)
-		if fileExists(absPath) {
-			if _, err := worktree.Add(file); err != nil {
-				fmt.Fprintf(os.Stderr, "  Failed to stage %s: %v\n", file, err)
-			} else {
-				fmt.Fprintf(os.Stderr, "  Staged: %s\n", file)
-			}
-		} else {
-			// File was deleted - stage the deletion
-			if _, err := worktree.Remove(file); err != nil {
-				fmt.Fprintf(os.Stderr, "  File not found or deleted: %s\n", file)
-			}
-		}
-	}
-
-	// Stage new files
-	if len(newFiles) > 0 {
-		fmt.Fprintf(os.Stderr, "Staging %d new files created during %s:\n", len(newFiles), stageCtx)
-		for _, file := range newFiles {
-			if _, err := worktree.Add(file); err != nil {
-				fmt.Fprintf(os.Stderr, "  Failed to stage %s: %v\n", file, err)
-			} else {
-				fmt.Fprintf(os.Stderr, "  Staged new file: %s\n", file)
-			}
-		}
-	}
-
-	// Stage deleted files
-	for _, file := range deleted {
-		if _, err := worktree.Remove(file); err != nil {
-			fmt.Fprintf(os.Stderr, "  Failed to stage deleted file %s: %v\n", file, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  Staged deleted file: %s\n", file)
-		}
-	}
 }
 
 // getTaskCheckpointFromTree retrieves a task checkpoint from a commit tree.

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
@@ -32,8 +33,8 @@ func NewOpenCodeAgent() agent.Agent {
 
 // --- Identity ---
 
-func (a *OpenCodeAgent) Name() agent.AgentName   { return agent.AgentNameOpenCode }
-func (a *OpenCodeAgent) Type() agent.AgentType   { return agent.AgentTypeOpenCode }
+func (a *OpenCodeAgent) Name() types.AgentName   { return agent.AgentNameOpenCode }
+func (a *OpenCodeAgent) Type() types.AgentType   { return agent.AgentTypeOpenCode }
 func (a *OpenCodeAgent) Description() string     { return "OpenCode - AI-powered terminal coding agent" }
 func (a *OpenCodeAgent) IsPreview() bool         { return true }
 func (a *OpenCodeAgent) ProtectedDirs() []string { return []string{".opencode"} }

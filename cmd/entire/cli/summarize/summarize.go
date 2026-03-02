@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
@@ -26,7 +28,7 @@ import (
 //   - generator: summary generator to use (if nil, uses default ClaudeGenerator)
 //
 // Returns nil, error if transcript is empty or cannot be parsed.
-func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTouched []string, agentType agent.AgentType, generator Generator) (*checkpoint.Summary, error) {
+func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTouched []string, agentType types.AgentType, generator Generator) (*checkpoint.Summary, error) {
 	if len(transcriptBytes) == 0 {
 		return nil, errors.New("empty transcript")
 	}
@@ -113,10 +115,12 @@ var minimalDetailTools = map[string]bool{
 // BuildCondensedTranscriptFromBytes parses transcript bytes and extracts a condensed view.
 // This is a convenience function that combines parsing and condensing.
 // The agentType parameter determines which parser to use (Claude/OpenCode JSONL vs Gemini JSON).
-func BuildCondensedTranscriptFromBytes(content []byte, agentType agent.AgentType) ([]Entry, error) {
+func BuildCondensedTranscriptFromBytes(content []byte, agentType types.AgentType) ([]Entry, error) {
 	switch agentType {
 	case agent.AgentTypeGemini:
 		return buildCondensedTranscriptFromGemini(content)
+	case agent.AgentTypeFactoryAIDroid:
+		return buildCondensedTranscriptFromDroid(content)
 	case agent.AgentTypeOpenCode:
 		return buildCondensedTranscriptFromOpenCode(content)
 	case agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeUnknown:
@@ -211,6 +215,15 @@ func buildCondensedTranscriptFromOpenCode(content []byte) ([]Entry, error) {
 	}
 
 	return entries, nil
+}
+
+// buildCondensedTranscriptFromDroid parses Droid transcript and extracts a condensed view.
+func buildCondensedTranscriptFromDroid(content []byte) ([]Entry, error) {
+	droidLines, _, err := factoryaidroid.ParseDroidTranscriptFromBytes(content, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse Droid transcript: %w", err)
+	}
+	return BuildCondensedTranscript(droidLines), nil
 }
 
 // extractOpenCodeToolDetail extracts a detail string from an OpenCode tool's input map.

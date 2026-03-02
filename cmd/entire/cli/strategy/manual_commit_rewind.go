@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -724,7 +725,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, point Rewind
 }
 
 // ResolveAgentForRewind resolves the agent from checkpoint metadata.
-func ResolveAgentForRewind(agentType agent.AgentType) (agent.Agent, error) {
+func ResolveAgentForRewind(agentType types.AgentType) (agent.Agent, error) {
 	ag, err := agent.GetByAgentType(agentType)
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent %q: %w", agentType, err)

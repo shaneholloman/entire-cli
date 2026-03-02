@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -26,15 +27,21 @@ const (
 	configDisplayLocal   = ".entire/settings.local.json"
 )
 
+// EnableOptions holds the flags for `entire enable`.
+type EnableOptions struct {
+	LocalDev            bool
+	UseLocalSettings    bool
+	UseProjectSettings  bool
+	ForceHooks          bool
+	SkipPushSessions    bool
+	Telemetry           bool
+	AbsoluteGitHookPath bool
+}
+
 func newEnableCmd() *cobra.Command {
-	var localDev bool
+	var opts EnableOptions
 	var ignoreUntracked bool
-	var useLocalSettings bool
-	var useProjectSettings bool
 	var agentName string
-	var forceHooks bool
-	var skipPushSessions bool
-	var telemetry bool
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -53,7 +60,7 @@ modifying your active branch.`,
 				return NewSilentError(errors.New("not a git repository"))
 			}
 
-			if err := validateSetupFlags(useLocalSettings, useProjectSettings); err != nil {
+			if err := validateSetupFlags(opts.UseLocalSettings, opts.UseProjectSettings); err != nil {
 				return err
 			}
 
@@ -71,7 +78,7 @@ modifying your active branch.`,
 			}
 
 			if agentName != "" {
-				ag, err := agent.Get(agent.AgentName(agentName))
+				ag, err := agent.Get(types.AgentName(agentName))
 				if err != nil {
 					printWrongAgentError(cmd.ErrOrStderr(), agentName)
 					return NewSilentError(errors.New("wrong agent name"))
@@ -79,7 +86,7 @@ modifying your active branch.`,
 				// --agent is a targeted operation: set up this specific agent without
 				// affecting other agents. Unlike the interactive path, it does not
 				// uninstall hooks for other previously-enabled agents.
-				return setupAgentHooksNonInteractive(ctx, cmd.OutOrStdout(), ag, localDev, forceHooks, skipPushSessions, telemetry)
+				return setupAgentHooksNonInteractive(ctx, cmd.OutOrStdout(), ag, opts)
 			}
 			// Detect or prompt for agents
 			agents, err := detectOrSelectAgent(ctx, cmd.OutOrStdout(), nil)
@@ -87,19 +94,21 @@ modifying your active branch.`,
 				return fmt.Errorf("agent selection failed: %w", err)
 			}
 
-			return runEnableInteractive(ctx, cmd.OutOrStdout(), agents, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry)
+			return runEnableInteractive(ctx, cmd.OutOrStdout(), agents, opts)
 		},
 	}
-	cmd.Flags().StringVar(&agentName, "agent", "", "Agent to set up hooks for (e.g., "+strings.Join(agent.StringList(), ", ")+"). Enables non-interactive mode.")
-	cmd.Flags().BoolVar(&localDev, "local-dev", false, "Use go run instead of entire binary for hooks")
+
+	cmd.Flags().BoolVar(&opts.LocalDev, "local-dev", false, "Use go run instead of entire binary for hooks")
 	cmd.Flags().MarkHidden("local-dev") //nolint:errcheck,gosec // flag is defined above
 	cmd.Flags().BoolVar(&ignoreUntracked, "ignore-untracked", false, "Commit all new files without tracking pre-existing untracked files")
 	cmd.Flags().MarkHidden("ignore-untracked") //nolint:errcheck,gosec // flag is defined above
-	cmd.Flags().BoolVar(&useLocalSettings, "local", false, "Write settings to .entire/settings.local.json instead of .entire/settings.json")
-	cmd.Flags().BoolVar(&useProjectSettings, "project", false, "Write settings to .entire/settings.json even if it already exists")
-	cmd.Flags().BoolVarP(&forceHooks, "force", "f", false, "Force reinstall hooks (removes existing Entire hooks first)")
-	cmd.Flags().BoolVar(&skipPushSessions, "skip-push-sessions", false, "Disable automatic pushing of session logs on git push")
-	cmd.Flags().BoolVar(&telemetry, "telemetry", true, "Enable anonymous usage analytics")
+	cmd.Flags().BoolVar(&opts.UseLocalSettings, "local", false, "Write settings to .entire/settings.local.json instead of .entire/settings.json")
+	cmd.Flags().BoolVar(&opts.UseProjectSettings, "project", false, "Write settings to .entire/settings.json even if it already exists")
+	cmd.Flags().StringVar(&agentName, "agent", "", "Agent to set up hooks for (e.g., "+strings.Join(agent.StringList(), ", ")+"). Enables non-interactive mode.")
+	cmd.Flags().BoolVarP(&opts.ForceHooks, "force", "f", false, "Force reinstall hooks (removes existing Entire hooks first)")
+	cmd.Flags().BoolVar(&opts.SkipPushSessions, "skip-push-sessions", false, "Disable automatic pushing of session logs on git push")
+	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
+	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
 
 	// Provide a helpful error when --agent is used without a value
 	defaultFlagErr := cmd.FlagErrorFunc()
@@ -155,7 +164,7 @@ To completely remove Entire integrations from this repository, use --uninstall:
 
 // runEnableInteractive runs the interactive enable flow.
 // agents must be provided by the caller (via detectOrSelectAgent).
-func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent, localDev, useLocalSettings, useProjectSettings, forceHooks, skipPushSessions, telemetry bool) error {
+func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent, opts EnableOptions) error {
 	// Uninstall hooks for agents that were previously active but are no longer selected
 	if err := uninstallDeselectedAgentHooks(ctx, w, agents); err != nil {
 		return fmt.Errorf("failed to clean up deselected agents: %w", err)
@@ -163,7 +172,7 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 
 	// Setup agent hooks for all selected agents
 	for _, ag := range agents {
-		if _, err := setupAgentHooks(ctx, ag, localDev, forceHooks); err != nil {
+		if _, err := setupAgentHooks(ctx, ag, opts.LocalDev, opts.ForceHooks); err != nil {
 			return fmt.Errorf("failed to setup %s hooks: %w", ag.Type(), err)
 		}
 	}
@@ -180,11 +189,16 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 		settings = &EntireSettings{}
 	}
 	// Update the specific fields
-	settings.LocalDev = localDev
 	settings.Enabled = true
+	if opts.LocalDev {
+		settings.LocalDev = true
+	}
+	if opts.AbsoluteGitHookPath {
+		settings.AbsoluteGitHookPath = true
+	}
 
 	// Set push_sessions option if --skip-push-sessions flag was provided
-	if skipPushSessions {
+	if opts.SkipPushSessions {
 		if settings.StrategyOptions == nil {
 			settings.StrategyOptions = make(map[string]interface{})
 		}
@@ -197,7 +211,7 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 	if err != nil {
 		entireDirAbs = paths.EntireDir // Fallback to relative
 	}
-	shouldUseLocal, showNotification := determineSettingsTarget(entireDirAbs, useLocalSettings, useProjectSettings)
+	shouldUseLocal, showNotification := determineSettingsTarget(entireDirAbs, opts.UseLocalSettings, opts.UseProjectSettings)
 
 	if showNotification {
 		fmt.Fprintln(w, "Info: Project settings exist. Saving to settings.local.json instead.")
@@ -215,10 +229,12 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
-	if _, err := strategy.InstallGitHook(ctx, true, localDev); err != nil {
+	// Use settings values (merged from existing config + flags) for hook installation
+	// This ensures re-running `entire enable` without flags preserves existing settings
+	if _, err := strategy.InstallGitHook(ctx, true, settings.LocalDev, settings.AbsoluteGitHookPath); err != nil {
 		return fmt.Errorf("failed to install git hooks: %w", err)
 	}
-	strategy.CheckAndWarnHookManagers(ctx, w, localDev)
+	strategy.CheckAndWarnHookManagers(ctx, w, settings.LocalDev, settings.AbsoluteGitHookPath)
 	fmt.Fprintln(w, "✓ Hooks installed")
 
 	configDisplay := configDisplayProject
@@ -229,7 +245,7 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 
 	// Ask about telemetry consent (only if not already asked)
 	fmt.Fprintln(w)
-	if err := promptTelemetryConsent(settings, telemetry); err != nil {
+	if err := promptTelemetryConsent(settings, opts.Telemetry); err != nil {
 		return fmt.Errorf("telemetry consent: %w", err)
 	}
 	// Save again to persist telemetry choice
@@ -314,7 +330,7 @@ func uninstallDeselectedAgentHooks(ctx context.Context, w io.Writer, selectedAge
 		return nil
 	}
 
-	selectedSet := make(map[agent.AgentName]struct{}, len(selectedAgents))
+	selectedSet := make(map[types.AgentName]struct{}, len(selectedAgents))
 	for _, ag := range selectedAgents {
 		selectedSet[ag.Name()] = struct{}{}
 	}
@@ -429,7 +445,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	// Build pre-selection set.
 	// On re-run: only pre-select agents with hooks installed (respect prior deselection).
 	// On first run: pre-select all detected agents.
-	preSelectedSet := make(map[agent.AgentName]struct{})
+	preSelectedSet := make(map[types.AgentName]struct{})
 	if hasInstalledHooks {
 		for _, name := range installedAgentNames {
 			preSelectedSet[name] = struct{}{}
@@ -502,7 +518,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 
 	selectedAgents := make([]agent.Agent, 0, len(selectedAgentNames))
 	for _, name := range selectedAgentNames {
-		selectedAgent, err := agent.Get(agent.AgentName(name))
+		selectedAgent, err := agent.Get(types.AgentName(name))
 		if err != nil {
 			return nil, fmt.Errorf("failed to get selected agent %s: %w", name, err)
 		}
@@ -562,7 +578,7 @@ func printWrongAgentError(w io.Writer, name string) {
 
 // setupAgentHooksNonInteractive sets up hooks for a specific agent non-interactively.
 // If strategyName is provided, it sets the strategy; otherwise uses default.
-func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Agent, localDev, forceHooks, skipPushSessions, telemetry bool) error {
+func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Agent, opts EnableOptions) error {
 	agentName := ag.Name()
 	// Check if agent supports hooks
 	hookAgent, ok := ag.(agent.HookSupport)
@@ -573,7 +589,7 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	fmt.Fprintf(w, "Agent: %s\n\n", ag.Type())
 
 	// Install agent hooks (agent hooks don't depend on settings)
-	installedHooks, err := hookAgent.InstallHooks(ctx, localDev, forceHooks)
+	installedHooks, err := hookAgent.InstallHooks(ctx, opts.LocalDev, opts.ForceHooks)
 	if err != nil {
 		return fmt.Errorf("failed to install hooks for %s: %w", agentName, err)
 	}
@@ -590,12 +606,15 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 		settings = &EntireSettings{}
 	}
 	settings.Enabled = true
-	if localDev {
-		settings.LocalDev = localDev
+	if opts.LocalDev {
+		settings.LocalDev = true
+	}
+	if opts.AbsoluteGitHookPath {
+		settings.AbsoluteGitHookPath = true
 	}
 
 	// Set push_sessions option if --skip-push-sessions flag was provided
-	if skipPushSessions {
+	if opts.SkipPushSessions {
 		if settings.StrategyOptions == nil {
 			settings.StrategyOptions = make(map[string]interface{})
 		}
@@ -604,7 +623,7 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 
 	// Handle telemetry for non-interactive mode
 	// Note: if telemetry is nil (not configured), it defaults to disabled
-	if !telemetry || os.Getenv("ENTIRE_TELEMETRY_OPTOUT") != "" {
+	if !opts.Telemetry || os.Getenv("ENTIRE_TELEMETRY_OPTOUT") != "" {
 		f := false
 		settings.Telemetry = &f
 	}
@@ -613,10 +632,12 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 		return fmt.Errorf("failed to save settings: %w", err)
 	}
 
-	if _, err := strategy.InstallGitHook(ctx, true, localDev); err != nil {
+	// Use settings values (merged from existing config + flags) for hook installation
+	// This ensures re-running `entire enable --agent X` without flags preserves existing settings
+	if _, err := strategy.InstallGitHook(ctx, true, settings.LocalDev, settings.AbsoluteGitHookPath); err != nil {
 		return fmt.Errorf("failed to install git hooks: %w", err)
 	}
-	strategy.CheckAndWarnHookManagers(ctx, w, localDev)
+	strategy.CheckAndWarnHookManagers(ctx, w, settings.LocalDev, settings.AbsoluteGitHookPath)
 
 	if installedHooks == 0 {
 		msg := fmt.Sprintf("Hooks for %s already installed", ag.Description())
@@ -710,10 +731,11 @@ func setupEntireDirectory(ctx context.Context) (bool, error) { //nolint:unparam 
 func setupGitHook(ctx context.Context) error {
 	s, err := settings.Load(ctx)
 	localDev := err == nil && s.LocalDev
-	if _, err := strategy.InstallGitHook(ctx, false, localDev); err != nil {
+	absoluteHookPath := err == nil && s.AbsoluteGitHookPath
+	if _, err := strategy.InstallGitHook(ctx, false, localDev, absoluteHookPath); err != nil {
 		return fmt.Errorf("failed to install git hook: %w", err)
 	}
-	strategy.CheckAndWarnHookManagers(ctx, os.Stderr, localDev)
+	strategy.CheckAndWarnHookManagers(ctx, os.Stderr, localDev, absoluteHookPath)
 	return nil
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -26,7 +27,7 @@ var agentHookLogCleanup func()
 // currentHookAgentName stores the agent name for the currently executing hook.
 // Set by newAgentHookVerbCmdWithLogging before calling the handler.
 // This allows handlers to know which agent invoked the hook without guessing.
-var currentHookAgentName agent.AgentName
+var currentHookAgentName types.AgentName
 
 // GetCurrentHookAgent returns the agent for the currently executing hook.
 // Returns the agent based on the hook command structure (e.g., "entire hooks claude-code ...")
@@ -46,7 +47,7 @@ func GetCurrentHookAgent() (agent.Agent, error) {
 
 // newAgentHooksCmd creates a hooks subcommand for an agent that implements HookSupport.
 // It dynamically creates subcommands for each hook the agent supports.
-func newAgentHooksCmd(agentName agent.AgentName, handler agent.HookSupport) *cobra.Command {
+func newAgentHooksCmd(agentName types.AgentName, handler agent.HookSupport) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    string(agentName),
 		Short:  handler.Description() + " hook handlers",
@@ -88,7 +89,7 @@ func getHookType(hookName string) string {
 // newAgentHookVerbCmdWithLogging creates a command for a specific hook verb with structured logging.
 // It uses the lifecycle dispatcher (ParseHookEvent → DispatchLifecycleEvent) as the primary path.
 // PostTodo is handled directly as it's Claude-specific and not part of the lifecycle dispatcher.
-func newAgentHookVerbCmdWithLogging(agentName agent.AgentName, hookName string) *cobra.Command {
+func newAgentHookVerbCmdWithLogging(agentName types.AgentName, hookName string) *cobra.Command {
 	return &cobra.Command{
 		Use:    hookName,
 		Hidden: true,

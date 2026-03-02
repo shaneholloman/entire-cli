@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -31,7 +32,7 @@ import (
 const unknownSessionID = "unknown"
 
 // getAgent returns an agent by type, falling back to the default agent for empty types.
-func getAgent(agentType agentpkg.AgentType) (agentpkg.Agent, error) {
+func getAgent(agentType types.AgentType) (agentpkg.Agent, error) {
 	ag, err := strategy.ResolveAgentForRewind(agentType)
 	if err != nil {
 		return nil, fmt.Errorf("resolving agent: %w", err)

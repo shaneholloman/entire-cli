@@ -22,7 +22,20 @@ var (
 	_ agent.TranscriptPreparer     = (*ClaudeCodeAgent)(nil)
 	_ agent.TokenCalculator        = (*ClaudeCodeAgent)(nil)
 	_ agent.SubagentAwareExtractor = (*ClaudeCodeAgent)(nil)
+	_ agent.HookResponseWriter     = (*ClaudeCodeAgent)(nil)
 )
+
+// WriteHookResponse outputs a JSON hook response to stdout.
+// Claude Code reads this JSON and displays the systemMessage to the user.
+func (c *ClaudeCodeAgent) WriteHookResponse(message string) error {
+	resp := struct {
+		SystemMessage string `json:"systemMessage,omitempty"`
+	}{SystemMessage: message}
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		return fmt.Errorf("failed to encode hook response: %w", err)
+	}
+	return nil
+}
 
 // HookNames returns the hook verbs Claude Code supports.
 // These become subcommands: entire hooks claude-code <verb>
@@ -239,6 +252,27 @@ func waitForTranscriptFlush(ctx context.Context, transcriptPath string, hookStar
 	)
 
 	logCtx := logging.WithComponent(ctx, "agent.claudecode")
+
+	// Fast path: skip the poll loop when the sentinel can't possibly appear.
+	// - File doesn't exist: nothing to poll.
+	// - File is stale (unmodified for 2+ min): agent isn't running anymore.
+	//   This avoids 3s timeouts per stale "active" session (e.g., agent crashed
+	//   without firing stop hook).
+	const staleThreshold = 2 * time.Minute
+	info, err := os.Stat(transcriptPath)
+	if err != nil {
+		// Most likely the file doesn't exist; other errors (permission, etc.)
+		// would also prevent polling, so skip the wait either way.
+		return
+	}
+	fileAge := time.Since(info.ModTime())
+	if fileAge > staleThreshold {
+		logging.Debug(logCtx, "transcript file is stale, skipping sentinel wait",
+			slog.Duration("file_age", fileAge),
+		)
+		return
+	}
+
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		if checkStopSentinel(transcriptPath, tailBytes, hookStartTime, maxSkew) {

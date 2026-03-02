@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -233,7 +234,7 @@ type SessionOpts struct {
 	TranscriptPath string
 
 	// AgentType is the agent type. Defaults to agent.AgentTypeClaudeCode.
-	AgentType agent.AgentType
+	AgentType types.AgentType
 }
 
 // CreateSessionState writes a session state file to .git/entire-sessions/.

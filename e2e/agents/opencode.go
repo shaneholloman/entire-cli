@@ -44,6 +44,7 @@ func (a *openCodeAgent) IsTransientError(out Output, _ error) bool {
 		"ECONNRESET",
 		"ETIMEDOUT",
 		"Token refresh failed",
+		"database is locked",
 	}
 	for _, p := range transientPatterns {
 		if strings.Contains(out.Stderr, p) {

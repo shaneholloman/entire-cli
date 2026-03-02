@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 func TestChunkJSONL_SmallContent(t *testing.T) {
@@ -198,7 +200,7 @@ func TestDetectAgentTypeFromContent(t *testing.T) {
 	tests := []struct {
 		name     string
 		content  []byte
-		expected AgentType
+		expected types.AgentType
 	}{
 		{
 			name:     "Gemini JSON",

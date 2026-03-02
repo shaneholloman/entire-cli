@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 // trailTitlePromptTemplate is the prompt used to generate trail titles and descriptions.
@@ -42,7 +43,7 @@ type TrailTitleResult struct {
 
 // GenerateTrailTitle generates a title and description for a trail using the agent's
 // text generation capability. Returns (nil, nil) if the agent doesn't support text generation.
-func GenerateTrailTitle(ctx context.Context, transcriptBytes []byte, filesTouched []string, agentType agent.AgentType) (*TrailTitleResult, error) {
+func GenerateTrailTitle(ctx context.Context, transcriptBytes []byte, filesTouched []string, agentType types.AgentType) (*TrailTitleResult, error) {
 	// Get the active agent and check if it implements TextGenerator
 	ag, err := agent.GetByAgentType(agentType)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -83,7 +84,8 @@ type State struct {
 	//   - Cleared when session is reset (ResetSession deletes the state file entirely)
 	TurnCheckpointIDs []string `json:"turn_checkpoint_ids,omitempty"`
 
-	// LastInteractionTime is updated on every hook invocation.
+	// LastInteractionTime is updated on agent-interaction events (TurnStart,
+	// TurnEnd, SessionStop, Compaction) but NOT on git commit hooks.
 	// Used for stale session detection in "entire doctor".
 	LastInteractionTime *time.Time `json:"last_interaction_time,omitempty"`
 
@@ -113,8 +115,15 @@ type State struct {
 	// sessions that have been condensed at least once. Cleared on new prompt.
 	LastCheckpointID id.CheckpointID `json:"last_checkpoint_id,omitempty"`
 
+	// FullyCondensed indicates this session has been condensed and has no remaining
+	// carry-forward files. PostCommit skips fully-condensed sessions entirely.
+	// Set after successful condensation when no files remain for carry-forward
+	// and the session phase is ENDED. Cleared on session reactivation (ENDED →
+	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
+	FullyCondensed bool `json:"fully_condensed,omitempty"`
+
 	// AgentType identifies the agent that created this session (e.g., "Claude Code", "Gemini CLI", "Cursor")
-	AgentType agent.AgentType `json:"agent_type,omitempty"`
+	AgentType types.AgentType `json:"agent_type,omitempty"`
 
 	// Token usage tracking (accumulated across all checkpoints in this session)
 	TokenUsage *agent.TokenUsage `json:"token_usage,omitempty"`

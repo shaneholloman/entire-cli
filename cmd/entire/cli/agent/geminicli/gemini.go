@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
@@ -33,12 +34,12 @@ func NewGeminiCLIAgent() agent.Agent {
 }
 
 // Name returns the agent registry key.
-func (g *GeminiCLIAgent) Name() agent.AgentName {
+func (g *GeminiCLIAgent) Name() types.AgentName {
 	return agent.AgentNameGemini
 }
 
 // Type returns the agent type identifier.
-func (g *GeminiCLIAgent) Type() agent.AgentType {
+func (g *GeminiCLIAgent) Type() types.AgentType {
 	return agent.AgentTypeGemini
 }
 

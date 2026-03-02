@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
 
@@ -31,12 +32,12 @@ func NewCursorAgent() agent.Agent {
 }
 
 // Name returns the agent registry key.
-func (c *CursorAgent) Name() agent.AgentName {
+func (c *CursorAgent) Name() types.AgentName {
 	return agent.AgentNameCursor
 }
 
 // Type returns the agent type identifier.
-func (c *CursorAgent) Type() agent.AgentType {
+func (c *CursorAgent) Type() types.AgentType {
 	return agent.AgentTypeCursor
 }
 

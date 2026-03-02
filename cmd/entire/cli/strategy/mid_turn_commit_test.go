@@ -84,8 +84,10 @@ func TestSessionHasNewContentFromLiveTranscript_NormalizesAbsolutePaths(t *testi
 	require.NoError(t, s.saveSessionState(context.Background(), state))
 
 	// Call sessionHasNewContent — should fall through to live transcript check
-	// since there's no shadow branch
-	hasNew, err := s.sessionHasNewContent(context.Background(), repo, state)
+	// since there's no shadow branch. Pass staged files via contentCheckOpts.
+	stagedFiles, err := getStagedFiles(context.Background())
+	require.NoError(t, err)
+	hasNew, err := s.sessionHasNewContent(context.Background(), repo, state, contentCheckOpts{stagedFiles: stagedFiles})
 	require.NoError(t, err)
 	assert.True(t, hasNew,
 		"sessionHasNewContent should return true when transcript has absolute paths "+
@@ -174,8 +176,11 @@ func TestSessionHasNewContentFromLiveTranscript_IncludesSubagentFiles(t *testing
 	require.NoError(t, s.saveSessionState(context.Background(), state))
 
 	// Call sessionHasNewContent — should fall through to live transcript check
-	// since there's no shadow branch, and should detect subagent file modifications
-	hasNew, err := s.sessionHasNewContent(context.Background(), repo, state)
+	// since there's no shadow branch, and should detect subagent file modifications.
+	// Pass staged files via contentCheckOpts.
+	stagedFiles, err := getStagedFiles(context.Background())
+	require.NoError(t, err)
+	hasNew, err := s.sessionHasNewContent(context.Background(), repo, state, contentCheckOpts{stagedFiles: stagedFiles})
 	require.NoError(t, err)
 	assert.True(t, hasNew,
 		"sessionHasNewContent should return true when subagent transcript "+

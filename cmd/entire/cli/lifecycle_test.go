@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/go-git/go-git/v5"
@@ -18,16 +19,16 @@ import (
 
 // mockLifecycleAgent is a minimal Agent implementation for lifecycle tests.
 type mockLifecycleAgent struct {
-	name           agent.AgentName
-	agentType      agent.AgentType
+	name           types.AgentName
+	agentType      types.AgentType
 	transcriptData []byte
 	transcriptErr  error
 }
 
 var _ agent.Agent = (*mockLifecycleAgent)(nil)
 
-func (m *mockLifecycleAgent) Name() agent.AgentName                          { return m.name }
-func (m *mockLifecycleAgent) Type() agent.AgentType                          { return m.agentType }
+func (m *mockLifecycleAgent) Name() types.AgentName                          { return m.name }
+func (m *mockLifecycleAgent) Type() types.AgentType                          { return m.agentType }
 func (m *mockLifecycleAgent) Description() string                            { return "Mock agent for lifecycle tests" }
 func (m *mockLifecycleAgent) IsPreview() bool                                { return false }
 func (m *mockLifecycleAgent) DetectPresence(_ context.Context) (bool, error) { return false, nil }

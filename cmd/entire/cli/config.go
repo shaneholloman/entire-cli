@@ -6,11 +6,13 @@ import (
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
-	// Import claudecode to register the agent
+	// Import agents to register them
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 )
 
 // Package-level aliases to avoid shadowing the settings package with local variables named "settings".
@@ -77,8 +79,8 @@ func GetLogLevel() string {
 }
 
 // GetAgentsWithHooksInstalled returns names of agents that have hooks installed.
-func GetAgentsWithHooksInstalled(ctx context.Context) []agent.AgentName {
-	var installed []agent.AgentName
+func GetAgentsWithHooksInstalled(ctx context.Context) []types.AgentName {
+	var installed []types.AgentName
 	for _, name := range agent.List() {
 		ag, err := agent.Get(name)
 		if err != nil {
@@ -92,7 +94,7 @@ func GetAgentsWithHooksInstalled(ctx context.Context) []agent.AgentName {
 }
 
 // JoinAgentNames joins agent names into a comma-separated string.
-func JoinAgentNames(names []agent.AgentName) string {
+func JoinAgentNames(names []types.AgentName) string {
 	strs := make([]string, len(names))
 	for i, n := range names {
 		strs[i] = string(n)

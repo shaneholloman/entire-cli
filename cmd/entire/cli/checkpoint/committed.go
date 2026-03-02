@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -812,7 +813,7 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 	result := &SessionContent{}
 
 	// Read session-specific metadata
-	var agentType agent.AgentType
+	var agentType types.AgentType
 	if metadataFile, fileErr := sessionTree.File(paths.MetadataFileName); fileErr == nil {
 		if content, contentErr := metadataFile.Contents(); contentErr == nil {
 			if jsonErr := json.Unmarshal([]byte(content), &result.Metadata); jsonErr == nil {
@@ -1255,7 +1256,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 // replaceTranscript writes the full transcript content, replacing any existing transcript.
 // Also removes any chunk files from a previous write and updates the content hash.
-func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, agentType agent.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
+func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
 	// Remove existing transcript files (base + any chunks)
 	transcriptBase := sessionPath + paths.TranscriptFileName
 	for key := range entries {
@@ -1528,7 +1529,7 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 // readTranscriptFromTree reads a transcript from a git tree, handling both chunked and non-chunked formats.
 // It checks for chunk files first (.001, .002, etc.), then falls back to the base file.
 // The agentType is used for reassembling chunks in the correct format.
-func readTranscriptFromTree(ctx context.Context, tree *object.Tree, agentType agent.AgentType) ([]byte, error) {
+func readTranscriptFromTree(ctx context.Context, tree *object.Tree, agentType types.AgentType) ([]byte, error) {
 	// Collect all transcript-related files
 	var chunkFiles []string
 	var hasBaseFile bool

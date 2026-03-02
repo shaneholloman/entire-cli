@@ -49,6 +49,11 @@ type EntireSettings struct {
 	// StrategyOptions contains strategy-specific configuration
 	StrategyOptions map[string]any `json:"strategy_options,omitempty"`
 
+	// AbsoluteGitHookPath embeds the full binary path in git hooks instead of
+	// bare "entire". This is needed for GUI git clients (Xcode, Tower, etc.)
+	// that don't source shell profiles and can't find "entire" on PATH.
+	AbsoluteGitHookPath bool `json:"absolute_git_hook_path,omitempty"`
+
 	// Telemetry controls anonymous usage analytics.
 	// nil = not asked yet (show prompt), true = opted in, false = opted out
 	Telemetry *bool `json:"telemetry,omitempty"`
@@ -179,6 +184,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 			return fmt.Errorf("parsing local_dev field: %w", err)
 		}
 		settings.LocalDev = ld
+	}
+
+	// Override absolute_git_hook_path if present
+	if ahpRaw, ok := raw["absolute_git_hook_path"]; ok {
+		var ahp bool
+		if err := json.Unmarshal(ahpRaw, &ahp); err != nil {
+			return fmt.Errorf("parsing absolute_git_hook_path field: %w", err)
+		}
+		settings.AbsoluteGitHookPath = ahp
 	}
 
 	// Override log_level if present and non-empty

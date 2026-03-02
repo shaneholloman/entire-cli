@@ -4,17 +4,19 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 func TestRegistryOperations(t *testing.T) {
 	// Save original registry state and restore after test
-	originalRegistry := make(map[AgentName]Factory)
+	originalRegistry := make(map[types.AgentName]Factory)
 	registryMu.Lock()
 	for k, v := range registry {
 		originalRegistry[k] = v
 	}
 	// Clear registry for testing
-	registry = make(map[AgentName]Factory)
+	registry = make(map[types.AgentName]Factory)
 	registryMu.Unlock()
 
 	defer func() {
@@ -24,11 +26,11 @@ func TestRegistryOperations(t *testing.T) {
 	}()
 
 	t.Run("Register and Get", func(t *testing.T) {
-		Register(AgentName("test-agent"), func() Agent {
+		Register(types.AgentName("test-agent"), func() Agent {
 			return &mockAgent{}
 		})
 
-		agent, err := Get(AgentName("test-agent"))
+		agent, err := Get(types.AgentName("test-agent"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -38,7 +40,7 @@ func TestRegistryOperations(t *testing.T) {
 	})
 
 	t.Run("Get unknown agent returns error", func(t *testing.T) {
-		_, err := Get(AgentName("nonexistent-agent"))
+		_, err := Get(types.AgentName("nonexistent-agent"))
 		if err == nil {
 			t.Error("expected error for unknown agent")
 		}
@@ -50,18 +52,18 @@ func TestRegistryOperations(t *testing.T) {
 	t.Run("List returns registered agents", func(t *testing.T) {
 		// Clear and register fresh
 		registryMu.Lock()
-		registry = make(map[AgentName]Factory)
+		registry = make(map[types.AgentName]Factory)
 		registryMu.Unlock()
 
-		Register(AgentName("agent-b"), func() Agent { return &mockAgent{} })
-		Register(AgentName("agent-a"), func() Agent { return &mockAgent{} })
+		Register(types.AgentName("agent-b"), func() Agent { return &mockAgent{} })
+		Register(types.AgentName("agent-a"), func() Agent { return &mockAgent{} })
 
 		names := List()
 		if len(names) != 2 {
 			t.Errorf("expected 2 agents, got %d", len(names))
 		}
 		// List should return sorted
-		if names[0] != AgentName("agent-a") || names[1] != AgentName("agent-b") {
+		if names[0] != types.AgentName("agent-a") || names[1] != types.AgentName("agent-b") {
 			t.Errorf("expected sorted list [agent-a, agent-b], got %v", names)
 		}
 	})
@@ -69,12 +71,12 @@ func TestRegistryOperations(t *testing.T) {
 
 func TestDetect(t *testing.T) {
 	// Save original registry state
-	originalRegistry := make(map[AgentName]Factory)
+	originalRegistry := make(map[types.AgentName]Factory)
 	registryMu.Lock()
 	for k, v := range registry {
 		originalRegistry[k] = v
 	}
-	registry = make(map[AgentName]Factory)
+	registry = make(map[types.AgentName]Factory)
 	registryMu.Unlock()
 
 	defer func() {
@@ -85,7 +87,7 @@ func TestDetect(t *testing.T) {
 
 	t.Run("returns error when no agents detected", func(t *testing.T) {
 		// Register an agent that won't be detected
-		Register(AgentName("undetected"), func() Agent {
+		Register(types.AgentName("undetected"), func() Agent {
 			return &mockAgent{} // DetectPresence returns false
 		})
 
@@ -101,11 +103,11 @@ func TestDetect(t *testing.T) {
 	t.Run("returns detected agent", func(t *testing.T) {
 		// Clear registry
 		registryMu.Lock()
-		registry = make(map[AgentName]Factory)
+		registry = make(map[types.AgentName]Factory)
 		registryMu.Unlock()
 
 		// Register an agent that will be detected
-		Register(AgentName("detected"), func() Agent {
+		Register(types.AgentName("detected"), func() Agent {
 			return &detectableAgent{}
 		})
 
@@ -113,7 +115,7 @@ func TestDetect(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if agent.Name() != AgentName("detectable") {
+		if agent.Name() != types.AgentName("detectable") {
 			t.Errorf("expected Name() %q, got %q", "detectable", agent.Name())
 		}
 	})
@@ -124,8 +126,8 @@ type detectableAgent struct {
 	mockAgent
 }
 
-func (d *detectableAgent) Name() AgentName {
-	return AgentName("detectable")
+func (d *detectableAgent) Name() types.AgentName {
+	return types.AgentName("detectable")
 }
 
 func (d *detectableAgent) DetectPresence(_ context.Context) (bool, error) {
@@ -150,12 +152,12 @@ func TestDefaultAgentName(t *testing.T) {
 func TestDefault(t *testing.T) {
 	// Default() returns nil if default agent is not registered
 	// This test verifies the function doesn't panic
-	originalRegistry := make(map[AgentName]Factory)
+	originalRegistry := make(map[types.AgentName]Factory)
 	registryMu.Lock()
 	for k, v := range registry {
 		originalRegistry[k] = v
 	}
-	registry = make(map[AgentName]Factory)
+	registry = make(map[types.AgentName]Factory)
 	registryMu.Unlock()
 
 	defer func() {
@@ -182,12 +184,12 @@ func TestDefault(t *testing.T) {
 
 func TestAllProtectedDirs(t *testing.T) {
 	// Save original registry state
-	originalRegistry := make(map[AgentName]Factory)
+	originalRegistry := make(map[types.AgentName]Factory)
 	registryMu.Lock()
 	for k, v := range registry {
 		originalRegistry[k] = v
 	}
-	registry = make(map[AgentName]Factory)
+	registry = make(map[types.AgentName]Factory)
 	registryMu.Unlock()
 
 	defer func() {
@@ -205,13 +207,13 @@ func TestAllProtectedDirs(t *testing.T) {
 
 	t.Run("collects dirs from registered agents", func(t *testing.T) {
 		registryMu.Lock()
-		registry = make(map[AgentName]Factory)
+		registry = make(map[types.AgentName]Factory)
 		registryMu.Unlock()
 
-		Register(AgentName("agent-a"), func() Agent {
+		Register(types.AgentName("agent-a"), func() Agent {
 			return &protectedDirAgent{dirs: []string{".agent-a"}}
 		})
-		Register(AgentName("agent-b"), func() Agent {
+		Register(types.AgentName("agent-b"), func() Agent {
 			return &protectedDirAgent{dirs: []string{".agent-b", ".shared"}}
 		})
 
@@ -230,13 +232,13 @@ func TestAllProtectedDirs(t *testing.T) {
 
 	t.Run("deduplicates across agents", func(t *testing.T) {
 		registryMu.Lock()
-		registry = make(map[AgentName]Factory)
+		registry = make(map[types.AgentName]Factory)
 		registryMu.Unlock()
 
-		Register(AgentName("agent-x"), func() Agent {
+		Register(types.AgentName("agent-x"), func() Agent {
 			return &protectedDirAgent{dirs: []string{".shared"}}
 		})
-		Register(AgentName("agent-y"), func() Agent {
+		Register(types.AgentName("agent-y"), func() Agent {
 			return &protectedDirAgent{dirs: []string{".shared"}}
 		})
 

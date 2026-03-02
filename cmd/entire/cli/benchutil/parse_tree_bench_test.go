@@ -1,4 +1,4 @@
-package checkpoint_test
+package benchutil
 
 import (
 	"fmt"

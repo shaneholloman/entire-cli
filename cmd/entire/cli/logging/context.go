@@ -3,7 +3,7 @@ package logging
 import (
 	"context"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
 // Context keys for logging values.
@@ -49,7 +49,7 @@ func WithComponent(ctx context.Context, component string) context.Context {
 
 // WithAgent adds an agent name to the context.
 // Agent names identify the AI agent generating activity (e.g., "claude-code", "cursor", "aider").
-func WithAgent(ctx context.Context, agentName agent.AgentName) context.Context {
+func WithAgent(ctx context.Context, agentName types.AgentName) context.Context {
 	return context.WithValue(ctx, agentKey, string(agentName))
 }
 

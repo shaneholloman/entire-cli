@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.8] - 2026-02-27
+
+### Added
+
+- Full checkpoint support for Cursor agent in IDE and CLI. Note: resume and rewind are missing for now ([#392](https://github.com/entireio/cli/pull/392), [#493](https://github.com/entireio/cli/pull/493), [#525](https://github.com/entireio/cli/pull/525), [#527](https://github.com/entireio/cli/pull/527))
+- Consolidated E2E test suite moved into `e2e/` with per-agent filtering, transient error retry, preflight checks, and test report generation ([#474](https://github.com/entireio/cli/pull/474), [#508](https://github.com/entireio/cli/pull/508), [#539](https://github.com/entireio/cli/pull/539))
+- Agent integration Claude skill for multi-phase agent onboarding ([#498](https://github.com/entireio/cli/pull/498))
+- Post-commit cache to avoid redundant work on consecutive commits ([#500](https://github.com/entireio/cli/pull/500))
+- `entire enable` now creates local metadata branch from remote when available, preserving checkpoints on fresh clones ([#511](https://github.com/entireio/cli/pull/511))
+- `entire --version` now works as an alias for `entire version` ([#526](https://github.com/entireio/cli/pull/526))
+- Mise linting to keep `mise.toml` clean; scripts moved into task files ([#530](https://github.com/entireio/cli/pull/530))
+- `commit_linking` setting replaces the Strategy interface abstraction, with `[Y/n/a]` prompt on commit ([#531](https://github.com/entireio/cli/pull/531))
+
+### Changed
+
+- Extracted magic numbers to named constants ([#276](https://github.com/entireio/cli/pull/276))
+- Removed auto-commit strategy entirely, making manual-commit the only strategy ([#405](https://github.com/entireio/cli/pull/405))
+- Upgraded to Go 1.26 and golangci-lint 2.10.1 ([#458](https://github.com/entireio/cli/pull/458))
+- O(depth) tree surgery replaces O(N) flatten-and-rebuild for both metadata branch and shadow branch writes ([#473](https://github.com/entireio/cli/pull/473), [#503](https://github.com/entireio/cli/pull/503))
+- Renamed `paths.RepoRoot()` to `paths.WorktreeRoot()` for clarity ([#486](https://github.com/entireio/cli/pull/486))
+- Local and CI linting now use the same configuration ([#504](https://github.com/entireio/cli/pull/504))
+- Consistent context.Context threading through all function call chains (~25 `context.Background()`/`context.TODO()` replaced) ([#507](https://github.com/entireio/cli/pull/507), [#512](https://github.com/entireio/cli/pull/512))
+- Unified `CalculateTokenUsage` into a single `agent.CalculateTokenUsage()` function ([#509](https://github.com/entireio/cli/pull/509))
+- Removed backward-compatibility fallbacks for unknown agent types ([#515](https://github.com/entireio/cli/pull/515))
+- Removed Strategy interface abstraction — `ManualCommitStrategy` is now used directly everywhere ([#531](https://github.com/entireio/cli/pull/531))
+- Replaced `fmt.Fprintf(os.Stderr)` with structured logging in agent hook paths ([#538](https://github.com/entireio/cli/pull/538))
+- Moved `AgentName` and `AgentType` to `agent/types` package to break import cycle ([#542](https://github.com/entireio/cli/pull/542))
+
+### Fixed
+
+- Carry-forward false positive when user replaces agent content before committing ([#502](https://github.com/entireio/cli/pull/502))
+- Isolate integration tests from global git config ([#513](https://github.com/entireio/cli/pull/513))
+- Using OpenCode with Codex models now correctly handle `apply_patch` events ([#521](https://github.com/entireio/cli/pull/521))
+- Compaction resetting transcript offset, causing Gemini carry-forward to re-send already-condensed content ([#535](https://github.com/entireio/cli/pull/535))
+- Handle OpenCode `database is locked` errors during parallel E2E tests ([#540](https://github.com/entireio/cli/pull/540))
+
+### Docs
+
+- Agent integration guide and checklist updated for Cursor and OpenCode ([#410](https://github.com/entireio/cli/pull/410), [#510](https://github.com/entireio/cli/pull/510))
+- E2E test README and debug skill ([#474](https://github.com/entireio/cli/pull/474))
+- Cursor agent documentation ([#493](https://github.com/entireio/cli/pull/493), [#525](https://github.com/entireio/cli/pull/525))
+
+### Thanks
+
+Thanks to @ishaan812 for contributing to this release!
+
+Thanks to @9bany ([#260](https://github.com/entireio/cli/pull/260)) for their Cursor PR! We've now merged our Cursor integration. While we went with our own implementation, your PR were valuable in helping us validate our design choices and ensure we covered the right scenarios. We appreciate the effort you put into this!
+
 ## [0.4.7] - 2026-02-24
 
 ### Fixed

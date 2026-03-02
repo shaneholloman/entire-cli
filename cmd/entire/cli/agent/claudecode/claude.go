@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
@@ -34,12 +35,12 @@ func NewClaudeCodeAgent() agent.Agent {
 }
 
 // Name returns the agent registry key.
-func (c *ClaudeCodeAgent) Name() agent.AgentName {
+func (c *ClaudeCodeAgent) Name() types.AgentName {
 	return agent.AgentNameClaudeCode
 }
 
 // Type returns the agent type identifier.
-func (c *ClaudeCodeAgent) Type() agent.AgentType {
+func (c *ClaudeCodeAgent) Type() types.AgentType {
 	return agent.AgentTypeClaudeCode
 }
 
