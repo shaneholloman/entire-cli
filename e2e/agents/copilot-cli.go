@@ -54,7 +54,7 @@ func (c *CopilotCLI) Bootstrap() error {
 }
 
 func (c *CopilotCLI) RunPrompt(ctx context.Context, dir string, prompt string, opts ...Option) (Output, error) {
-	cfg := &runConfig{}
+	cfg := &runConfig{Model: "claude-haiku-4.5"}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -66,8 +66,8 @@ func (c *CopilotCLI) RunPrompt(ctx context.Context, dir string, prompt string, o
 	promptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"-p", prompt, "--allow-all-tools"}
-	displayArgs := []string{"-p", fmt.Sprintf("%q", prompt), "--allow-all-tools"}
+	args := []string{"-p", prompt, "--model", cfg.Model, "--allow-all"}
+	displayArgs := []string{"-p", fmt.Sprintf("%q", prompt), "--model", cfg.Model, "--allow-all"}
 	cmd := exec.CommandContext(promptCtx, c.Binary(), args...)
 	cmd.Dir = dir
 	cmd.Stdin = nil
@@ -106,7 +106,7 @@ func (c *CopilotCLI) RunPrompt(ctx context.Context, dir string, prompt string, o
 
 func (c *CopilotCLI) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("copilot-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, nil, "env", "ENTIRE_TEST_TTY=0", c.Binary(), "--allow-all-tools")
+	s, err := NewTmuxSession(name, dir, nil, "env", "ENTIRE_TEST_TTY=0", c.Binary(), "--model", "claude-haiku-4.5", "--allow-all")
 	if err != nil {
 		return nil, err
 	}
