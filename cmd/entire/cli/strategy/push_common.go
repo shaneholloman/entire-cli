@@ -208,7 +208,7 @@ func fetchAndMergeSessionsCommon(ctx context.Context, remote, branchName string)
 	return nil
 }
 
-// PushTrailsBranch pushes the entire/trails branch to the remote.
+// PushTrailsBranch pushes the entire/trails/v1 branch to the remote.
 // Trails are always pushed regardless of the push_sessions setting.
 func PushTrailsBranch(ctx context.Context, remote string) error {
 	return pushBranchIfNeeded(ctx, remote, paths.TrailsBranchName)

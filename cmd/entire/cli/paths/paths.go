@@ -38,7 +38,7 @@ const MetadataBranchName = "entire/checkpoints/v1"
 
 // TrailsBranchName is the orphan branch used to store trail metadata.
 // Trails are branch-centric work tracking abstractions that link to checkpoints by branch name.
-const TrailsBranchName = "entire/trails"
+const TrailsBranchName = "entire/trails/v1"
 
 // CheckpointPath returns the sharded storage path for a checkpoint ID.
 // Uses first 2 characters as shard (256 buckets), remaining as folder name.

@@ -1,6 +1,6 @@
 // Package trail provides types and helpers for managing trail metadata.
 // Trails are branch-centric work tracking abstractions stored on the
-// entire/trails orphan branch. They answer "why/what" (human intent)
+// entire/trails/v1 orphan branch. They answer "why/what" (human intent)
 // while checkpoints answer "how/when" (machine snapshots).
 package trail
 

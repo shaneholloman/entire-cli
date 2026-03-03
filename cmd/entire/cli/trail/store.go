@@ -25,7 +25,7 @@ const (
 // ErrTrailNotFound is returned when a trail cannot be found.
 var ErrTrailNotFound = errors.New("trail not found")
 
-// Store provides CRUD operations for trail metadata on the entire/trails branch.
+// Store provides CRUD operations for trail metadata on the entire/trails/v1 branch.
 type Store struct {
 	repo *git.Repository
 }
@@ -35,7 +35,7 @@ func NewStore(repo *git.Repository) *Store {
 	return &Store{repo: repo}
 }
 
-// EnsureBranch creates the entire/trails orphan branch if it doesn't exist.
+// EnsureBranch creates the entire/trails/v1 orphan branch if it doesn't exist.
 func (s *Store) EnsureBranch() error {
 	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	_, err := s.repo.Reference(refName, true)
@@ -62,7 +62,7 @@ func (s *Store) EnsureBranch() error {
 	return nil
 }
 
-// Write writes trail metadata, discussion, and checkpoints to the entire/trails branch.
+// Write writes trail metadata, discussion, and checkpoints to the entire/trails/v1 branch.
 // If checkpoints is nil, an empty checkpoints list is written.
 func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
 	if metadata.TrailID.IsEmpty() {
@@ -155,7 +155,7 @@ func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *C
 	return nil
 }
 
-// Read reads a trail by its ID from the entire/trails branch.
+// Read reads a trail by its ID from the entire/trails/v1 branch.
 func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
 	tree, err := s.getBranchTree()
 	if err != nil {
@@ -233,7 +233,7 @@ func (s *Store) FindByBranch(branchName string) (*Metadata, error) {
 	return nil, nil //nolint:nilnil // nil, nil means "not found" — callers check both
 }
 
-// List returns all trail metadata from the entire/trails branch.
+// List returns all trail metadata from the entire/trails/v1 branch.
 func (s *Store) List() ([]*Metadata, error) {
 	tree, err := s.getBranchTree()
 	if err != nil {
@@ -309,7 +309,7 @@ func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 	return s.Write(metadata, discussion, checkpoints)
 }
 
-// Delete removes a trail from the entire/trails branch.
+// Delete removes a trail from the entire/trails/v1 branch.
 func (s *Store) Delete(trailID ID) error {
 	ref, entries, err := s.getBranchEntries()
 	if err != nil {
@@ -351,7 +351,7 @@ func (s *Store) Delete(trailID ID) error {
 	return nil
 }
 
-// getBranchTree returns the tree for the entire/trails branch HEAD.
+// getBranchTree returns the tree for the entire/trails/v1 branch HEAD.
 func (s *Store) getBranchTree() (*object.Tree, error) {
 	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	ref, err := s.repo.Reference(refName, true)
