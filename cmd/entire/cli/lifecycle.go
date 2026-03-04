@@ -537,7 +537,7 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 			logging.Warn(logCtx, "failed to extract modified files from subagent",
 				slog.String("error", fileErr.Error()))
 		} else {
-			modifiedFiles = append(modifiedFiles, files...)
+			modifiedFiles = mergeUnique(modifiedFiles, files)
 		}
 	}
 

@@ -105,13 +105,9 @@ func (c *CursorAgent) ExtractSummary(sessionRef string) (string, error) {
 	return "", nil
 }
 
-// ExtractModifiedFilesFromOffset returns the current transcript position but no
-// modified files, because Cursor transcripts do not contain tool_use blocks.
+// ExtractModifiedFilesFromOffset returns no modified files for Cursor and a constant
+// position of 0, because Cursor transcripts do not contain tool_use blocks.
 // File detection relies on git status and hook-provided modified_files instead.
-func (c *CursorAgent) ExtractModifiedFilesFromOffset(path string, _ int) ([]string, int, error) {
-	pos, err := c.GetTranscriptPosition(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	return nil, pos, nil
+func (c *CursorAgent) ExtractModifiedFilesFromOffset(_ string, _ int) ([]string, int, error) {
+	return nil, 0, nil
 }
