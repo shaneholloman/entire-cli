@@ -117,7 +117,13 @@ func (s *TmuxSession) WaitFor(pattern string, timeout time.Duration) (string, er
 		content := s.Capture()
 		stable := stableContent(content)
 
+		// Bail early if the process has exited and the pattern doesn't match.
+		// remain-on-exit keeps the pane alive, so without this check we'd
+		// poll a dead pane for the full timeout duration.
 		if !re.MatchString(content) {
+			if s.IsPaneDead() {
+				return content, fmt.Errorf("process exited while waiting for %q\n--- pane content ---\n%s\n--- end pane content ---", pattern, content)
+			}
 			// Pattern lost — reset
 			matchedAt = time.Time{}
 			lastStable = ""
@@ -149,6 +155,19 @@ func (s *TmuxSession) WaitFor(pattern string, timeout time.Duration) (string, er
 	}
 	content := s.Capture()
 	return content, fmt.Errorf("timed out waiting for %q after %s\n--- pane content ---\n%s\n--- end pane content ---", pattern, timeout, content)
+}
+
+// IsPaneDead returns true if the process inside the tmux pane has exited.
+// This relies on the remain-on-exit option being set (which NewTmuxSession does).
+func (s *TmuxSession) IsPaneDead() bool {
+	cmd := exec.Command("tmux", "display-message", "-t", s.name, "-p", "#{pane_dead}")
+	out, err := cmd.Output()
+	if err != nil {
+		// If tmux itself fails (e.g. session/pane no longer exists),
+		// treat it as dead so WaitFor doesn't poll until timeout.
+		return true
+	}
+	return strings.TrimSpace(string(out)) == "1"
 }
 
 func (s *TmuxSession) Capture() string {

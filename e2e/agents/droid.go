@@ -30,7 +30,7 @@ func (d *Droid) Name() string               { return "factoryai-droid" }
 func (d *Droid) Binary() string             { return "droid" }
 func (d *Droid) EntireAgent() string        { return "factoryai-droid" }
 func (d *Droid) PromptPattern() string      { return `>` }
-func (d *Droid) TimeoutMultiplier() float64 { return 1.5 }
+func (d *Droid) TimeoutMultiplier() float64 { return 2.0 }
 
 func (d *Droid) IsTransientError(out Output, err error) bool {
 	if err == nil {
@@ -75,6 +75,10 @@ const (
 	droidCustomModelBaseID      = "claude-haiku-4-5-20251001"
 	defaultDroidModel           = "custom:" + droidCustomModelBaseID
 )
+
+// DefaultDroidModel returns the default model string for Droid BYOK configuration.
+// Format is "custom:<baseModelID>" which the Droid API expects for custom model selection.
+func DefaultDroidModel() string { return defaultDroidModel }
 
 func (d *Droid) Bootstrap() error {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -148,7 +152,7 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 	cmd := exec.CommandContext(ctx, d.Binary(), args...)
 	cmd.Dir = dir
 	cmd.Stdin = nil
-	cmd.Env = filterEnv(os.Environ(), "ENTIRE_TEST_TTY")
+	cmd.Env = filterEnv(os.Environ(), "ENTIRE_TEST_TTY", "CI", "GITHUB_ACTIONS")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -180,7 +184,9 @@ func (d *Droid) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 
 func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("droid-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, d.Binary(), "--model", defaultDroidModel, "--skip-permissions-unsafe")
+	// Unset CI and GITHUB_ACTIONS so Droid doesn't enter single-turn/headless
+	// mode — it checks these vars and skips interactive input after the first turn.
+	s, err := NewTmuxSession(name, dir, []string{"CI", "GITHUB_ACTIONS", "ENTIRE_TEST_TTY"}, d.Binary())
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +195,15 @@ func (d *Droid) StartSession(ctx context.Context, dir string) (Session, error) {
 	if _, err := s.WaitFor(`>`, 30*time.Second); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("waiting for startup prompt: %w", err)
+	}
+
+	// Droid auto-generates a greeting on startup which fires a Stop hook.
+	// Wait for the greeting turn to fully complete before accepting prompts.
+	select {
+	case <-ctx.Done():
+		_ = s.Close()
+		return nil, fmt.Errorf("context cancelled during startup wait: %w", ctx.Err())
+	case <-time.After(2 * time.Second):
 	}
 	s.stableAtSend = ""
 
