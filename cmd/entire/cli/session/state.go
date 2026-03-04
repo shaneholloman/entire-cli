@@ -342,12 +342,15 @@ func (s *StateStore) Clear(ctx context.Context, sessionID string) error {
 
 	stateFile := s.stateFilePath(sessionID)
 
-	if err := os.Remove(stateFile); err != nil {
-		if os.IsNotExist(err) {
-			return nil // Already gone, not an error
-		}
+	if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove session state file: %w", err)
 	}
+
+	// Best-effort cleanup of associated hint files (e.g. .model) that may
+	// have been written by the strategy layer before the state file existed.
+	hintFile := filepath.Join(s.stateDir, sessionID+".model")
+	_ = os.Remove(hintFile)
+
 	return nil
 }
 

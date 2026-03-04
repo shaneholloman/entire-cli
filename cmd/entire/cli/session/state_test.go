@@ -204,6 +204,54 @@ func TestStateStore_Load_DeletesStaleSession(t *testing.T) {
 	assert.Equal(t, "active-session", loaded.SessionID)
 }
 
+func TestStateStore_Clear_RemovesHintFiles(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "entire-sessions")
+	require.NoError(t, os.MkdirAll(stateDir, 0o750))
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+
+	// Create a state file and a .model hint file
+	state := &State{
+		SessionID:  "hint-session",
+		BaseCommit: "abc123",
+		StartedAt:  time.Now(),
+	}
+	require.NoError(t, store.Save(ctx, state))
+
+	hintFile := filepath.Join(stateDir, "hint-session.model")
+	require.NoError(t, os.WriteFile(hintFile, []byte("claude-sonnet-4-20250514"), 0o600))
+
+	// Clear should remove both files
+	require.NoError(t, store.Clear(ctx, "hint-session"))
+
+	_, err := os.Stat(filepath.Join(stateDir, "hint-session.json"))
+	assert.True(t, os.IsNotExist(err), "state file should be removed")
+
+	_, err = os.Stat(hintFile)
+	assert.True(t, os.IsNotExist(err), "hint file should be removed")
+}
+
+func TestStateStore_Clear_RemovesHintFileWithoutStateFile(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "entire-sessions")
+	require.NoError(t, os.MkdirAll(stateDir, 0o750))
+	store := NewStateStoreWithDir(stateDir)
+	ctx := context.Background()
+
+	// Only a .model hint file exists (no .json state file)
+	hintFile := filepath.Join(stateDir, "orphan-session.model")
+	require.NoError(t, os.WriteFile(hintFile, []byte("claude-opus-4-6"), 0o600))
+
+	// Clear should succeed and remove the hint file
+	require.NoError(t, store.Clear(ctx, "orphan-session"))
+
+	_, err := os.Stat(hintFile)
+	assert.True(t, os.IsNotExist(err), "orphaned hint file should be removed")
+}
+
 func TestStateStore_List_DeletesStaleSession(t *testing.T) {
 	t.Parallel()
 
