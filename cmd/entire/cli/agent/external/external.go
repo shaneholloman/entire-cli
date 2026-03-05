@@ -459,7 +459,11 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 	if len(p) > remaining {
 		p = p[:remaining]
 	}
-	return w.buf.Write(p)
+	n, err := w.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("writing to limited buffer: %w", err)
+	}
+	return n, nil
 }
 
 func marshalHookInput(input *agent.HookInput) ([]byte, error) {
