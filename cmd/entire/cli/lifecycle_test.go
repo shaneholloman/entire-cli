@@ -446,15 +446,17 @@ func TestDispatchLifecycleEvent_RoutesToCorrectHandler(t *testing.T) {
 	// in the real repo whenever untracked files exist, because DetectFileChanges
 	// reports them as new files and SaveTaskStep falls back to initializeSession.
 	tmpDir := t.TempDir()
-	cmd := exec.CommandContext(context.Background(), "git", "init")
-	cmd.Dir = tmpDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git init failed: %v\n%s", err, out)
-	}
-	cmd = exec.CommandContext(context.Background(), "git", "commit", "--allow-empty", "-m", "init")
-	cmd.Dir = tmpDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git commit failed: %v\n%s", err, out)
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test User"},
+		{"commit", "--allow-empty", "--no-gpg-sign", "-m", "init"},
+	} {
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = tmpDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s failed: %v\n%s", args[0], err, out)
+		}
 	}
 	t.Chdir(tmpDir)
 
