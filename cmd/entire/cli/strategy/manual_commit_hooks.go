@@ -850,7 +850,6 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit)
 	resolveTreesSpan.End()
 
-	_, processSessionsSpan := perf.Start(ctx, "process_sessions")
 	for _, state := range sessions {
 		// Skip fully-condensed ended sessions — no work remains.
 		// These sessions only persist for LastCheckpointID (amend trailer reuse).
@@ -861,7 +860,6 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 			head, commit, newHead, worktreePath, headTree, parentTree, committedFileSet,
 			shadowBranchesToDelete, uncondensedActiveOnBranch)
 	}
-	processSessionsSpan.End()
 
 	// Clean up shadow branches — only delete when ALL sessions on the branch are non-active
 	// or were condensed during this PostCommit.

@@ -449,13 +449,9 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// Log file changes
 	logFileChanges(ctx, relModifiedFiles, relNewFiles, relDeletedFiles)
 
-	// Get author, build StepContext, and save step
-	_, saveStepSpan := perf.Start(ctx, "build_and_save_step")
 	// Get git author
 	author, err := GetGitAuthor(ctx)
 	if err != nil {
-		saveStepSpan.RecordError(err)
-		saveStepSpan.End()
 		return fmt.Errorf("failed to get git author: %w", err)
 	}
 
@@ -493,11 +489,8 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	}
 
 	if err := strat.SaveStep(ctx, stepCtx); err != nil {
-		saveStepSpan.RecordError(err)
-		saveStepSpan.End()
 		return fmt.Errorf("failed to save step: %w", err)
 	}
-	saveStepSpan.End()
 
 	// Transition session phase and cleanup
 	transitionSessionTurnEnd(ctx, sessionID, event)

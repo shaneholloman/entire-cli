@@ -100,30 +100,6 @@ func TestEnd_AutoEndsChildren(t *testing.T) {
 	}
 }
 
-func TestMeasure_TimesFunction(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	_, span := Start(ctx, "parent")
-
-	span.Measure("substep", func() {
-		time.Sleep(10 * time.Millisecond)
-	})
-
-	span.End()
-
-	if len(span.children) != 1 {
-		t.Fatalf("expected 1 child from Measure, got %d", len(span.children))
-	}
-	child := span.children[0]
-	if child.name != "substep" {
-		t.Errorf("child.name = %q, want %q", child.name, "substep")
-	}
-	if child.duration < 10*time.Millisecond {
-		t.Errorf("child.duration = %v, want >= 10ms", child.duration)
-	}
-}
-
 func TestSpanFromContext_ReturnsNilWhenEmpty(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

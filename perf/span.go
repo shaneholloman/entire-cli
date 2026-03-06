@@ -97,11 +97,3 @@ func (s *Span) End() {
 
 	logging.Debug(s.ctx, "perf", attrs...)
 }
-
-// Measure times a function as a child substep of this span.
-func (s *Span) Measure(name string, fn func()) {
-	ctx := contextWithSpan(s.ctx, s)
-	_, child := Start(ctx, name)
-	defer child.End()
-	fn()
-}
