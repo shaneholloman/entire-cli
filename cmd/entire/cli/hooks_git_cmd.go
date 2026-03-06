@@ -51,7 +51,7 @@ func (g *gitHookContext) logInvoked(extraAttrs ...any) {
 	logging.Debug(g.ctx, g.hookName+" hook invoked", append(attrs, extraAttrs...)...)
 }
 
-// logCompleted records the error on the perf span and logs hook completion.
+// logCompleted records the error on the perf span.
 func (g *gitHookContext) logCompleted(err error) {
 	g.span.RecordError(err)
 }
