@@ -585,7 +585,8 @@ func isOnlySeparators(s string) bool {
 // latest session on the metadata branch tree. This navigates the sharded directory layout:
 // <cpID.Path()>/<latestSessionIndex>/prompt.txt
 //
-// This is an O(1) tree lookup that avoids reading the full transcript.
+// Falls back through earlier sessions when the latest has no prompt.
+// Avoids reading full transcripts — only reads prompt.txt files.
 // sessionCount is the number of sessions in the checkpoint (from CommittedInfo.SessionCount).
 func ReadLatestSessionPromptFromCommittedTree(tree *object.Tree, cpID id.CheckpointID, sessionCount int) string {
 	cpPath := cpID.Path()
@@ -594,33 +595,36 @@ func ReadLatestSessionPromptFromCommittedTree(tree *object.Tree, cpID id.Checkpo
 		return ""
 	}
 
-	// Find the latest session subdirectory.
+	// Find the latest session subdirectory with a prompt.
 	// Sessions use 0-based indexing: 0/, 1/, 2/, etc.
-	latestIndex := sessionCount - 1
-	if latestIndex < 0 {
-		latestIndex = 0
-	}
-	sessionPath := strconv.Itoa(latestIndex)
-	sessionTree, err := cpTree.Tree(sessionPath)
-	if err != nil {
-		// Fall back to session 0 if the computed index doesn't exist
-		sessionTree, err = cpTree.Tree("0")
+	// Start from the latest and fall back through earlier sessions
+	// when the latest has no prompt (e.g. a test or empty session was
+	// condensed alongside a real one).
+	latestIndex := max(sessionCount-1, 0)
+
+	for i := latestIndex; i >= 0; i-- {
+		sessionPath := strconv.Itoa(i)
+		sessionTree, err := cpTree.Tree(sessionPath)
 		if err != nil {
-			return ""
+			continue
+		}
+
+		file, err := sessionTree.File(paths.PromptFileName)
+		if err != nil {
+			continue
+		}
+
+		content, err := file.Contents()
+		if err != nil {
+			continue
+		}
+
+		if prompt := ExtractFirstPrompt(content); prompt != "" {
+			return prompt
 		}
 	}
 
-	file, err := sessionTree.File(paths.PromptFileName)
-	if err != nil {
-		return ""
-	}
-
-	content, err := file.Contents()
-	if err != nil {
-		return ""
-	}
-
-	return ExtractFirstPrompt(content)
+	return ""
 }
 
 // ReadAllSessionPromptsFromTree reads the first prompt for all sessions in a multi-session checkpoint.

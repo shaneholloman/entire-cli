@@ -1427,6 +1427,63 @@ func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
 		}
 	})
 
+	t.Run("falls back to earlier session when latest has no prompt", func(t *testing.T) {
+		t.Parallel()
+		// Session 1 (latest) has no prompt.txt, session 0 does.
+		// This happens when a test session gets condensed alongside a real one.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt":      "Real session prompt",
+			"a3/b2c4d5e6f7/1/metadata.json":    `{"session_id":"test"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "Real session prompt" {
+			t.Errorf("got %q, want %q", got, "Real session prompt")
+		}
+	})
+
+	t.Run("falls back through multiple empty sessions to find prompt", func(t *testing.T) {
+		t.Parallel()
+		// Sessions 2 and 1 have no prompt, session 0 does.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt":      "Original prompt",
+			"a3/b2c4d5e6f7/1/metadata.json":    `{"session_id":"s1"}`,
+			"a3/b2c4d5e6f7/2/metadata.json":    `{"session_id":"s2"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 3)
+		if got != "Original prompt" {
+			t.Errorf("got %q, want %q", got, "Original prompt")
+		}
+	})
+
+	t.Run("returns empty when no session has a prompt", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/metadata.json": `{"session_id":"s0"}`,
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"s1"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "" {
+			t.Errorf("got %q, want empty string", got)
+		}
+	})
+
+	t.Run("falls back when latest has empty prompt.txt", func(t *testing.T) {
+		t.Parallel()
+		// Latest session has a prompt.txt file but it's empty — should fall back.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "Real prompt",
+			"a3/b2c4d5e6f7/1/prompt.txt": "",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "Real prompt" {
+			t.Errorf("got %q, want %q", got, "Real prompt")
+		}
+	})
+
 	t.Run("extracts first prompt from multi-prompt content", func(t *testing.T) {
 		t.Parallel()
 		tree := buildCommittedTree(t, map[string]string{
