@@ -138,19 +138,22 @@ func parsePerfEntry(line string) *perfEntry {
 			Error:      parentStepErrors[name],
 		}
 
-		// Attach sub-steps if any, sorted by index
+		// Attach sub-steps if any, sorted by numeric index
 		if subs, ok := subStepDurations[name]; ok {
+			indices := make([]int, 0, len(subs))
+			for idx := range subs {
+				indices = append(indices, idx)
+			}
+			sort.Ints(indices)
+
 			subList := make([]perfStep, 0, len(subs))
-			for idx, subMs := range subs {
+			for _, idx := range indices {
 				subList = append(subList, perfStep{
 					Name:       fmt.Sprintf("%s.%d", name, idx),
-					DurationMs: subMs,
+					DurationMs: subs[idx],
 					Error:      subStepErrors[name][idx],
 				})
 			}
-			sort.Slice(subList, func(i, j int) bool {
-				return subList[i].Name < subList[j].Name
-			})
 			step.SubSteps = subList
 		}
 

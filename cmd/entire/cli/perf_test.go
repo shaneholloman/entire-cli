@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -288,6 +289,39 @@ func TestParsePerfEntry_WithSubSteps(t *testing.T) {
 	}
 	if !ps.SubSteps[1].Error {
 		t.Error("SubSteps[1].Error = false, want true")
+	}
+}
+
+func TestParsePerfEntry_SubStepNumericOrdering(t *testing.T) {
+	t.Parallel()
+
+	// Build a perf entry with 12 sub-steps to verify numeric (not lexicographic) ordering.
+	// Lexicographic sort would place .10 and .11 before .2.
+	line := `{"time":"2026-01-15T10:30:00Z","level":"DEBUG","msg":"perf","op":"post-commit","duration_ms":1000,"steps.loop_ms":900,"steps.loop.0_ms":10,"steps.loop.1_ms":20,"steps.loop.2_ms":30,"steps.loop.3_ms":40,"steps.loop.4_ms":50,"steps.loop.5_ms":60,"steps.loop.6_ms":70,"steps.loop.7_ms":80,"steps.loop.8_ms":90,"steps.loop.9_ms":100,"steps.loop.10_ms":110,"steps.loop.11_ms":120}`
+
+	entry := parsePerfEntry(line)
+	if entry == nil {
+		t.Fatal("parsePerfEntry returned nil")
+	}
+
+	if len(entry.Steps) != 1 {
+		t.Fatalf("len(Steps) = %d, want 1", len(entry.Steps))
+	}
+
+	subs := entry.Steps[0].SubSteps
+	if len(subs) != 12 {
+		t.Fatalf("len(SubSteps) = %d, want 12", len(subs))
+	}
+
+	for i, sub := range subs {
+		want := fmt.Sprintf("loop.%d", i)
+		if sub.Name != want {
+			t.Errorf("SubSteps[%d].Name = %q, want %q", i, sub.Name, want)
+		}
+		wantMs := int64((i + 1) * 10)
+		if sub.DurationMs != wantMs {
+			t.Errorf("SubSteps[%d].DurationMs = %d, want %d", i, sub.DurationMs, wantMs)
+		}
 	}
 }
 
