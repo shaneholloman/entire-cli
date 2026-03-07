@@ -347,6 +347,37 @@ func TestRenderPerfEntries_WithSubSteps(t *testing.T) {
 	}
 }
 
+func TestPerfCmd_InvalidLastFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"zero", []string{"--last", "0"}, "--last must be at least 1, got 0"},
+		{"negative", []string{"--last", "-1"}, "--last must be at least 1, got -1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := newPerfCmd()
+			cmd.SetArgs(tt.args)
+			cmd.SilenceUsage = true
+
+			err := cmd.Execute()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if err.Error() != tt.want {
+				t.Errorf("error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderPerfEntries_Empty(t *testing.T) {
 	t.Parallel()
 

@@ -27,6 +27,10 @@ Examples:
   entire perf --last 5         Show the last 5 hook traces
   entire perf --hook post-commit  Show only post-commit hook traces`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if last < 1 {
+				return fmt.Errorf("--last must be at least 1, got %d", last)
+			}
+
 			repoRoot, err := paths.WorktreeRoot(cmd.Context())
 			if err != nil {
 				cmd.SilenceUsage = true
