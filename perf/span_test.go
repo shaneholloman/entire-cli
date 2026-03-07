@@ -326,7 +326,7 @@ func TestStartLoop_IterationsAutoEnded(t *testing.T) {
 	loopCtx, loop := StartLoop(ctx, "loop")
 	_, iter0 := loop.Iteration(loopCtx)
 	iter0.duration = 50 * time.Millisecond
-	// iter0.ended intentionally NOT set — should be auto-ended by loop.End()
+	// iter0.ended intentionally NOT set — should be auto-ended when root.End() runs
 	loop.End()
 
 	root.End()
