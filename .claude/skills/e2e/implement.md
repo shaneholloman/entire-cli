@@ -2,6 +2,11 @@
 
 Apply fixes for E2E test failures, verify with scoped E2E tests.
 
+> **IMPORTANT: Running real E2E tests is a HARD REQUIREMENT of this procedure.**
+> Every fix MUST be verified with real E2E tests before the summary step.
+> Canary tests use the Vogon fake agent and cannot catch agent-specific issues.
+> Do NOT skip E2E verification unless the user explicitly declines due to cost.
+
 ## Inputs
 
 This procedure accepts findings from one of:
@@ -77,7 +82,7 @@ For **flaky** fixes the user approved:
      ```bash
      mise run test:e2e --agent <agent> <TestName>
      ```
-   This step is mandatory -- canary tests use the Vogon fake agent and cannot verify agent-specific behavior (trust dialogs, env propagation, config directories, etc.).
+   **This step is MANDATORY** -- canary tests use the Vogon fake agent and cannot verify agent-specific behavior (trust dialogs, env propagation, config directories, etc.).
 4. If any step fails, investigate and adjust. Report what happened to the user.
 
 For **real-bug** fixes the user approved:
@@ -88,12 +93,13 @@ For **real-bug** fixes the user approved:
    mise run test        # Unit tests
    mise run test:e2e:canary  # Canary tests
    ```
-3. **Run real E2E tests to verify the fix.** Same scoping rules as flaky fixes above:
+3. **Run real E2E tests to verify the fix (MANDATORY).** Same scoping rules as flaky fixes above:
    - **Agent-specific change** -> full suite for that agent
    - **Shared CLI/infra change** -> full suite for all agents that failed
    - **Narrow change** (single test affected) -> just that test across affected agents
-   Skip only if the user explicitly declines (cost concern).
 4. Report results to the user.
+
+**GATE: Do NOT proceed to the summary until real E2E tests have been run and results reported for every fix applied above.** If E2E tests were not run, go back and run them now.
 
 ## Step 4: Summary
 

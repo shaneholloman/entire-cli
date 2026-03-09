@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -632,7 +633,8 @@ type postCommitActionHandler struct {
 	shadowTree *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
-	condensed bool
+	condensed         bool // true if condensation succeeded
+	condenseAttempted bool // true if condensation was attempted (even if it failed)
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
@@ -648,6 +650,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	)
 
 	if shouldCondense {
+		h.condenseAttempted = true
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:      h.shadowRef,
 			headTree:       h.headTree,
@@ -674,6 +677,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	)
 
 	if shouldCondense {
+		h.condenseAttempted = true
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:      h.shadowRef,
 			headTree:       h.headTree,
@@ -1014,7 +1018,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// NOTE: This check runs AFTER TransitionAndLog updated the phase. It relies on
 	// ACTIVE + GitCommit → ACTIVE (phase stays ACTIVE). If that state machine
 	// transition ever changed, this guard would silently stop recording IDs.
-	if handler.condensed && state.Phase.IsActive() {
+	if handler.condenseAttempted && state.Phase.IsActive() {
 		state.TurnCheckpointIDs = append(state.TurnCheckpointIDs, checkpointID.String())
 	}
 
@@ -2237,6 +2241,25 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			Agent:        state.AgentType,
 		})
 		if updateErr != nil {
+			if errors.Is(updateErr, checkpoint.ErrCheckpointNotFound) {
+				// Checkpoint wasn't created at post-commit time (e.g., transcript was empty).
+				// Now that the full transcript is available, create it via CondenseSession.
+				_, condenseErr := s.CondenseSession(ctx, repo, cpID, state, nil)
+				if condenseErr != nil {
+					logging.Warn(logCtx, "finalize: deferred condensation failed",
+						slog.String("checkpoint_id", cpIDStr),
+						slog.String("session_id", state.SessionID),
+						slog.String("error", condenseErr.Error()),
+					)
+					errCount++
+				} else {
+					logging.Info(logCtx, "finalize: deferred checkpoint created",
+						slog.String("checkpoint_id", cpIDStr),
+						slog.String("session_id", state.SessionID),
+					)
+				}
+				continue
+			}
 			logging.Warn(logCtx, "finalize: failed to update checkpoint",
 				slog.String("checkpoint_id", cpIDStr),
 				slog.String("error", updateErr.Error()),

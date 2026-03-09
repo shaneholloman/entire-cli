@@ -2324,3 +2324,163 @@ func TestPostCommit_ActiveSession_DifferentFilesThanCommit_ShouldCondense(t *tes
 	require.NoError(t, err,
 		"entire/checkpoints/v1 should exist — ACTIVE session with different files must still condense")
 }
+
+// TestPostCommit_ActiveSession_RecordsTurnCheckpointIDs_OnCondensationFailure verifies
+// that TurnCheckpointIDs is populated even when condensation fails (e.g., empty transcript).
+// This is the first part of the deferred condensation fix: the checkpoint ID is recorded
+// on attempt so that finalizeAllTurnCheckpoints can create the checkpoint at stop time.
+func TestPostCommit_ActiveSession_RecordsTurnCheckpointIDs_OnCondensationFailure(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-condense-fail-records-id"
+
+	// Simulate Cursor committing mid-turn before any SaveStep or transcript flush:
+	// - No shadow branch (SaveStep was never called)
+	// - Empty live transcript (Cursor hasn't flushed yet)
+	// - Session state exists with ACTIVE phase and files touched
+
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	// Use resolved worktree path — on macOS, t.TempDir() returns /var/...
+	// but git resolves symlinks to /private/var/...
+	worktreePath, wpErr := paths.WorktreeRoot(context.Background())
+	require.NoError(t, wpErr)
+
+	now := time.Now()
+	state := &SessionState{
+		SessionID:           sessionID,
+		Phase:               session.PhaseActive,
+		AgentType:           "cursor-cli",
+		FilesTouched:        []string{"test.txt"},
+		BaseCommit:          head.Hash().String(),
+		WorktreePath:        worktreePath,
+		StartedAt:           now,
+		LastInteractionTime: &now,
+	}
+
+	// Write empty transcript file
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full_transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(""), 0o644))
+	state.TranscriptPath = transcriptPath
+
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Create a commit with checkpoint trailer
+	commitWithCheckpointTrailer(t, repo, dir, "e1e2e3e4e5e6")
+
+	// Run PostCommit — condensation should fail due to empty transcript
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Verify TurnCheckpointIDs was populated despite condensation failure
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"e1e2e3e4e5e6"}, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs should contain the checkpoint ID even when condensation failed")
+
+	// Verify the checkpoint was NOT created on entire/checkpoints/v1
+	// (condensation failed, so nothing should be on the metadata branch)
+	_, refErr := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	assert.Error(t, refErr,
+		"entire/checkpoints/v1 should NOT exist when condensation failed")
+}
+
+// TestFinalizeAllTurnCheckpoints_DeferredCondensation verifies that when
+// finalizeAllTurnCheckpoints encounters a checkpoint ID that doesn't exist on
+// the metadata branch (ErrCheckpointNotFound), it falls back to CondenseSession
+// to create the checkpoint with the now-available transcript.
+func TestFinalizeAllTurnCheckpoints_DeferredCondensation(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-deferred-condense"
+
+	// Set up session with a checkpoint on the shadow branch
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Set phase to ACTIVE
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseActive
+
+	// Simulate what happens when condensation failed at post-commit time:
+	// - TurnCheckpointIDs has the ID (recorded on attempt)
+	// - But the checkpoint doesn't exist on entire/checkpoints/v1
+	state.TurnCheckpointIDs = []string{"d1d2d3d4d5d6"}
+
+	// Write a full transcript (now available at stop time)
+	fullTranscript := `{"type":"human","message":{"content":"build something"}}
+{"type":"assistant","message":{"content":"done building"}}
+`
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full_transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(fullTranscript), 0o644))
+	state.TranscriptPath = transcriptPath
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Call HandleTurnEnd — should use deferred condensation for the missing checkpoint
+	err = s.HandleTurnEnd(context.Background(), state)
+	require.NoError(t, err)
+
+	// TurnCheckpointIDs should be cleared
+	assert.Empty(t, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs should be cleared after HandleTurnEnd")
+
+	// Verify the deferred checkpoint was created on entire/checkpoints/v1
+	store := checkpoint.NewGitStore(repo)
+	cpID := id.MustCheckpointID("d1d2d3d4d5d6")
+	content, readErr := store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, readErr,
+		"Deferred checkpoint should exist on entire/checkpoints/v1 after HandleTurnEnd")
+	assert.Contains(t, string(content.Transcript), "build something",
+		"Deferred checkpoint should contain the full transcript")
+}
+
+// TestFinalizeAllTurnCheckpoints_DeferredCondensation_TranscriptStillEmpty verifies
+// graceful failure when the transcript is still empty at stop time (deferred
+// condensation also fails). The function should log a warning and not panic.
+func TestFinalizeAllTurnCheckpoints_DeferredCondensation_TranscriptStillEmpty(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-deferred-still-empty"
+
+	// Set up session with a checkpoint on the shadow branch
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseActive
+	state.TurnCheckpointIDs = []string{"f1f2f3f4f5f6"}
+
+	// Write an empty transcript (still empty at stop time)
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full_transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(""), 0o644))
+	state.TranscriptPath = transcriptPath
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Call HandleTurnEnd — should handle gracefully (empty transcript = skip all)
+	err = s.HandleTurnEnd(context.Background(), state)
+	require.NoError(t, err,
+		"HandleTurnEnd should not fail even when transcript is still empty")
+
+	// TurnCheckpointIDs should be cleared
+	assert.Empty(t, state.TurnCheckpointIDs,
+		"TurnCheckpointIDs should be cleared even when finalization fails")
+}
