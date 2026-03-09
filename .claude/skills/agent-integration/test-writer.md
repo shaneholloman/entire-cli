@@ -199,7 +199,7 @@ Use `/commit` to commit all files.
 - **Interactive tests**: Use `s.StartSession`, `s.Send`, `s.WaitFor` — tmux pane is auto-captured in artifacts
 - **Run commands**: `mise run test:e2e --agent ${slug} TestName` — see `e2e/README.md` for all options
 - **E2E tests are run during the implement phase**: This phase only creates the runner. The implement phase runs E2E tests at each tier to drive development.
-- **Debugging failures**: If tests fail during the implement phase, use `/e2e:debug` with the artifact directory to diagnose CLI-level issues (hooks, checkpoints, session phases, attribution)
+- **Debugging failures**: If tests fail during the implement phase, use `/debug-e2e` with the artifact directory to diagnose CLI-level issues (hooks, checkpoints, session phases, attribution)
 
 ## Output
 

@@ -52,7 +52,7 @@ This skill enforces strict E2E-first test-driven development. The rules:
 3. **Unit tests are written last.** After all E2E tiers pass (Step 14), you write unit tests using real data collected from E2E runs as golden fixtures.
 4. **If you didn't watch it fail, you don't know if it tests the right thing.** Never write a test you haven't seen fail first.
 5. **Minimum viable fix.** At each E2E failure, implement only the code needed to fix that failure. Don't anticipate future tiers.
-6. **`/e2e:debug` is your debugger.** When an E2E test fails, use the artifact directory with `/e2e:debug` before guessing at fixes.
+6. **`/debug-e2e` is your debugger.** When an E2E test fails, use the artifact directory with `/debug-e2e` before guessing at fixes.
 
 ## Pipeline
 
