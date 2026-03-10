@@ -11,26 +11,11 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
-
-// pushSessionsBranchCommon is the shared implementation for pushing session branches.
-// By default, session logs are pushed automatically alongside user pushes.
-// Configuration (stored in .entire/settings.json under strategy_options.push_sessions):
-//   - false: disable automatic pushing
-//   - true or not set: push automatically (default)
-func pushSessionsBranchCommon(ctx context.Context, remote, branchName string) error {
-	// Check if pushing is disabled
-	if isPushSessionsDisabled(ctx) {
-		return nil
-	}
-
-	return pushBranchIfNeeded(ctx, remote, branchName)
-}
 
 // pushBranchIfNeeded pushes a branch to the remote if it has unpushed changes.
 // Does not check any settings — callers are responsible for gating.
@@ -71,16 +56,6 @@ func hasUnpushedSessionsCommon(repo *git.Repository, remote string, localHash pl
 	// If local and remote point to same commit, nothing to sync
 	// This is the only case where we skip - any difference needs handling
 	return localHash != remoteRef.Hash()
-}
-
-// isPushSessionsDisabled checks if push_sessions is disabled in settings.
-// Returns true if push_sessions is explicitly set to false.
-func isPushSessionsDisabled(ctx context.Context) bool {
-	s, err := settings.Load(ctx)
-	if err != nil {
-		return false // Default: push is enabled
-	}
-	return s.IsPushSessionsDisabled()
 }
 
 // doPushBranch pushes the given branch to the remote with fetch+merge recovery.

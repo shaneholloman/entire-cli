@@ -22,8 +22,16 @@ const checkpointRemoteName = "entire-checkpoints"
 // checkpointRemoteFetchTimeout is the timeout for fetching branches from the remote.
 const checkpointRemoteFetchTimeout = 30 * time.Second
 
-// resolveCheckpointRemote determines the remote to use for checkpoint branch operations.
-// If a checkpoint_remote URL is configured in settings:
+// pushSettings holds the resolved push configuration from a single settings load.
+type pushSettings struct {
+	// remote is the git remote name to use for checkpoint branches.
+	remote string
+	// pushDisabled is true if push_sessions is explicitly set to false.
+	pushDisabled bool
+}
+
+// resolvePushSettings loads settings once and returns the resolved remote and push config.
+// If a checkpoint_remote URL is configured:
 //   - Ensures a git remote named "entire-checkpoints" is configured with that URL
 //   - If a checkpoint branch doesn't exist locally, attempts to fetch it from the remote
 //   - Returns "entire-checkpoints" as the remote name
@@ -31,19 +39,32 @@ const checkpointRemoteFetchTimeout = 30 * time.Second
 // The push itself handles failures gracefully (doPushBranch warns and continues),
 // so no reachability check is needed here. This avoids adding latency on every push
 // when the remote is temporarily unreachable.
-//
-// Falls back to the provided defaultRemote only if:
-//   - No checkpoint_remote is configured
-//   - The git remote could not be created/updated (local git config error)
-func resolveCheckpointRemote(ctx context.Context, defaultRemote string) string {
+func resolvePushSettings(ctx context.Context, defaultRemote string) pushSettings {
 	s, err := settings.Load(ctx)
 	if err != nil {
-		return defaultRemote
+		return pushSettings{remote: defaultRemote}
+	}
+
+	ps := pushSettings{
+		remote:       defaultRemote,
+		pushDisabled: s.IsPushSessionsDisabled(),
+	}
+
+	if ps.pushDisabled {
+		return ps
 	}
 
 	remoteURL := s.GetCheckpointRemote()
 	if remoteURL == "" {
-		return defaultRemote
+		return ps
+	}
+
+	if err := validateRemoteURL(remoteURL); err != nil {
+		logging.Warn(ctx, "checkpoint-remote: invalid URL in settings",
+			slog.String("url", remoteURL),
+			slog.String("error", err.Error()),
+		)
+		return ps
 	}
 
 	// Ensure the git remote exists with the correct URL (local operation, no network)
@@ -52,11 +73,13 @@ func resolveCheckpointRemote(ctx context.Context, defaultRemote string) string {
 			slog.String("url", remoteURL),
 			slog.String("error", err.Error()),
 		)
-		return defaultRemote
+		return ps
 	}
 
+	ps.remote = checkpointRemoteName
+
 	// If checkpoint branches don't exist locally, try to fetch them from the remote.
-	// This is a one-time operation per branch - once the branch exists locally,
+	// This is a one-time operation per branch — once the branch exists locally,
 	// subsequent pushes skip the fetch entirely.
 	for _, branchName := range []string{paths.MetadataBranchName, paths.TrailsBranchName} {
 		if err := fetchBranchIfMissing(ctx, checkpointRemoteName, branchName); err != nil {
@@ -67,7 +90,19 @@ func resolveCheckpointRemote(ctx context.Context, defaultRemote string) string {
 		}
 	}
 
-	return checkpointRemoteName
+	return ps
+}
+
+// validateRemoteURL performs basic validation on a git remote URL.
+// Rejects obviously malformed values that would produce confusing git errors.
+func validateRemoteURL(url string) error {
+	if strings.ContainsAny(url, " \t\n\r") {
+		return fmt.Errorf("URL contains whitespace")
+	}
+	if strings.ContainsAny(url, ";|&$`\\") {
+		return fmt.Errorf("URL contains invalid characters")
+	}
+	return nil
 }
 
 // ensureGitRemote creates or updates a git remote to point to the given URL.
@@ -145,6 +180,9 @@ func fetchBranchIfMissing(ctx context.Context, remote, branchName string) error 
 		return fmt.Errorf("failed to create local branch from remote: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "[entire] Fetched %s from %s\n", branchName, remote)
+	logging.Info(ctx, "checkpoint-remote: fetched branch from remote",
+		slog.String("branch", branchName),
+		slog.String("remote", remote),
+	)
 	return nil
 }

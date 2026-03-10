@@ -40,6 +40,22 @@ type EnableOptions struct {
 	AbsoluteGitHookPath bool
 }
 
+// applyStrategyOptions sets strategy_options on settings from CLI flags.
+func (opts *EnableOptions) applyStrategyOptions(settings *EntireSettings) {
+	if opts.SkipPushSessions {
+		if settings.StrategyOptions == nil {
+			settings.StrategyOptions = make(map[string]interface{})
+		}
+		settings.StrategyOptions["push_sessions"] = false
+	}
+	if opts.CheckpointRemote != "" {
+		if settings.StrategyOptions == nil {
+			settings.StrategyOptions = make(map[string]interface{})
+		}
+		settings.StrategyOptions["checkpoint_remote"] = opts.CheckpointRemote
+	}
+}
+
 func newEnableCmd() *cobra.Command {
 	var opts EnableOptions
 	var ignoreUntracked bool
@@ -203,21 +219,7 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 		settings.AbsoluteGitHookPath = true
 	}
 
-	// Set push_sessions option if --skip-push-sessions flag was provided
-	if opts.SkipPushSessions {
-		if settings.StrategyOptions == nil {
-			settings.StrategyOptions = make(map[string]interface{})
-		}
-		settings.StrategyOptions["push_sessions"] = false
-	}
-
-	// Set checkpoint_remote option if --checkpoint-remote flag was provided
-	if opts.CheckpointRemote != "" {
-		if settings.StrategyOptions == nil {
-			settings.StrategyOptions = make(map[string]interface{})
-		}
-		settings.StrategyOptions["checkpoint_remote"] = opts.CheckpointRemote
-	}
+	opts.applyStrategyOptions(settings)
 
 	// Determine which settings file to write to
 	// First run always creates settings.json (no prompt)
@@ -631,21 +633,7 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 		settings.AbsoluteGitHookPath = true
 	}
 
-	// Set push_sessions option if --skip-push-sessions flag was provided
-	if opts.SkipPushSessions {
-		if settings.StrategyOptions == nil {
-			settings.StrategyOptions = make(map[string]interface{})
-		}
-		settings.StrategyOptions["push_sessions"] = false
-	}
-
-	// Set checkpoint_remote option if --checkpoint-remote flag was provided
-	if opts.CheckpointRemote != "" {
-		if settings.StrategyOptions == nil {
-			settings.StrategyOptions = make(map[string]interface{})
-		}
-		settings.StrategyOptions["checkpoint_remote"] = opts.CheckpointRemote
-	}
+	opts.applyStrategyOptions(settings)
 
 	// Handle telemetry for non-interactive mode
 	// Note: if telemetry is nil (not configured), it defaults to disabled

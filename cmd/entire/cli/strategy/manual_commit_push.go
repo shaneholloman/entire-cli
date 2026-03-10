@@ -17,11 +17,15 @@ import (
 //   - push_sessions: false to disable automatic pushing
 //   - checkpoint_remote: URL to push checkpoint branches to a separate remote
 func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error {
-	// Resolve which remote to use for checkpoint branches
-	checkpointRemote := resolveCheckpointRemote(ctx, remote)
+	// Load settings once for both remote resolution and push_sessions check
+	ps := resolvePushSettings(ctx, remote)
+
+	if ps.pushDisabled {
+		return nil
+	}
 
 	_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
-	if err := pushSessionsBranchCommon(ctx, checkpointRemote, paths.MetadataBranchName); err != nil {
+	if err := pushBranchIfNeeded(ctx, ps.remote, paths.MetadataBranchName); err != nil {
 		pushCheckpointsSpan.RecordError(err)
 		pushCheckpointsSpan.End()
 		return err
@@ -29,7 +33,7 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	pushCheckpointsSpan.End()
 
 	_, pushTrailsSpan := perf.Start(ctx, "push_trails_branch")
-	err := PushTrailsBranch(ctx, checkpointRemote)
+	err := pushBranchIfNeeded(ctx, ps.remote, paths.TrailsBranchName)
 	pushTrailsSpan.RecordError(err)
 	pushTrailsSpan.End()
 	return err

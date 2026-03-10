@@ -14,6 +14,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateRemoteURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"ssh url", "git@github.com:org/repo.git", false},
+		{"https url", "https://github.com/org/repo.git", false},
+		{"local path", "/tmp/repo.git", false},
+		{"ssh with port", "ssh://git@host:22/repo.git", false},
+		{"space in url", "git@github.com:org/repo name.git", true},
+		{"tab in url", "git@github.com:org/repo\t.git", true},
+		{"newline in url", "git@github.com:org/repo\n.git", true},
+		{"semicolon", "git@host; rm -rf /", true},
+		{"pipe", "git@host | cat", true},
+		{"ampersand", "git@host & echo", true},
+		{"dollar", "git@host/$HOME", true},
+		{"backtick", "git@host/`whoami`", true},
+		{"backslash", "git@host\\path", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateRemoteURL(tt.url)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// Not parallel: uses t.Chdir()
 func TestEnsureGitRemote_CreatesNew(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -34,6 +71,7 @@ func TestEnsureGitRemote_CreatesNew(t *testing.T) {
 	assert.Contains(t, string(output), "https://example.com/repo.git")
 }
 
+// Not parallel: uses t.Chdir()
 func TestEnsureGitRemote_UpdatesExisting(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -60,6 +98,7 @@ func TestEnsureGitRemote_UpdatesExisting(t *testing.T) {
 	assert.Contains(t, string(output), "https://new.example.com/repo.git")
 }
 
+// Not parallel: uses t.Chdir()
 func TestEnsureGitRemote_NoOpWhenSameURL(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
@@ -85,6 +124,7 @@ func TestEnsureGitRemote_NoOpWhenSameURL(t *testing.T) {
 	assert.Contains(t, string(output), url)
 }
 
+// Not parallel: uses t.Chdir()
 func TestFetchBranchIfMissing_CreatesLocalFromRemote(t *testing.T) {
 	ctx := context.Background()
 
@@ -152,6 +192,7 @@ func TestFetchBranchIfMissing_CreatesLocalFromRemote(t *testing.T) {
 	assert.True(t, testutil.BranchExists(t, localDir, "entire/checkpoints/v1"))
 }
 
+// Not parallel: uses t.Chdir()
 func TestFetchBranchIfMissing_NoOpWhenBranchExistsLocally(t *testing.T) {
 	ctx := context.Background()
 
@@ -207,6 +248,7 @@ func TestFetchBranchIfMissing_NoOpWhenBranchExistsLocally(t *testing.T) {
 	require.NoError(t, fetchBranchIfMissing(ctx, "bad-remote", "entire/checkpoints/v1"))
 }
 
+// Not parallel: uses t.Chdir()
 func TestFetchBranchIfMissing_NoOpWhenBranchNotOnRemote(t *testing.T) {
 	ctx := context.Background()
 
@@ -238,7 +280,8 @@ func TestFetchBranchIfMissing_NoOpWhenBranchNotOnRemote(t *testing.T) {
 	assert.False(t, testutil.BranchExists(t, localDir, "entire/checkpoints/v1"))
 }
 
-func TestResolveCheckpointRemote_NoConfig(t *testing.T) {
+// Not parallel: uses t.Chdir()
+func TestResolvePushSettings_NoConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")
@@ -256,12 +299,36 @@ func TestResolveCheckpointRemote_NoConfig(t *testing.T) {
 
 	t.Chdir(tmpDir)
 
-	ctx := t.Context()
-	result := resolveCheckpointRemote(ctx, "origin")
-	assert.Equal(t, "origin", result)
+	ps := resolvePushSettings(t.Context(), "origin")
+	assert.Equal(t, "origin", ps.remote)
+	assert.False(t, ps.pushDisabled)
 }
 
-func TestResolveCheckpointRemote_UnreachableRemote_StillReturnsCheckpointRemote(t *testing.T) {
+// Not parallel: uses t.Chdir()
+func TestResolvePushSettings_PushDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(entireDir, "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"push_sessions": false}}`),
+		0o644,
+	))
+
+	t.Chdir(tmpDir)
+
+	ps := resolvePushSettings(t.Context(), "origin")
+	assert.Equal(t, "origin", ps.remote)
+	assert.True(t, ps.pushDisabled)
+}
+
+// Not parallel: uses t.Chdir()
+func TestResolvePushSettings_UnreachableRemote_StillReturnsCheckpointRemote(t *testing.T) {
 	tmpDir := t.TempDir()
 	testutil.InitRepo(t, tmpDir)
 	testutil.WriteFile(t, tmpDir, "f.txt", "init")
@@ -279,13 +346,14 @@ func TestResolveCheckpointRemote_UnreachableRemote_StillReturnsCheckpointRemote(
 
 	t.Chdir(tmpDir)
 
-	ctx := t.Context()
-	result := resolveCheckpointRemote(ctx, "origin")
-	// Should still return the checkpoint remote name - the push itself will handle the failure
-	assert.Equal(t, checkpointRemoteName, result)
+	ps := resolvePushSettings(t.Context(), "origin")
+	// Should still return the checkpoint remote name — the push itself handles failures
+	assert.Equal(t, checkpointRemoteName, ps.remote)
+	assert.False(t, ps.pushDisabled)
 }
 
-func TestResolveCheckpointRemote_ReachableRemote(t *testing.T) {
+// Not parallel: uses t.Chdir()
+func TestResolvePushSettings_ReachableRemote(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a bare remote repo
@@ -311,8 +379,9 @@ func TestResolveCheckpointRemote_ReachableRemote(t *testing.T) {
 
 	t.Chdir(localDir)
 
-	result := resolveCheckpointRemote(ctx, "origin")
-	assert.Equal(t, checkpointRemoteName, result)
+	ps := resolvePushSettings(ctx, "origin")
+	assert.Equal(t, checkpointRemoteName, ps.remote)
+	assert.False(t, ps.pushDisabled)
 
 	// Verify the git remote was created
 	getURL := exec.CommandContext(ctx, "git", "remote", "get-url", checkpointRemoteName)
