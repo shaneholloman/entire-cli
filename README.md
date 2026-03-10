@@ -175,8 +175,9 @@ Multiple AI sessions can run on the same commit. If you start a second session w
 | `--force`, `-f`        | Force reinstall hooks (removes existing Entire hooks first)           |
 | `--local`              | Write settings to `settings.local.json` instead of `settings.json`    |
 | `--project`            | Write settings to `settings.json` even if it already exists           |
-| `--skip-push-sessions` | Disable automatic pushing of session logs on git push                 |
-| `--telemetry=false`    | Disable anonymous usage analytics                                     |
+| `--skip-push-sessions`       | Disable automatic pushing of session logs on git push                 |
+| `--checkpoint-remote <url>`  | Push checkpoint branches to a separate git remote (SSH or HTTPS URL)  |
+| `--telemetry=false`          | Disable anonymous usage analytics                                     |
 
 **Examples:**
 
@@ -215,13 +216,14 @@ Personal overrides, gitignored by default:
 
 ### Configuration Options
 
-| Option                               | Values                           | Description                                          |
-| ------------------------------------ | -------------------------------- | ---------------------------------------------------- |
-| `enabled`                            | `true`, `false`                  | Enable/disable Entire                                |
-| `log_level`                          | `debug`, `info`, `warn`, `error` | Logging verbosity                                    |
-| `strategy_options.push_sessions`     | `true`, `false`                  | Auto-push `entire/checkpoints/v1` branch on git push |
-| `strategy_options.summarize.enabled` | `true`, `false`                  | Auto-generate AI summaries at commit time            |
-| `telemetry`                          | `true`, `false`                  | Send anonymous usage statistics to Posthog           |
+| Option                                | Values                           | Description                                                        |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| `enabled`                             | `true`, `false`                  | Enable/disable Entire                                              |
+| `log_level`                           | `debug`, `info`, `warn`, `error` | Logging verbosity                                                  |
+| `strategy_options.push_sessions`      | `true`, `false`                  | Auto-push `entire/checkpoints/v1` branch on git push               |
+| `strategy_options.checkpoint_remote`  | Git URL (SSH or HTTPS)           | Push checkpoint branches to a separate remote (see below)          |
+| `strategy_options.summarize.enabled`  | `true`, `false`                  | Auto-generate AI summaries at commit time                          |
+| `telemetry`                           | `true`, `false`                  | Send anonymous usage statistics to Posthog                         |
 
 ### Agent Hook Configuration
 
@@ -236,6 +238,31 @@ Each agent stores its hook configuration in its own directory. When you run `ent
 | Copilot CLI | `.github/hooks/entire.json`   | JSON hooks config |
 
 You can enable multiple agents at the same time — each agent's hooks are independent. Entire detects which agents are active by checking for installed hooks, not by a setting in `settings.json`.
+
+### Checkpoint Remote
+
+By default, Entire pushes `entire/checkpoints/v1` and `entire/trails/v1` branches to the same remote as your code. If you want to push checkpoint data to a separate remote (e.g., a private repo for public projects, or an internal server), configure `checkpoint_remote` with a full git URL:
+
+```json
+{
+  "strategy_options": {
+    "checkpoint_remote": "git@github.com:myorg/checkpoints-private.git"
+  }
+}
+```
+
+Or via the CLI:
+
+```bash
+entire enable --checkpoint-remote git@github.com:myorg/checkpoints-private.git
+```
+
+Both SSH and HTTPS URLs are supported. Entire will:
+
+- Create a git remote named `entire-checkpoints` pointing to the configured URL
+- Test reachability before each push (with a 10-second timeout)
+- Fetch and set up the branch locally if it exists on the remote but not locally
+- Fall back to the default push remote if the checkpoint remote is unreachable
 
 ### Auto-Summarization
 
