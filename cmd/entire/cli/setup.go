@@ -48,13 +48,6 @@ func runSetupFlow(ctx context.Context, w io.Writer) error {
 	// Discover external agent plugins so they appear in agent selection.
 	external.DiscoverAndRegister(ctx)
 
-	// Warn if repo has no commits yet
-	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
-		fmt.Fprintln(w, "Note: This repository has no commits yet. Entire will be configured, but")
-		fmt.Fprintln(w, "session checkpoints won't work until you create your first commit.")
-		fmt.Fprintln(w)
-	}
-
 	agents, err := detectOrSelectAgent(ctx, w, nil)
 	if err != nil {
 		return fmt.Errorf("agent selection failed: %w", err)
@@ -499,6 +492,14 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 
 	fmt.Fprintln(w, "\nReady.")
 
+	// Note about empty repos at the end, after setup is complete
+	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Note: This repository has no commits yet. To get started, commit the")
+		fmt.Fprintln(w, "configuration files (e.g. .entire/, .claude/) — session checkpoints")
+		fmt.Fprintln(w, "require at least one commit.")
+	}
+
 	return nil
 }
 
@@ -702,8 +703,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	}
 
 	if !hasInstalledHooks && len(detected) == 0 {
-		fmt.Fprintln(w, "No agent configuration detected (e.g., "+strings.Join(agent.StringList(), ", ")+").")
-		fmt.Fprintln(w, "This is normal - some agents don't require a config directory.")
+		fmt.Fprintln(w, "Select the agents you want to use:")
 		fmt.Fprintln(w)
 	}
 
@@ -929,6 +929,13 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	}
 
 	fmt.Fprintln(w, "\nReady.")
+
+	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Note: This repository has no commits yet. To get started, commit the")
+		fmt.Fprintln(w, "configuration files (e.g. .entire/, .claude/) — session checkpoints")
+		fmt.Fprintln(w, "require at least one commit.")
+	}
 
 	return nil
 }
