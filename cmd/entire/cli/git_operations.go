@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -246,7 +247,9 @@ func findNewUntrackedFiles(current, preExisting []string) []string {
 }
 
 // BranchExistsOnRemote checks if a branch exists on the origin remote.
-// Returns true if the branch is tracked on origin, false otherwise.
+// First checks local remote-tracking refs, then queries the actual remote
+// via git ls-remote in case local refs are stale (e.g., after a fresh clone
+// that didn't fetch all branches).
 func BranchExistsOnRemote(ctx context.Context, branchName string) (bool, error) {
 	repo, err := openRepository(ctx)
 	if err != nil {
@@ -255,14 +258,25 @@ func BranchExistsOnRemote(ctx context.Context, branchName string) (bool, error) 
 
 	// Check for remote reference: refs/remotes/origin/<branchName>
 	_, err = repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
-	if err != nil {
-		if errors.Is(err, plumbing.ErrReferenceNotFound) {
-			return false, nil
-		}
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, fmt.Errorf("failed to check remote branch: %w", err)
 	}
 
-	return true, nil
+	// Local remote-tracking ref not found — query the actual remote.
+	lsCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	lsCmd := exec.CommandContext(lsCtx, "git", "ls-remote", "--heads", "origin", "refs/heads/"+branchName)
+	output, lsErr := lsCmd.Output()
+	if lsErr != nil {
+		// ls-remote failed (no network, no remote, etc.) — treat as not found
+		return false, nil
+	}
+
+	return len(bytes.TrimSpace(output)) > 0, nil
 }
 
 // BranchExistsLocally checks if a local branch exists.

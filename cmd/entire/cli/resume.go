@@ -177,9 +177,9 @@ func resumeFromCurrentBranch(ctx context.Context, branchName string, force bool)
 	// Get metadata branch tree for lookups (reuse from resolveLatestCheckpoint if available)
 	if metadataTree == nil {
 		var err error
-		metadataTree, err = strategy.GetMetadataBranchTree(repo)
+		metadataTree, err = getMetadataTree(ctx, repo)
 		if err != nil {
-			// No local metadata branch, check if remote has it
+			// All fetch attempts failed, check if remote has it
 			return checkRemoteMetadata(ctx, repo, checkpointID)
 		}
 	}
@@ -218,20 +218,22 @@ func resolveLatestCheckpoint(ctx context.Context, repo *git.Repository, checkpoi
 	return latest.CheckpointID, metadataTree, nil
 }
 
-// getMetadataTree returns the metadata branch tree, trying local first,
-// then treeless fetch, then full fetch, then remote tree directly.
+// getMetadataTree returns the metadata branch tree, trying a treeless fetch
+// first to ensure local data is up-to-date, then falling back to local,
+// then full fetch, then remote tree directly.
 func getMetadataTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
-	metadataTree, err := strategy.GetMetadataBranchTree(repo)
-	if err == nil {
-		return metadataTree, nil
-	}
-
-	// Try treeless fetch first (only downloads commit + tree objects, no blobs)
+	// Always try treeless fetch first to ensure local branch is up-to-date
 	if fetchErr := FetchMetadataTreeOnly(ctx); fetchErr == nil {
-		metadataTree, err = strategy.GetMetadataBranchTree(repo)
+		metadataTree, err := strategy.GetMetadataBranchTree(repo)
 		if err == nil {
 			return metadataTree, nil
 		}
+	}
+
+	// Try local (may have been set by a prior fetch or push)
+	metadataTree, err := strategy.GetMetadataBranchTree(repo)
+	if err == nil {
+		return metadataTree, nil
 	}
 
 	// Fallback: full fetch from remote
