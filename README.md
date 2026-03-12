@@ -176,7 +176,7 @@ Multiple AI sessions can run on the same commit. If you start a second session w
 | `--local`              | Write settings to `settings.local.json` instead of `settings.json`    |
 | `--project`            | Write settings to `settings.json` even if it already exists           |
 | `--skip-push-sessions`       | Disable automatic pushing of session logs on git push                 |
-| `--checkpoint-remote <url>`  | Push checkpoint branches to a separate git remote (SSH or HTTPS URL)  |
+| `--checkpoint-remote <provider:owner/repo>` | Push checkpoint branches to a separate repo (e.g., `github:org/checkpoints-repo`) |
 | `--telemetry=false`          | Disable anonymous usage analytics                                     |
 
 **Examples:**
@@ -221,7 +221,7 @@ Personal overrides, gitignored by default:
 | `enabled`                             | `true`, `false`                  | Enable/disable Entire                                              |
 | `log_level`                           | `debug`, `info`, `warn`, `error` | Logging verbosity                                                  |
 | `strategy_options.push_sessions`      | `true`, `false`                  | Auto-push `entire/checkpoints/v1` branch on git push               |
-| `strategy_options.checkpoint_remote`  | Git URL (SSH or HTTPS)           | Push checkpoint branches to a separate remote (see below)          |
+| `strategy_options.checkpoint_remote`  | `{"provider": "github", "repo": "org/repo"}` | Push checkpoint branches to a separate repo (see below) |
 | `strategy_options.summarize.enabled`  | `true`, `false`                  | Auto-generate AI summaries at commit time                          |
 | `telemetry`                           | `true`, `false`                  | Send anonymous usage statistics to Posthog                         |
 
@@ -241,12 +241,15 @@ You can enable multiple agents at the same time — each agent's hooks are indep
 
 ### Checkpoint Remote
 
-By default, Entire pushes `entire/checkpoints/v1` and `entire/trails/v1` branches to the same remote as your code. If you want to push checkpoint data to a separate remote (e.g., a private repo for public projects, or an internal server), configure `checkpoint_remote` with a full git URL:
+By default, Entire pushes `entire/checkpoints/v1` to the same remote as your code. If you want to push checkpoint data to a separate repo (e.g., a private repo for public projects), configure `checkpoint_remote` with a structured provider and repo:
 
 ```json
 {
   "strategy_options": {
-    "checkpoint_remote": "git@github.com:myorg/checkpoints-private.git"
+    "checkpoint_remote": {
+      "provider": "github",
+      "repo": "myorg/checkpoints-private"
+    }
   }
 }
 ```
@@ -254,15 +257,15 @@ By default, Entire pushes `entire/checkpoints/v1` and `entire/trails/v1` branche
 Or via the CLI:
 
 ```bash
-entire enable --checkpoint-remote git@github.com:myorg/checkpoints-private.git
+entire enable --checkpoint-remote github:myorg/checkpoints-private
 ```
 
-Both SSH and HTTPS URLs are supported. Entire will:
+Entire derives the git URL automatically using the same protocol (SSH or HTTPS) as your push remote. It will:
 
-- Create a git remote named `entire-checkpoints` pointing to the configured URL
-- Fetch and set up the branch locally if it exists on the remote but not locally (one-time)
-- Push checkpoint branches to that remote instead of your default push remote
-- If the remote is unreachable, the push warns and continues without blocking your main push
+- Fetch the checkpoint branch locally if it exists on the remote but not locally (one-time)
+- Push `entire/checkpoints/v1` to the checkpoint repo instead of your default push remote
+- Skip pushing if a fork is detected (push remote owner differs from checkpoint repo owner)
+- If the remote is unreachable, warn and continue without blocking your main push
 
 ### Auto-Summarization
 
