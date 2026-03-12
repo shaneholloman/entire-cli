@@ -14,7 +14,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
-	github.com/zricethezav/gitleaks/v8 v8.30.0
+	github.com/zricethezav/gitleaks/v8 v8.30.1
 	golang.org/x/mod v0.34.0
 	golang.org/x/term v0.41.0
 )
