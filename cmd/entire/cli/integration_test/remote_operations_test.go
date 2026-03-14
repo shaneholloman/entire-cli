@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -816,7 +815,7 @@ func createOrphanBranch(t *testing.T, repoDir, branchName, fileName, content str
 func fileExistsOnRemoteBranch(t *testing.T, bareDir, filePath string) bool {
 	t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), "git", "cat-file", "-t", paths.MetadataBranchName+":"+filePath)
+	cmd := exec.CommandContext(t.Context(), "git", "cat-file", "-t", paths.MetadataBranchName+":"+filePath)
 	cmd.Dir = bareDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
@@ -826,7 +825,7 @@ func fileExistsOnRemoteBranch(t *testing.T, bareDir, filePath string) bool {
 func getRemoteBranchHash(t *testing.T, bareDir, branchName string) string {
 	t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", "refs/heads/"+branchName)
+	cmd := exec.CommandContext(t.Context(), "git", "rev-parse", "refs/heads/"+branchName)
 	cmd.Dir = bareDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()
@@ -843,7 +842,7 @@ func getRemoteBranchHash(t *testing.T, bareDir, branchName string) string {
 func listCheckpointsInDir(t *testing.T, repoDir string) []string {
 	t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), "git", "ls-tree", "-r", "--name-only", paths.MetadataBranchName)
+	cmd := exec.CommandContext(t.Context(), "git", "ls-tree", "-r", "--name-only", paths.MetadataBranchName)
 	cmd.Dir = repoDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	output, err := cmd.Output()

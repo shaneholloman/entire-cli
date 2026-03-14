@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1627,13 +1626,15 @@ func (env *TestEnv) SetupBareRemote() string {
 func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 	env.T.Helper()
 
+	ctx := env.T.Context()
+
 	bareDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(bareDir); err == nil {
 		bareDir = resolved
 	}
 
 	// Initialize bare repo
-	cmd := exec.CommandContext(context.Background(), "git", "init", "--bare")
+	cmd := exec.CommandContext(ctx, "git", "init", "--bare")
 	cmd.Dir = bareDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -1641,7 +1642,7 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 	}
 
 	// Add as remote
-	cmd = exec.CommandContext(context.Background(), "git", "remote", "add", remoteName, bareDir)
+	cmd = exec.CommandContext(ctx, "git", "remote", "add", remoteName, bareDir)
 	cmd.Dir = env.RepoDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -1649,7 +1650,7 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 	}
 
 	// Push HEAD to the remote
-	cmd = exec.CommandContext(context.Background(), "git", "push", "-u", remoteName, "HEAD")
+	cmd = exec.CommandContext(ctx, "git", "push", "--no-verify", "-u", remoteName, "HEAD")
 	cmd.Dir = env.RepoDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -1664,6 +1665,8 @@ func (env *TestEnv) SetupNamedBareRemote(remoteName string) string {
 // The clone checks out the same branch as the current env's HEAD.
 func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 	env.T.Helper()
+
+	ctx := env.T.Context()
 
 	cloneDir := env.T.TempDir()
 	if resolved, err := filepath.EvalSymlinks(cloneDir); err == nil {
@@ -1681,7 +1684,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 		cloneArgs = append(cloneArgs, "--branch", currentBranch)
 	}
 	cloneArgs = append(cloneArgs, bareDir, cloneDir)
-	cmd := exec.CommandContext(context.Background(), "git", cloneArgs...)
+	cmd := exec.CommandContext(ctx, "git", cloneArgs...)
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("failed to clone from %s: %v\n%s", bareDir, err, output)
@@ -1693,7 +1696,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 		{"user.email", "test@example.com"},
 		{"commit.gpgsign", "false"},
 	} {
-		cmd = exec.CommandContext(context.Background(), "git", "config", kv[0], kv[1])
+		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
 		cmd.Dir = cloneDir
 		cmd.Env = testutil.GitIsolatedEnv()
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -1732,7 +1735,7 @@ func (env *TestEnv) CloneFrom(bareDir string) *TestEnv {
 func (env *TestEnv) BranchExistsOnRemote(bareDir, branchName string) bool {
 	env.T.Helper()
 
-	cmd := exec.CommandContext(context.Background(), "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+	cmd := exec.CommandContext(env.T.Context(), "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
 	cmd.Dir = bareDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	return cmd.Run() == nil
@@ -1763,7 +1766,7 @@ func (env *TestEnv) PatchSettings(extra map[string]any) {
 	}
 	out = append(out, '\n')
 
-	if err := os.WriteFile(settingsPath, out, 0o600); err != nil {
+	if err := os.WriteFile(settingsPath, out, 0o644); err != nil { //nolint:gosec // G306: consistent with other settings writes in testenv.go
 		env.T.Fatalf("failed to write settings: %v", err)
 	}
 }
@@ -1772,24 +1775,11 @@ func (env *TestEnv) PatchSettings(extra map[string]any) {
 func (env *TestEnv) GitPush(remote, refSpec string) {
 	env.T.Helper()
 
-	cmd := exec.CommandContext(context.Background(), "git", "push", "--no-verify", remote, refSpec)
+	cmd := exec.CommandContext(env.T.Context(), "git", "push", "--no-verify", remote, refSpec)
 	cmd.Dir = env.RepoDir
 	cmd.Env = testutil.GitIsolatedEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		env.T.Fatalf("git push %s %s failed: %v\n%s", remote, refSpec, err, output)
-	}
-}
-
-// GitFetch fetches from a remote. Fails the test on error.
-func (env *TestEnv) GitFetch(remote string, args ...string) {
-	env.T.Helper()
-
-	cmdArgs := append([]string{"fetch", remote}, args...)
-	cmd := exec.CommandContext(context.Background(), "git", cmdArgs...)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("git fetch %s failed: %v\n%s", remote, err, output)
 	}
 }
 
@@ -1806,7 +1796,7 @@ func (env *TestEnv) RunPrePush(remote string) {
 func (env *TestEnv) RunPrePushWithError(remote string) error {
 	env.T.Helper()
 
-	cmd := exec.CommandContext(context.Background(), getTestBinary(), "hooks", "git", "pre-push", remote)
+	cmd := exec.CommandContext(env.T.Context(), getTestBinary(), "hooks", "git", "pre-push", remote)
 	cmd.Dir = env.RepoDir
 	cmd.Env = env.cliEnv()
 	cmd.Stdin = nil
@@ -1826,7 +1816,7 @@ func (env *TestEnv) FetchMetadataBranch(remoteURL string) {
 
 	branchName := paths.MetadataBranchName
 	refSpec := "+refs/heads/" + branchName + ":refs/heads/" + branchName
-	cmd := exec.CommandContext(context.Background(), "git", "fetch", "--no-tags", remoteURL, refSpec)
+	cmd := exec.CommandContext(env.T.Context(), "git", "fetch", "--no-tags", remoteURL, refSpec)
 	cmd.Dir = env.RepoDir
 	cmd.Env = testutil.GitIsolatedEnv()
 

@@ -154,7 +154,9 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
 	initCmd.Dir = bareDir
 	initCmd.Env = testutil.GitIsolatedEnv()
-	require.NoError(t, initCmd.Run())
+	if output, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare failed: %v\n%s", err, output)
+	}
 
 	t.Chdir(tmpDir)
 
@@ -166,5 +168,7 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 	verifyCmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+paths.MetadataBranchName)
 	verifyCmd.Dir = bareDir
 	verifyCmd.Env = testutil.GitIsolatedEnv()
-	assert.NoError(t, verifyCmd.Run(), "branch should exist on bare remote after push")
+	if output, err := verifyCmd.CombinedOutput(); err != nil {
+		t.Errorf("branch should exist on bare remote after push: %v\n%s", err, output)
+	}
 }
