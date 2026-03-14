@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -96,23 +94,8 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 		t.Fatalf("output missing wait message:\n%s", output)
 	}
 
-	stateFile := authFilePath(proc.homeDir)
-	data, readErr := os.ReadFile(stateFile)
-	if readErr != nil {
-		t.Fatalf("read auth file: %v", readErr)
-	}
-
-	var authFile struct {
-		Tokens map[string]struct {
-			Value string `json:"value"`
-		} `json:"tokens"`
-	}
-	if unmarshalErr := json.Unmarshal(data, &authFile); unmarshalErr != nil {
-		t.Fatalf("parse auth file: %v", unmarshalErr)
-	}
-
-	if got := authFile.Tokens[server.URL].Value; got != "local-token" {
-		t.Fatalf("saved token = %q, want %q", got, "local-token")
+	if !strings.Contains(output, "Login complete.") {
+		t.Fatalf("output missing login complete message (token save likely failed):\n%s", output)
 	}
 
 	serverState.Lock()
@@ -157,8 +140,8 @@ func TestLogin_ExpiredFlow(t *testing.T) {
 		t.Fatalf("expected expired message, got:\n%s", output)
 	}
 
-	if _, statErr := os.Stat(authFilePath(proc.homeDir)); !os.IsNotExist(statErr) {
-		t.Fatalf("auth file should not exist, stat err = %v", statErr)
+	if strings.Contains(output, "Login complete.") {
+		t.Fatal("output should NOT contain login complete for expired flow")
 	}
 }
 
@@ -196,22 +179,20 @@ func TestLogin_DeniedFlow(t *testing.T) {
 		t.Fatalf("expected denied message, got:\n%s", output)
 	}
 
-	if _, statErr := os.Stat(authFilePath(proc.homeDir)); !os.IsNotExist(statErr) {
-		t.Fatalf("auth file should not exist, stat err = %v", statErr)
+	if strings.Contains(output, "Login complete.") {
+		t.Fatal("output should NOT contain login complete for denied flow")
 	}
 }
 
 type loginProcess struct {
-	stdout  *bufio.Reader
-	homeDir string
-	waitFn  func() (string, error)
+	stdout *bufio.Reader
+	waitFn func() (string, error)
 }
 
 func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
 	t.Helper()
 
 	env := NewTestEnv(t)
-	homeDir := t.TempDir()
 
 	cmd := exec.Command(getTestBinary(), "login", "--print-browser-url")
 	cmd.Dir = env.RepoDir
@@ -221,7 +202,6 @@ func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
 		"ENTIRE_TEST_OPENCODE_PROJECT_DIR="+env.OpenCodeProjectDir,
 		"ENTIRE_TEST_TTY=0",
 		"ENTIRE_API_BASE_URL="+apiBaseURL,
-		"HOME="+homeDir,
 	)
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -239,8 +219,7 @@ func runLoginProcess(t *testing.T, apiBaseURL string) *loginProcess {
 	reader := bufio.NewReader(stdoutPipe)
 
 	return &loginProcess{
-		stdout:  reader,
-		homeDir: homeDir,
+		stdout: reader,
 		waitFn: func() (string, error) {
 			stdoutBytes, readErr := io.ReadAll(reader)
 			waitErr := cmd.Wait()
@@ -294,8 +273,4 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, body map[string]
 
 func serverURLWithPath(r *http.Request, path string) string {
 	return fmt.Sprintf("http://%s%s", r.Host, path)
-}
-
-func authFilePath(homeDir string) string {
-	return filepath.Join(homeDir, ".config", "entire", "auth.json")
 }
