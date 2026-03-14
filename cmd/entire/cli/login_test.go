@@ -9,8 +9,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
 
-// mockPoller implements deviceAuthPoller for unit tests.
-type mockPoller struct {
+// mockClient implements deviceAuthClient for unit tests.
+type mockClient struct {
 	responses []pollResponse
 	calls     int
 }
@@ -20,7 +20,15 @@ type pollResponse struct {
 	err    error
 }
 
-func (m *mockPoller) PollDeviceAuth(_ context.Context, _ string) (*auth.DeviceAuthPoll, error) {
+func (m *mockClient) StartDeviceAuth(_ context.Context) (*auth.DeviceAuthStart, error) {
+	return nil, errors.New("not implemented in mock")
+}
+
+func (m *mockClient) BaseURL() string {
+	return "http://test"
+}
+
+func (m *mockClient) PollDeviceAuth(_ context.Context, _ string) (*auth.DeviceAuthPoll, error) {
 	if m.calls >= len(m.responses) {
 		return nil, errors.New("unexpected poll call")
 	}
@@ -32,7 +40,7 @@ func (m *mockPoller) PollDeviceAuth(_ context.Context, _ string) (*auth.DeviceAu
 func TestWaitForApproval_ImmediateSuccess(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-123"}},
 	}}
 
@@ -51,7 +59,7 @@ func TestWaitForApproval_ImmediateSuccess(t *testing.T) {
 func TestWaitForApproval_PendingThenSuccess(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "authorization_pending"}},
 		{result: &auth.DeviceAuthPoll{Error: "authorization_pending"}},
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-456"}},
@@ -72,7 +80,7 @@ func TestWaitForApproval_PendingThenSuccess(t *testing.T) {
 func TestWaitForApproval_AccessDenied(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "access_denied"}},
 	}}
 
@@ -85,7 +93,7 @@ func TestWaitForApproval_AccessDenied(t *testing.T) {
 func TestWaitForApproval_ExpiredToken(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "expired_token"}},
 	}}
 
@@ -98,7 +106,7 @@ func TestWaitForApproval_ExpiredToken(t *testing.T) {
 func TestWaitForApproval_UnknownError(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "server_error"}},
 	}}
 
@@ -111,7 +119,7 @@ func TestWaitForApproval_UnknownError(t *testing.T) {
 func TestWaitForApproval_EmptyTokenOnSuccess(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{AccessToken: ""}},
 	}}
 
@@ -124,7 +132,7 @@ func TestWaitForApproval_EmptyTokenOnSuccess(t *testing.T) {
 func TestWaitForApproval_SlowDown(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "slow_down"}},
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-slow"}},
 	}}
@@ -143,7 +151,7 @@ func TestWaitForApproval_ExpiresInClamped(t *testing.T) {
 
 	// expiresIn=0 should use maxExpiresIn, not panic or return immediately.
 	// We verify by checking the function still polls (doesn't error on first call).
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-clamp"}},
 	}}
 
@@ -159,7 +167,7 @@ func TestWaitForApproval_ExpiresInClamped(t *testing.T) {
 func TestWaitForApproval_NegativeExpiresInClamped(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-neg"}},
 	}}
 
@@ -175,7 +183,7 @@ func TestWaitForApproval_NegativeExpiresInClamped(t *testing.T) {
 func TestWaitForApproval_TransientErrorRetry(t *testing.T) {
 	t.Parallel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{err: errors.New("connection refused")},
 		{err: errors.New("timeout")},
 		{result: &auth.DeviceAuthPoll{AccessToken: "tok-retry"}},
@@ -200,7 +208,7 @@ func TestWaitForApproval_TransientErrorExhausted(t *testing.T) {
 	for range maxTransientErrors + 1 {
 		responses = append(responses, pollResponse{err: errors.New("server error")})
 	}
-	poller := &mockPoller{responses: responses}
+	poller := &mockClient{responses: responses}
 
 	_, err := waitForApproval(context.Background(), poller, "device-1", 60, 0)
 	if err == nil || !strings.Contains(err.Error(), "consecutive failures") {
@@ -224,7 +232,7 @@ func TestWaitForApproval_TransientErrorCounterResets(t *testing.T) {
 		responses = append(responses, pollResponse{err: errors.New("blip")})
 	}
 	responses = append(responses, pollResponse{result: &auth.DeviceAuthPoll{AccessToken: "tok-reset"}})
-	poller := &mockPoller{responses: responses}
+	poller := &mockClient{responses: responses}
 
 	token, err := waitForApproval(context.Background(), poller, "device-1", 60, 0)
 	if err != nil {
@@ -241,7 +249,7 @@ func TestWaitForApproval_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	poller := &mockPoller{responses: []pollResponse{
+	poller := &mockClient{responses: []pollResponse{
 		{result: &auth.DeviceAuthPoll{Error: "authorization_pending"}},
 	}}
 

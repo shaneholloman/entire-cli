@@ -22,9 +22,11 @@ const maxTransientErrors = 5
 
 var browserOpener = openBrowser
 
-// deviceAuthPoller abstracts the poll call so waitForApproval can be unit-tested.
-type deviceAuthPoller interface {
+// deviceAuthClient abstracts the auth client so runLogin and waitForApproval can be unit-tested.
+type deviceAuthClient interface {
+	StartDeviceAuth(ctx context.Context) (*auth.DeviceAuthStart, error)
 	PollDeviceAuth(ctx context.Context, deviceCode string) (*auth.DeviceAuthPoll, error)
+	BaseURL() string
 }
 
 func newLoginCmd() *cobra.Command {
@@ -34,7 +36,8 @@ func newLoginCmd() *cobra.Command {
 		Use:   "login",
 		Short: "Log in to Entire",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runLogin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), printBrowserURL)
+			client := auth.NewClient(nil)
+			return runLogin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), client, printBrowserURL)
 		},
 	}
 
@@ -43,9 +46,7 @@ func newLoginCmd() *cobra.Command {
 	return cmd
 }
 
-func runLogin(ctx context.Context, outW, errW io.Writer, printBrowserURL bool) error {
-	client := auth.NewClient(nil)
-
+func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, printBrowserURL bool) error {
 	start, err := client.StartDeviceAuth(ctx)
 	if err != nil {
 		return fmt.Errorf("start login: %w", err)
@@ -86,11 +87,12 @@ func runLogin(ctx context.Context, outW, errW io.Writer, printBrowserURL bool) e
 		return fmt.Errorf("save auth token: %w", err)
 	}
 
-	fmt.Fprintf(outW, "Login complete. Saved token to %s\n", store.FilePath())
+	fmt.Fprintln(outW, "Login complete.")
+	fmt.Fprintf(errW, "Token saved to %s\n", store.FilePath())
 	return nil
 }
 
-func waitForApproval(ctx context.Context, poller deviceAuthPoller, deviceCode string, expiresIn, interval int) (string, error) {
+func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode string, expiresIn, interval int) (string, error) {
 	expiry := time.Duration(expiresIn) * time.Second
 	if expiry <= 0 || expiry > maxExpiresIn {
 		expiry = maxExpiresIn
