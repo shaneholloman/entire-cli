@@ -357,10 +357,17 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// update session state after SaveStep (which may reinitialize state).
 	var backfilledPrompt string
 	promptPath := filepath.Join(sessionDirAbs, paths.PromptFileName)
-	existingPrompt, _ := os.ReadFile(promptPath) //nolint:gosec,errcheck // missing file means empty prompt — should backfill
-	if len(existingPrompt) == 0 {
+	existingPrompt, readPromptErr := os.ReadFile(promptPath) //nolint:gosec // file content is safe session metadata
+	if readPromptErr != nil && !os.IsNotExist(readPromptErr) {
+		logging.Warn(logCtx, "failed to read prompt.txt, skipping backfill",
+			slog.String("error", readPromptErr.Error()))
+	} else if len(existingPrompt) == 0 {
 		if extractor, ok := agent.AsPromptExtractor(ag); ok {
-			if prompts, extractErr := extractor.ExtractPrompts(transcriptRef, transcriptOffset); extractErr == nil && len(prompts) > 0 {
+			prompts, extractErr := extractor.ExtractPrompts(transcriptRef, transcriptOffset)
+			if extractErr != nil {
+				logging.Warn(logCtx, "failed to extract prompts from transcript",
+					slog.String("error", extractErr.Error()))
+			} else if len(prompts) > 0 {
 				content := strings.Join(prompts, "\n\n---\n\n")
 				if writeErr := os.WriteFile(promptPath, []byte(content), 0o600); writeErr != nil {
 					logging.Warn(logCtx, "failed to backfill prompt.txt from transcript",
@@ -368,8 +375,8 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 				} else {
 					logging.Debug(logCtx, "backfilled prompt.txt from transcript",
 						slog.Int("prompt_count", len(prompts)))
+					backfilledPrompt = prompts[len(prompts)-1]
 				}
-				backfilledPrompt = prompts[len(prompts)-1]
 			}
 		}
 	}
@@ -402,11 +409,16 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	}
 	extractSpan.End()
 
-	// Generate commit message from last prompt (read from session state, set at TurnStart)
+	// Generate commit message from last prompt (read from session state, set at TurnStart).
+	// In exec mode, session state LastPrompt may be empty because UserPromptSubmit never fires.
+	// Fall back to backfilledPrompt extracted from the transcript.
 	_, commitMsgSpan := perf.Start(ctx, "generate_commit_message")
 	lastPrompt := ""
 	if sessionState, stateErr := strategy.LoadSessionState(ctx, sessionID); stateErr == nil && sessionState != nil {
 		lastPrompt = sessionState.LastPrompt
+	}
+	if lastPrompt == "" && backfilledPrompt != "" {
+		lastPrompt = backfilledPrompt
 	}
 	commitMessage := generateCommitMessage(lastPrompt, ag.Type())
 	logging.Debug(logCtx, "using commit message",
@@ -458,6 +470,18 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	// if it exists in HEAD with the same content as the working tree.
 	relModifiedFiles = filterToUncommittedFiles(ctx, relModifiedFiles, repoRoot)
 	normalizeSpan.End()
+
+	// Backfill session state LastPrompt early so `entire status` shows the prompt
+	// even when no files were modified (before the early return below).
+	if backfilledPrompt != "" {
+		if state, stateErr := strategy.LoadSessionState(ctx, sessionID); stateErr == nil && state != nil && state.LastPrompt == "" {
+			state.LastPrompt = backfilledPrompt
+			if saveErr := strategy.SaveSessionState(ctx, state); saveErr != nil {
+				logging.Warn(logCtx, "failed to backfill LastPrompt in session state",
+					slog.String("error", saveErr.Error()))
+			}
+		}
+	}
 
 	// Check if there are any changes
 	totalChanges := len(relModifiedFiles) + len(relNewFiles) + len(relDeletedFiles)

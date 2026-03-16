@@ -635,7 +635,7 @@ func TestHandleLifecycleTurnStart_WritesPromptContent(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	_ = handleLifecycleTurnStart(context.Background(), ag, event) //nolint:errcheck // test only cares about side effects
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
 
 	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err := paths.AbsPath(context.Background(), sessionDir)
@@ -681,7 +681,7 @@ func TestHandleLifecycleTurnEnd_BackfillsPromptFromTranscript(t *testing.T) {
 
 	// Do NOT create prompt.txt — simulating hooks never firing.
 	// TurnEnd should backfill from transcript via PromptExtractor.
-	_ = handleLifecycleTurnEnd(context.Background(), ag, event) //nolint:errcheck // test only cares about side effects
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, event))
 
 	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err := paths.AbsPath(context.Background(), sessionDir)
@@ -731,7 +731,7 @@ func TestHandleLifecycleTurnEnd_NoBackfillWhenPromptFileHasContent(t *testing.T)
 	require.NoError(t, os.MkdirAll(sessionDirAbs, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(sessionDirAbs, paths.PromptFileName), []byte("original prompt"), 0o600))
 
-	_ = handleLifecycleTurnEnd(context.Background(), ag, event) //nolint:errcheck // test only cares about side effects
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, event))
 
 	data, readErr := os.ReadFile(filepath.Join(sessionDirAbs, paths.PromptFileName))
 	require.NoError(t, readErr)
@@ -784,7 +784,7 @@ func TestHandleLifecycleTurnEnd_BackfillUpdatesSessionState(t *testing.T) {
 	}
 	require.NoError(t, strategy.SaveSessionState(context.Background(), state))
 
-	_ = handleLifecycleTurnEnd(context.Background(), ag, event) //nolint:errcheck // test only cares about side effects
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, event))
 
 	// Verify session state was updated with the last prompt
 	updated, loadErr := strategy.LoadSessionState(context.Background(), sessionID)
