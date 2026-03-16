@@ -37,12 +37,16 @@ func ReadFile(root *os.Root, name string) ([]byte, error) {
 // for traversal-resistant access. Creates the file if it doesn't exist,
 // truncates it if it does. The kernel enforces that the write cannot escape
 // the root directory.
-func WriteFile(root *os.Root, name string, data []byte, perm os.FileMode) error {
+func WriteFile(root *os.Root, name string, data []byte, perm os.FileMode) (retErr error) {
 	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
 		return err //nolint:wrapcheck // preserve original error for os.IsNotExist checks
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && retErr == nil {
+			retErr = closeErr
+		}
+	}()
 
 	if _, err := f.Write(data); err != nil {
 		return err //nolint:wrapcheck // preserve original error

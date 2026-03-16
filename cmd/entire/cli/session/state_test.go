@@ -394,12 +394,11 @@ func TestStateStore_Load_NonexistentDir(t *testing.T) {
 func TestStateStore_Clear_NonexistentDir(t *testing.T) {
 	t.Parallel()
 
-	// When the state directory doesn't exist, Clear should return an error
-	// (os.OpenRoot fails and it's not IsNotExist since the parent exists)
+	// When the state directory doesn't exist, Clear returns nil because
+	// filepath.Glob finds no matches and os.Root is never opened.
 	stateDir := filepath.Join(t.TempDir(), "nonexistent-sessions")
 	store := NewStateStoreWithDir(stateDir)
 	err := store.Clear(context.Background(), "some-session")
-	// No files to glob, so no os.Root opened, returns nil
 	assert.NoError(t, err)
 }
 
