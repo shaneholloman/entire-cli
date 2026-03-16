@@ -20,7 +20,8 @@ mkdir -p "$E2E_ARTIFACT_DIR"
 echo "artifacts: $E2E_ARTIFACT_DIR"
 
 filter="${usage_filter:-}"
-rc=0
+vogon_rc=0
+rr_rc=0
 
 # --- vogon: runs all tests (built-in agent) ---
 echo "--- canary: vogon ---"
@@ -28,7 +29,7 @@ PATH="$E2E_PATH" E2E_AGENT=vogon gotestsum --format dots \
   --jsonfile "$E2E_ARTIFACT_DIR/test-events-vogon.json" -- \
   -tags=e2e -count=1 -timeout=10m \
   ${filter:+-run "$filter"} \
-  ./e2e/tests/... || rc=$?
+  ./e2e/tests/... || vogon_rc=$?
 
 go run ./e2e/cmd/testreport -color \
   -o "$E2E_ARTIFACT_DIR/report-vogon.txt" \
@@ -53,7 +54,7 @@ E2E_AGENT=roger-roger gotestsum --format dots \
   --jsonfile "$E2E_ARTIFACT_DIR/test-events-roger-roger.json" -- \
   -tags=e2e -count=1 -timeout=10m \
   -run "$rr_filter" \
-  ./e2e/tests/... || rc=$?
+  ./e2e/tests/... || rr_rc=$?
 
 go run ./e2e/cmd/testreport -color \
   -o "$E2E_ARTIFACT_DIR/report-roger-roger.txt" \
@@ -62,4 +63,6 @@ go run ./e2e/cmd/testreport -color \
 echo ""
 cat "$E2E_ARTIFACT_DIR/entire-version.txt" 2>/dev/null
 echo "artifacts: $E2E_ARTIFACT_DIR"
-exit "$rc"
+if [ "$vogon_rc" -ne 0 ] || [ "$rr_rc" -ne 0 ]; then
+  exit 1
+fi
