@@ -81,6 +81,44 @@ func TestJSONLContent_TopLevelArrayNoSecrets(t *testing.T) {
 	}
 }
 
+func TestJSONLContent_MultipleObjects_AllRedacted(t *testing.T) {
+	t.Parallel()
+	// Regression test: JSONL with multiple top-level JSON objects must redact
+	// secrets in ALL objects, not just the first. The single-JSON fast path must
+	// not accidentally consume only the first object and return early.
+	input := `{"content":"safe text","id":"abc"}
+{"content":"key=` + highEntropySecret + `","id":"def"}
+{"content":"also safe","id":"ghi"}`
+
+	result, err := JSONLContent(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The secret in the second line should be redacted.
+	if strings.Contains(result, highEntropySecret) {
+		t.Error("secret in second JSONL object was not redacted")
+	}
+	if !strings.Contains(result, "REDACTED") {
+		t.Error("expected REDACTED in output")
+	}
+
+	// IDs should be preserved (field-aware skip).
+	for _, id := range []string{"abc", "def", "ghi"} {
+		if !strings.Contains(result, id) {
+			t.Errorf("ID %q should be preserved", id)
+		}
+	}
+
+	// Non-secret content should be preserved.
+	if !strings.Contains(result, "safe text") {
+		t.Error("safe text in first object was corrupted")
+	}
+	if !strings.Contains(result, "also safe") {
+		t.Error("safe text in third object was corrupted")
+	}
+}
+
 func TestJSONLContent_InvalidJSONLine(t *testing.T) {
 	// Lines that aren't valid JSON should be processed with normal string redaction.
 	input := `{"type":"text", "invalid ` + highEntropySecret + " json"

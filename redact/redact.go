@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"sort"
@@ -162,14 +163,14 @@ func JSONLBytes(b []byte) ([]byte, error) {
 // which would corrupt high-entropy identifiers.
 func JSONLContent(content string) (string, error) {
 	// Try parsing the entire content as a single JSON value first.
-	// Uses a streaming decoder to avoid copying the full content into []byte,
-	// and checks dec.More() to distinguish a single JSON value (pretty-printed)
-	// from JSONL (multiple values concatenated).
+	// Uses a streaming decoder to avoid copying the full content into []byte.
+	// After decoding, attempts a second Decode to confirm EOF — if it succeeds,
+	// the content is JSONL (multiple values) and we fall through to line-by-line.
 	trimmed := strings.TrimSpace(content)
 	if len(trimmed) > 0 {
 		dec := json.NewDecoder(strings.NewReader(trimmed))
 		var parsed any
-		if err := dec.Decode(&parsed); err == nil && !dec.More() {
+		if err := dec.Decode(&parsed); err == nil && isSingleJSONValue(dec) {
 			// Content is a single JSON value (object/array) — redact field-aware.
 			result, err := applyJSONReplacements(content, collectJSONLReplacements(parsed))
 			if err != nil {
@@ -224,6 +225,16 @@ func applyJSONReplacements(s string, repls [][2]string) (string, error) {
 		s = strings.ReplaceAll(s, origJSON, replJSON)
 	}
 	return s, nil
+}
+
+// isSingleJSONValue returns true if the decoder has reached EOF (no more
+// top-level values). This distinguishes a single JSON value (e.g., pretty-printed
+// object) from JSONL (multiple concatenated values). We attempt a second Decode
+// and require io.EOF rather than relying on dec.More(), which is documented for
+// use inside arrays/objects and not for top-level value boundaries.
+func isSingleJSONValue(dec *json.Decoder) bool {
+	var discard json.RawMessage
+	return dec.Decode(&discard) == io.EOF
 }
 
 // collectJSONLReplacements walks a parsed JSON value and collects unique
