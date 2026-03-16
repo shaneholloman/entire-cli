@@ -10,16 +10,11 @@ export E2E_AGENT="roger-roger"
 mise run build
 export E2E_ENTIRE_BIN="$PWD/entire"
 
-# Build roger-roger binaries from GitHub
-ROGER_ROGER_REPO="${ROGER_ROGER_REPO:-https://github.com/entireio/roger-roger.git}"
-ROGER_ROGER_CLONE="$(mktemp -d)"
-trap 'rm -rf "$ROGER_ROGER_CLONE"' EXIT
-
-echo "cloning roger-roger from $ROGER_ROGER_REPO"
-git clone --depth 1 -q "$ROGER_ROGER_REPO" "$ROGER_ROGER_CLONE"
-echo "building roger-roger binaries"
-(cd "$ROGER_ROGER_CLONE" && go build -o "$OLDPWD/roger-roger" ./cmd/roger-roger && go build -o "$OLDPWD/entire-agent-roger-roger" ./cmd/entire-agent-roger-roger)
-export PATH="$PWD:$PATH"
+# Install roger-roger binaries from GitHub
+ROGER_ROGER_MODULE="${ROGER_ROGER_MODULE:-github.com/entireio/roger-roger}"
+echo "installing roger-roger binaries from $ROGER_ROGER_MODULE"
+GOBIN="$PWD/bin" go install "$ROGER_ROGER_MODULE/cmd/roger-roger@latest" "$ROGER_ROGER_MODULE/cmd/entire-agent-roger-roger@latest"
+export PATH="$PWD/bin:$PATH"
 
 if [ -z "${E2E_ARTIFACT_DIR:-}" ]; then
   E2E_ARTIFACT_DIR="$PWD/e2e/artifacts/roger-roger-$(date +%Y-%m-%dT%H-%M-%S)"

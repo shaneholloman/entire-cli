@@ -74,9 +74,7 @@ jobs:
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
             copilot-cli)  npm install -g @github/copilot  ;;
             roger-roger)
-              git clone --depth 1 -q https://github.com/entireio/roger-roger.git /tmp/roger-roger
-              (cd /tmp/roger-roger && go build -o /usr/local/bin/roger-roger ./cmd/roger-roger && go build -o /usr/local/bin/entire-agent-roger-roger ./cmd/entire-agent-roger-roger)
-              rm -rf /tmp/roger-roger
+              GOBIN=/usr/local/bin go install github.com/entireio/roger-roger/cmd/roger-roger@latest github.com/entireio/roger-roger/cmd/entire-agent-roger-roger@latest
               ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
