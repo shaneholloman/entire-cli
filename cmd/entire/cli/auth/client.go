@@ -33,7 +33,6 @@ type DeviceAuthStart struct {
 }
 
 type DeviceAuthPoll struct {
-	//nolint:gosec // OAuth token response field name is fixed by the spec.
 	AccessToken string `json:"access_token,omitempty"`
 	TokenType   string `json:"token_type,omitempty"`
 	ExpiresIn   int    `json:"expires_in,omitempty"`
@@ -127,7 +126,7 @@ func (c *Client) postForm(ctx context.Context, path string, body url.Values) (*h
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", clientID)
 
-	resp, err := c.httpClient.Do(req) //nolint:gosec // base URL is constrained to Entire API or explicit local dev override
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request %s: %w", path, err)
 	}
