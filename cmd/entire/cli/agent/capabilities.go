@@ -121,6 +121,25 @@ func AsHookResponseWriter(ag Agent) (HookResponseWriter, bool) { //nolint:iretur
 	return hrw, true
 }
 
+// AsPromptExtractor returns the agent as PromptExtractor if it both implements
+// the interface and (for CapabilityDeclarer agents) has declared TranscriptAnalyzer.
+// ExtractPrompts is conceptually part of transcript analysis, so it shares the same
+// capability gate — this prevents calling extract-prompts on external agent binaries
+// that never declared transcript_analyzer support.
+func AsPromptExtractor(ag Agent) (PromptExtractor, bool) { //nolint:ireturn // type-assertion helper must return interface
+	if ag == nil {
+		return nil, false
+	}
+	pe, ok := ag.(PromptExtractor)
+	if !ok {
+		return nil, false
+	}
+	if cd, ok := ag.(CapabilityDeclarer); ok {
+		return pe, cd.DeclaredCapabilities().TranscriptAnalyzer
+	}
+	return pe, true
+}
+
 // AsSubagentAwareExtractor returns the agent as SubagentAwareExtractor if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
 func AsSubagentAwareExtractor(ag Agent) (SubagentAwareExtractor, bool) { //nolint:ireturn // type-assertion helper must return interface

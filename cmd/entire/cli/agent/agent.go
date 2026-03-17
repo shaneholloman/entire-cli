@@ -146,6 +146,16 @@ type TranscriptAnalyzer interface {
 	ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error)
 }
 
+// PromptExtractor extracts user prompts from a transcript file.
+// Used as a fallback when prompt data isn't captured via hooks (e.g., Factory AI
+// Droid's exec mode doesn't fire UserPromptSubmit).
+type PromptExtractor interface {
+	Agent
+
+	// ExtractPrompts returns user prompts from the transcript starting at the given offset.
+	ExtractPrompts(sessionRef string, fromOffset int) ([]string, error)
+}
+
 // TranscriptPreparer is called before ReadTranscript to handle agent-specific
 // flush/sync requirements (e.g., Claude Code's async transcript writing).
 // The framework calls PrepareTranscript before ReadTranscript if implemented.

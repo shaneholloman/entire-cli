@@ -19,6 +19,7 @@ var (
 	_ agent.TokenCalculator        = (*FactoryAIDroidAgent)(nil)
 	_ agent.SubagentAwareExtractor = (*FactoryAIDroidAgent)(nil)
 	_ agent.HookResponseWriter     = (*FactoryAIDroidAgent)(nil)
+	_ agent.PromptExtractor        = (*FactoryAIDroidAgent)(nil)
 )
 
 // WriteHookResponse outputs the hook response as plain text to stdout.

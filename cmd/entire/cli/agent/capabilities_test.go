@@ -94,6 +94,15 @@ func (m *mockFullAgent) CalculateTotalTokenUsage([]byte, int, string) (*TokenUsa
 	return nil, nil //nolint:nilnil // test mock
 }
 
+// mockBuiltinPromptAgent is a built-in agent that implements PromptExtractor but NOT CapabilityDeclarer.
+type mockBuiltinPromptAgent struct {
+	mockBaseAgent
+}
+
+func (m *mockBuiltinPromptAgent) ExtractPrompts(string, int) ([]string, error) {
+	return []string{"test prompt"}, nil
+}
+
 // --- Tests ---
 
 func TestAsHookSupport(t *testing.T) {
@@ -312,6 +321,53 @@ func TestAsSubagentAwareExtractor(t *testing.T) {
 		_, ok := AsSubagentAwareExtractor(ag)
 		if ok {
 			t.Error("expected false")
+		}
+	})
+}
+
+func TestAsPromptExtractor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsPromptExtractor(&mockBaseAgent{})
+		if ok {
+			t.Error("expected false for agent not implementing PromptExtractor")
+		}
+	})
+
+	t.Run("builtin agent", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockBuiltinPromptAgent{}
+		pe, ok := AsPromptExtractor(ag)
+		if !ok || pe == nil {
+			t.Error("expected true for built-in agent implementing PromptExtractor")
+		}
+	})
+
+	t.Run("declared with TranscriptAnalyzer true", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{TranscriptAnalyzer: true}}
+		pe, ok := AsPromptExtractor(ag)
+		if !ok || pe == nil {
+			t.Error("expected true when TranscriptAnalyzer capability declared true")
+		}
+	})
+
+	t.Run("declared with TranscriptAnalyzer false", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{TranscriptAnalyzer: false}}
+		_, ok := AsPromptExtractor(ag)
+		if ok {
+			t.Error("expected false when TranscriptAnalyzer capability declared false")
+		}
+	})
+
+	t.Run("nil agent", func(t *testing.T) {
+		t.Parallel()
+		_, ok := AsPromptExtractor(nil)
+		if ok {
+			t.Error("expected false for nil agent")
 		}
 	})
 }
