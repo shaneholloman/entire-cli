@@ -475,16 +475,15 @@ func FetchBlobsByHash(ctx context.Context, hashes []plumbing.Hash) error {
 	}
 
 	fetchCmd := exec.CommandContext(ctx, "git", args...)
-	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
+	if _, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		logging.Debug(ctx, "fetch-by-hash failed, falling back to full metadata fetch",
 			slog.Int("blob_count", len(hashes)),
 			slog.String("error", fetchErr.Error()),
-			slog.String("output", strings.TrimSpace(string(output))),
 		)
 		// Fallback: full metadata branch fetch (pack negotiation skips already-local objects)
 		if fallbackErr := FetchMetadataBranch(ctx); fallbackErr != nil {
-			return fmt.Errorf("fetch-by-hash failed (%s: %w) and fallback fetch also failed: %w",
-				strings.TrimSpace(string(output)), fetchErr, fallbackErr)
+			return fmt.Errorf("fetch-by-hash failed: %w; fallback fetch also failed: %w",
+				fetchErr, fallbackErr)
 		}
 	}
 
