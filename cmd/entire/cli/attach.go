@@ -1,16 +1,13 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -22,7 +19,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
-	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 
@@ -78,13 +74,13 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		return fmt.Errorf("failed to read transcript: %w", err)
 	}
 
-	relModifiedFiles, relNewFiles, relDeletedFiles := collectFileChanges(ctx, logCtx, ag, transcriptPath, repoRoot)
+	relModifiedFiles, relNewFiles, relDeletedFiles, fileDetectionFailed := collectFileChanges(ctx, logCtx, ag, transcriptPath, repoRoot)
 
 	if err := strategy.EnsureSetup(ctx); err != nil {
 		return fmt.Errorf("failed to set up strategy: %w", err)
 	}
 
-	logFile, sessionDir, sessionDirAbs, err := storeTranscript(logCtx, ctx, sessionID, agentType, transcriptData)
+	logFile, sessionDir, sessionDirAbs, err := storeTranscript(ctx, sessionID, agentType, transcriptData)
 	if err != nil {
 		return err
 	}
@@ -135,7 +131,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	checkpointIDStr, condenseErr := condenseAndFinalizeSession(logCtx, strat, sessionID)
 
-	printAttachConfirmation(w, sessionID, totalChanges, condenseErr)
+	printAttachConfirmation(w, sessionID, totalChanges, fileDetectionFailed, condenseErr)
 
 	if checkpointIDStr != "" {
 		if err := promptAmendCommit(ctx, w, checkpointIDStr, force); err != nil {
@@ -188,7 +184,7 @@ func resolveAgentAndTranscript(ctx context.Context, w io.Writer, sessionID strin
 		return nil, "", fmt.Errorf("agent %q not available: %w", agentName, err)
 	}
 
-	transcriptPath, err := resolveAndValidateTranscript(ctx, sessionID, agentName, ag)
+	transcriptPath, err := resolveAndValidateTranscript(ctx, sessionID, ag)
 	if err != nil {
 		detectedAg, detectedPath, detectErr := detectAgentByTranscript(ctx, sessionID, agentName)
 		if detectErr != nil {
@@ -204,11 +200,13 @@ func resolveAgentAndTranscript(ctx context.Context, w io.Writer, sessionID strin
 }
 
 // collectFileChanges gathers modified, new, and deleted files from both transcript analysis and git status.
-func collectFileChanges(ctx, logCtx context.Context, ag agent.Agent, transcriptPath, repoRoot string) (modified, added, deleted []string) {
+// Returns detectionFailed=true if file change detection errored (distinct from finding no changes).
+func collectFileChanges(ctx, logCtx context.Context, ag agent.Agent, transcriptPath, repoRoot string) (modified, added, deleted []string, detectionFailed bool) {
 	var transcriptFiles []string
 	if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
 		if files, _, fileErr := analyzer.ExtractModifiedFilesFromOffset(transcriptPath, 0); fileErr != nil {
 			logging.Warn(logCtx, "failed to extract modified files from transcript", "error", fileErr)
+			detectionFailed = true
 		} else {
 			transcriptFiles = files
 		}
@@ -217,6 +215,7 @@ func collectFileChanges(ctx, logCtx context.Context, ag agent.Agent, transcriptP
 	changes, err := DetectFileChanges(ctx, nil)
 	if err != nil {
 		logging.Warn(logCtx, "failed to detect file changes, checkpoint may be incomplete", "error", err)
+		detectionFailed = true
 	}
 
 	modified = FilterAndNormalizePaths(transcriptFiles, repoRoot)
@@ -227,11 +226,12 @@ func collectFileChanges(ctx, logCtx context.Context, ag agent.Agent, transcriptP
 	}
 
 	modified = filterToUncommittedFiles(ctx, modified, repoRoot)
-	return modified, added, deleted
+	return modified, added, deleted, detectionFailed
 }
 
 // storeTranscript creates the session metadata directory and writes the (optionally normalized) transcript.
-func storeTranscript(logCtx, ctx context.Context, sessionID string, agentType types.AgentType, transcriptData []byte) (logFile, sessionDir, sessionDirAbs string, err error) {
+func storeTranscript(ctx context.Context, sessionID string, agentType types.AgentType, transcriptData []byte) (logFile, sessionDir, sessionDirAbs string, err error) {
+	logCtx := logging.WithComponent(ctx, "attach")
 	sessionDir = paths.SessionMetadataDirFromSessionID(sessionID)
 	sessionDirAbs, err = paths.AbsPath(ctx, sessionDir)
 	if err != nil {
@@ -243,7 +243,7 @@ func storeTranscript(logCtx, ctx context.Context, sessionID string, agentType ty
 
 	storedTranscript := transcriptData
 	if agentType == agent.AgentTypeGemini {
-		if normalized, normErr := normalizeGeminiTranscript(transcriptData); normErr == nil {
+		if normalized, normErr := geminicli.NormalizeTranscript(transcriptData); normErr == nil {
 			storedTranscript = normalized
 		} else {
 			logging.Warn(logCtx, "failed to normalize Gemini transcript, storing raw", "error", normErr)
@@ -258,11 +258,14 @@ func storeTranscript(logCtx, ctx context.Context, sessionID string, agentType ty
 }
 
 // printAttachConfirmation prints the post-attach status message.
-func printAttachConfirmation(w io.Writer, sessionID string, totalChanges int, condenseErr error) {
+func printAttachConfirmation(w io.Writer, sessionID string, totalChanges int, fileDetectionFailed bool, condenseErr error) {
 	fmt.Fprintf(w, "Attached session %s\n", sessionID)
-	if totalChanges > 0 {
+	switch {
+	case totalChanges > 0:
 		fmt.Fprintf(w, "  Checkpoint saved with %d file(s)\n", totalChanges)
-	} else {
+	case fileDetectionFailed:
+		fmt.Fprintln(w, "  Checkpoint saved (transcript only, file change detection failed)")
+	default:
 		fmt.Fprintln(w, "  Checkpoint saved (transcript only, no uncommitted file changes detected)")
 	}
 	if condenseErr != nil {
@@ -306,6 +309,8 @@ func enrichSessionState(ctx context.Context, sessionID string, ag agent.Agent, t
 
 // condenseAndFinalizeSession condenses the session to permanent storage and transitions it to IDLE.
 // Returns the checkpoint ID string and any condensation error.
+// Note: accepts *strategy.ManualCommitStrategy directly because CondenseSessionByID is intentionally
+// not on the Strategy interface — it's a strategy-specific repair/attach operation.
 func condenseAndFinalizeSession(ctx context.Context, strat *strategy.ManualCommitStrategy, sessionID string) (string, error) {
 	var checkpointIDStr string
 	var condenseErr error
@@ -342,7 +347,7 @@ func condenseAndFinalizeSession(ctx context.Context, strat *strategy.ManualCommi
 
 // resolveAndValidateTranscript finds the transcript file for a session, searching alternative
 // project directories if needed.
-func resolveAndValidateTranscript(ctx context.Context, sessionID string, agentName types.AgentName, ag agent.Agent) (string, error) {
+func resolveAndValidateTranscript(ctx context.Context, sessionID string, ag agent.Agent) (string, error) {
 	transcriptPath, err := resolveTranscriptPath(ctx, sessionID, ag)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve transcript path: %w", err)
@@ -358,13 +363,13 @@ func resolveAndValidateTranscript(ctx context.Context, sessionID string, agentNa
 	if _, statErr := os.Stat(transcriptPath); statErr == nil {
 		return transcriptPath, nil
 	}
-	found, searchErr := searchTranscriptInProjectDirs(agentName, sessionID, ag)
+	found, searchErr := searchTranscriptInProjectDirs(sessionID, ag)
 	if searchErr == nil {
 		logging.Info(ctx, "found transcript in alternative project directory", "path", found)
 		return found, nil
 	}
 	logging.Debug(ctx, "fallback transcript search failed", "error", searchErr)
-	return "", fmt.Errorf("transcript not found for agent %q with session %s; is the session ID correct?", agentName, sessionID)
+	return "", fmt.Errorf("transcript not found for agent %q with session %s; is the session ID correct?", ag.Name(), sessionID)
 }
 
 // detectAgentByTranscript tries all registered agents (except skip) to find one whose
@@ -378,7 +383,7 @@ func detectAgentByTranscript(ctx context.Context, sessionID string, skip types.A
 		if err != nil {
 			continue
 		}
-		path, resolveErr := resolveAndValidateTranscript(ctx, sessionID, name, ag)
+		path, resolveErr := resolveAndValidateTranscript(ctx, sessionID, ag)
 		if resolveErr != nil {
 			logging.Debug(ctx, "auto-detect: agent did not match", "agent", string(name), "error", resolveErr)
 			continue
@@ -440,7 +445,7 @@ func promptAmendCommit(ctx context.Context, w io.Writer, checkpointIDStr string,
 	}
 
 	// Amend the commit with the checkpoint trailer.
-	newMessage := appendCheckpointTrailer(headCommit.Message, checkpointIDStr)
+	newMessage := trailers.AppendCheckpointTrailer(headCommit.Message, checkpointIDStr)
 
 	// --only ensures this amend updates the commit message only and does not
 	// accidentally include unrelated staged changes.
@@ -451,219 +456,4 @@ func promptAmendCommit(ctx context.Context, w io.Writer, checkpointIDStr string,
 
 	fmt.Fprintf(w, "Amended commit %s with Entire-Checkpoint: %s\n", shortHash, checkpointIDStr)
 	return nil
-}
-
-// trailerLineRe matches git trailer format: "Key-Name: value" (no spaces before colon).
-var trailerLineRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*: `)
-
-// isTrailerLine reports whether a line matches git trailer format.
-func isTrailerLine(line string) bool {
-	return trailerLineRe.MatchString(line)
-}
-
-// appendCheckpointTrailer appends Entire-Checkpoint in trailer-aware format.
-// If the message already ends with a trailer paragraph, append directly to it;
-// otherwise add a blank line before starting a new trailer block.
-func appendCheckpointTrailer(message, checkpointID string) string {
-	trimmed := strings.TrimRight(message, "\n")
-	trailer := fmt.Sprintf("%s: %s", trailers.CheckpointTrailerKey, checkpointID)
-
-	lines := strings.Split(trimmed, "\n")
-	i := len(lines) - 1
-	for i >= 0 && strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-		i--
-	}
-
-	hasTrailerBlock := false
-	if i >= 0 {
-		last := strings.TrimSpace(lines[i])
-		if last != "" && isTrailerLine(last) {
-			for i > 0 {
-				i--
-				above := strings.TrimSpace(lines[i])
-				if strings.HasPrefix(above, "#") {
-					continue
-				}
-				if above == "" {
-					hasTrailerBlock = true
-					break
-				}
-				if !isTrailerLine(above) {
-					break
-				}
-			}
-		}
-	}
-
-	if hasTrailerBlock {
-		return trimmed + "\n" + trailer + "\n"
-	}
-	return trimmed + "\n\n" + trailer + "\n"
-}
-
-// transcriptMetadata holds metadata extracted from a single transcript parse pass.
-type transcriptMetadata struct {
-	FirstPrompt string
-	TurnCount   int
-	Model       string
-}
-
-// extractTranscriptMetadata parses transcript bytes once and extracts the first user prompt,
-// user turn count, and model name. Supports both JSONL (Claude Code, Cursor, OpenCode) and
-// Gemini JSON format.
-func extractTranscriptMetadata(data []byte) transcriptMetadata {
-	var meta transcriptMetadata
-
-	// Try JSONL format first (Claude Code, Cursor, OpenCode, etc.)
-	lines, err := transcript.ParseFromBytes(data)
-	if err == nil {
-		for _, line := range lines {
-			if line.Type == transcript.TypeUser {
-				if prompt := transcript.ExtractUserContent(line.Message); prompt != "" {
-					meta.TurnCount++
-					if meta.FirstPrompt == "" {
-						meta.FirstPrompt = prompt
-					}
-				}
-			}
-			if line.Type == transcript.TypeAssistant && meta.Model == "" {
-				var msg struct {
-					Model string `json:"model"`
-				}
-				if json.Unmarshal(line.Message, &msg) == nil && msg.Model != "" {
-					meta.Model = msg.Model
-				}
-			}
-		}
-		if meta.TurnCount > 0 || meta.Model != "" {
-			return meta
-		}
-	}
-
-	// Fallback: try Gemini JSON format {"messages": [...]}
-	if prompts, gemErr := geminicli.ExtractAllUserPrompts(data); gemErr == nil && len(prompts) > 0 {
-		meta.FirstPrompt = prompts[0]
-		meta.TurnCount = len(prompts)
-	}
-
-	return meta
-}
-
-// normalizeGeminiTranscript normalizes user message content fields in-place from
-// [{"text":"..."}] arrays to plain strings, preserving all other transcript fields
-// (timestamps, thoughts, tokens, model, toolCalls, etc.).
-func normalizeGeminiTranscript(data []byte) ([]byte, error) {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("failed to parse transcript: %w", err)
-	}
-
-	messagesRaw, ok := raw["messages"]
-	if !ok {
-		return data, nil
-	}
-
-	var messages []json.RawMessage
-	if err := json.Unmarshal(messagesRaw, &messages); err != nil {
-		return nil, fmt.Errorf("failed to parse messages: %w", err)
-	}
-
-	changed := false
-	for i, msgRaw := range messages {
-		var msg map[string]json.RawMessage
-		if err := json.Unmarshal(msgRaw, &msg); err != nil {
-			continue
-		}
-
-		contentRaw, hasContent := msg["content"]
-		if !hasContent || len(contentRaw) == 0 {
-			continue
-		}
-
-		// Skip if already a string
-		var strContent string
-		if json.Unmarshal(contentRaw, &strContent) == nil {
-			continue
-		}
-
-		// Try to convert array of {"text":"..."} to a plain string
-		var parts []struct {
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(contentRaw, &parts) != nil {
-			continue
-		}
-
-		var texts []string
-		for _, p := range parts {
-			if p.Text != "" {
-				texts = append(texts, p.Text)
-			}
-		}
-		joined := strings.Join(texts, "\n")
-		strBytes, err := json.Marshal(joined)
-		if err != nil {
-			continue
-		}
-		msg["content"] = strBytes
-		rewritten, err := json.Marshal(msg)
-		if err != nil {
-			continue
-		}
-		messages[i] = rewritten
-		changed = true
-	}
-
-	if !changed {
-		return data, nil
-	}
-
-	rewrittenMessages, err := json.Marshal(messages)
-	if err != nil {
-		return nil, fmt.Errorf("failed to re-serialize messages: %w", err)
-	}
-	raw["messages"] = rewrittenMessages
-
-	result, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to re-serialize transcript: %w", err)
-	}
-	return result, nil
-}
-
-// estimateSessionDuration estimates session duration in milliseconds from JSONL transcript timestamps.
-// The "timestamp" field is a top-level field in JSONL lines (alongside "type", "uuid", "message"),
-// NOT inside the "message" object. We parse raw lines since transcript.Line doesn't capture it.
-// Returns 0 if timestamps are not available (e.g., Gemini transcripts).
-func estimateSessionDuration(data []byte) int64 {
-	type timestamped struct {
-		Timestamp string `json:"timestamp"`
-	}
-
-	var first, last time.Time
-	for _, rawLine := range bytes.Split(data, []byte("\n")) {
-		if len(rawLine) == 0 {
-			continue
-		}
-		var ts timestamped
-		if err := json.Unmarshal(rawLine, &ts); err != nil || ts.Timestamp == "" {
-			continue
-		}
-		parsed, err := time.Parse(time.RFC3339Nano, ts.Timestamp)
-		if err != nil {
-			parsed, err = time.Parse(time.RFC3339, ts.Timestamp)
-			if err != nil {
-				continue
-			}
-		}
-		if first.IsZero() {
-			first = parsed
-		}
-		last = parsed
-	}
-
-	if first.IsZero() || last.IsZero() || !last.After(first) {
-		return 0
-	}
-	return last.Sub(first).Milliseconds()
 }

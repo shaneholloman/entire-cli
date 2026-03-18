@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 )
@@ -32,41 +31,22 @@ func resolveTranscriptPath(ctx context.Context, sessionID string, agent agentpkg
 	return agent.ResolveSessionFile(sessionDir, sessionID), nil
 }
 
-// agentSessionBaseDirs maps agent names to the base directories that contain
-// per-project session subdirectories. Each agent organizes transcripts under
-// a per-project subdirectory within its base dir.
-var agentSessionBaseDirs = map[types.AgentName]func() (string, error){
-	agentpkg.AgentNameClaudeCode: func() (string, error) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get home directory: %w", err)
-		}
-		return filepath.Join(home, ".claude", "projects"), nil
-	},
-	agentpkg.AgentNameGemini: func() (string, error) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get home directory: %w", err)
-		}
-		return filepath.Join(home, ".gemini", "tmp"), nil
-	},
-}
-
 // searchTranscriptInProjectDirs searches for a session transcript across an agent's
 // project directories that could plausibly belong to the current repository.
 // Agents like Claude Code and Gemini CLI derive the project directory from the cwd,
 // so the transcript may be stored under a different project directory if the session
-// was started from a subdirectory.
+// was started from a different working directory.
 //
 // The search is scoped to the agent's base directory (e.g., ~/.claude/projects) and only
 // walks immediate subdirectories (plus one extra level for agents like Gemini that nest
 // chats under <project>/chats/).
-func searchTranscriptInProjectDirs(agentName types.AgentName, sessionID string, ag agentpkg.Agent) (string, error) {
-	baseDirFn, ok := agentSessionBaseDirs[agentName]
+// Only agents implementing SessionBaseDirProvider support this fallback search.
+func searchTranscriptInProjectDirs(sessionID string, ag agentpkg.Agent) (string, error) {
+	provider, ok := agentpkg.AsSessionBaseDirProvider(ag)
 	if !ok {
-		return "", fmt.Errorf("fallback transcript search not supported for agent %q", agentName)
+		return "", fmt.Errorf("fallback transcript search not supported for agent %q", ag.Name())
 	}
-	baseDir, err := baseDirFn()
+	baseDir, err := provider.GetSessionBaseDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get base directory: %w", err)
 	}

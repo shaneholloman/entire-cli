@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -341,51 +340,6 @@ func TestEstimateSessionDuration(t *testing.T) {
 	}
 }
 
-func TestNormalizeGeminiTranscript(t *testing.T) {
-	t.Parallel()
-
-	// Raw Gemini format has content as array of objects for user messages,
-	// plus extra fields (timestamp, model, tokens) that must be preserved.
-	raw := []byte(`{"sessionId":"abc","messages":[{"id":"m1","type":"user","timestamp":"2026-01-01T10:00:00Z","content":[{"text":"fix the bug"}]},{"id":"m2","type":"gemini","content":"ok","model":"gemini-3-flash","tokens":{"input":100}}]}`)
-	normalized, err := normalizeGeminiTranscript(raw)
-	if err != nil {
-		t.Fatalf("normalizeGeminiTranscript() error: %v", err)
-	}
-
-	// After normalization, content should be a plain string
-	var result struct {
-		SessionID string `json:"sessionId"`
-		Messages  []struct {
-			ID        string `json:"id"`
-			Type      string `json:"type"`
-			Content   string `json:"content"`
-			Timestamp string `json:"timestamp"`
-			Model     string `json:"model"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(normalized, &result); err != nil {
-		t.Fatalf("failed to parse normalized transcript: %v", err)
-	}
-	if result.SessionID != "abc" {
-		t.Errorf("sessionId = %q, want %q", result.SessionID, "abc")
-	}
-	if len(result.Messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(result.Messages))
-	}
-	if result.Messages[0].Content != "fix the bug" {
-		t.Errorf("user content = %q, want %q", result.Messages[0].Content, "fix the bug")
-	}
-	if result.Messages[0].Timestamp != "2026-01-01T10:00:00Z" {
-		t.Errorf("user timestamp = %q, want preserved", result.Messages[0].Timestamp)
-	}
-	if result.Messages[1].Content != "ok" {
-		t.Errorf("gemini content = %q, want %q", result.Messages[1].Content, "ok")
-	}
-	if result.Messages[1].Model != "gemini-3-flash" {
-		t.Errorf("model = %q, want preserved", result.Messages[1].Model)
-	}
-}
-
 func TestExtractFirstPromptFromTranscript_GeminiFormat(t *testing.T) {
 	t.Parallel()
 
@@ -405,52 +359,6 @@ func TestExtractFirstPromptFromTranscript_JSONLFormat(t *testing.T) {
 	got := extractTranscriptMetadata(data).FirstPrompt
 	if got != "hello world" {
 		t.Errorf("extractTranscriptMetadata(jsonl).FirstPrompt = %q, want %q", got, "hello world")
-	}
-}
-
-func TestAppendCheckpointTrailer(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		msg  string
-		want string
-	}{
-		{
-			name: "no existing trailers",
-			msg:  "feat: add attach command\n",
-			want: "feat: add attach command\n\nEntire-Checkpoint: abc123def456\n",
-		},
-		{
-			name: "existing non-checkpoint trailer block",
-			msg:  "feat: add attach command\n\nSigned-off-by: Test User <test@example.com>\n",
-			want: "feat: add attach command\n\nSigned-off-by: Test User <test@example.com>\nEntire-Checkpoint: abc123def456\n",
-		},
-		{
-			name: "existing checkpoint trailer block",
-			msg:  "feat: add attach command\n\nEntire-Checkpoint: deadbeefcafe\n",
-			want: "feat: add attach command\n\nEntire-Checkpoint: deadbeefcafe\nEntire-Checkpoint: abc123def456\n",
-		},
-		{
-			name: "subject with colon is not trailer block",
-			msg:  "docs: update readme\n",
-			want: "docs: update readme\n\nEntire-Checkpoint: abc123def456\n",
-		},
-		{
-			name: "body text containing colon-space is not trailer block",
-			msg:  "fix: login\n\nThis fixes the error: connection refused\n",
-			want: "fix: login\n\nThis fixes the error: connection refused\n\nEntire-Checkpoint: abc123def456\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := appendCheckpointTrailer(tt.msg, "abc123def456")
-			if got != tt.want {
-				t.Errorf("appendCheckpointTrailer() = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 
