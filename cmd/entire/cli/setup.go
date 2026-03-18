@@ -112,11 +112,6 @@ func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
 // runAddAgents shows which agents are currently enabled and lets the user add more.
 // Already-installed agents cannot be deselected.
 func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
-	// Discover external agent plugins.
-	// Use DiscoverAndRegisterAlways to bypass the external_agents setting —
-	// during setup the setting doesn't exist yet.
-	external.DiscoverAndRegisterAlways(ctx)
-
 	installedNames := GetAgentsWithHooksInstalled(ctx)
 
 	// Show currently installed agents
@@ -142,6 +137,12 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 		fmt.Fprintln(w, "Use: entire configure --agent <name>")
 		return nil
 	}
+
+	// Discover external agent plugins after the interactivity check to avoid
+	// scanning PATH (with a 10s timeout) in non-interactive contexts.
+	// Use DiscoverAndRegisterAlways to bypass the external_agents setting —
+	// during setup the setting doesn't exist yet.
+	external.DiscoverAndRegisterAlways(ctx)
 
 	// Build options from registered agents
 	agentNames := agent.List()
@@ -250,6 +251,29 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 		}
 	}
 
+	// Auto-enable external_agents setting if any new agent is external.
+	for _, ag := range newAgents {
+		if external.IsExternal(ag) {
+			s, loadErr := LoadEntireSettings(ctx)
+			if loadErr != nil {
+				s = &EntireSettings{}
+			}
+			if !s.ExternalAgents {
+				s.ExternalAgents = true
+				var saveErr error
+				if opts.UseLocalSettings {
+					saveErr = SaveEntireSettingsLocal(ctx, s)
+				} else {
+					saveErr = SaveEntireSettings(ctx, s)
+				}
+				if saveErr != nil {
+					return fmt.Errorf("failed to save external_agents setting: %w", saveErr)
+				}
+			}
+			break
+		}
+	}
+
 	newTypes := make([]string, 0, len(newAgents))
 	for _, ag := range newAgents {
 		newTypes = append(newTypes, string(ag.Type()))
@@ -283,7 +307,9 @@ Use --remove to remove a specific agent's hooks:
 
 			// Discover external agent plugins early so they're available
 			// for --agent, --remove, and interactive selection.
-			external.DiscoverAndRegister(ctx)
+			// Use DiscoverAndRegisterAlways so that --agent works on fresh repos
+			// where the external_agents setting hasn't been persisted yet.
+			external.DiscoverAndRegisterAlways(ctx)
 
 			// Remove agent mode
 			if removeAgentName != "" {
@@ -366,7 +392,9 @@ If Entire is already configured but disabled, this re-enables it.`,
 			}
 
 			// Discover external agent plugins early so --agent can find them.
-			external.DiscoverAndRegister(ctx)
+			// Use DiscoverAndRegisterAlways so that --agent works on fresh repos
+			// where the external_agents setting hasn't been persisted yet.
+			external.DiscoverAndRegisterAlways(ctx)
 
 			// Non-interactive mode if --agent flag is provided
 			if cmd.Flags().Changed(agentFlagName) && agentName == "" {
@@ -993,6 +1021,11 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	}
 	if opts.AbsoluteGitHookPath {
 		settings.AbsoluteGitHookPath = true
+	}
+
+	// Auto-enable external_agents setting if the agent is external.
+	if external.IsExternal(ag) {
+		settings.ExternalAgents = true
 	}
 
 	opts.applyStrategyOptions(settings)
