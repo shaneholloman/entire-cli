@@ -69,10 +69,13 @@ type stuckSession struct {
 }
 
 func runSessionsFix(cmd *cobra.Command, force bool) error {
+	var finalErr error
+
 	// Check 1: Disconnected metadata branches
 	metadataErr := checkDisconnectedMetadata(cmd, force)
 	if metadataErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Error: metadata check failed: %v\n", metadataErr)
+		finalErr = NewSilentError(fmt.Errorf("metadata check failed: %w", metadataErr))
 	}
 	fmt.Fprintln(cmd.OutOrStdout())
 
@@ -86,8 +89,8 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 	if len(states) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No stuck sessions found.")
-		if metadataErr != nil {
-			return fmt.Errorf("metadata check failed: %w", metadataErr)
+		if finalErr != nil {
+			return finalErr
 		}
 		return nil
 	}
@@ -111,8 +114,8 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 	if len(stuck) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No stuck sessions found.")
-		if metadataErr != nil {
-			return fmt.Errorf("metadata check failed: %w", metadataErr)
+		if finalErr != nil {
+			return finalErr
 		}
 		return nil
 	}
@@ -130,14 +133,14 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 				if err := strat.CondenseSessionByID(ctx, ss.State.SessionID); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to condense session %s: %v\n", ss.State.SessionID, err)
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  -> Condensed session %s\n\n", ss.State.SessionID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Condensed session %s\n\n", ss.State.SessionID)
 				}
 			} else {
 				// Discard if we can't condense
 				if err := discardSession(ctx, ss, repo, cmd.ErrOrStderr()); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to discard session %s: %v\n", ss.State.SessionID, err)
 				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  -> Discarded session %s\n\n", ss.State.SessionID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Discarded session %s\n\n", ss.State.SessionID)
 				}
 			}
 			continue
@@ -157,21 +160,21 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 			if err := strat.CondenseSessionByID(ctx, ss.State.SessionID); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to condense session %s: %v\n", ss.State.SessionID, err)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "  -> Condensed session %s\n\n", ss.State.SessionID)
+				fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Condensed session %s\n\n", ss.State.SessionID)
 			}
 		case "discard":
 			if err := discardSession(ctx, ss, repo, cmd.ErrOrStderr()); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to discard session %s: %v\n", ss.State.SessionID, err)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "  -> Discarded session %s\n\n", ss.State.SessionID)
+				fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Discarded session %s\n\n", ss.State.SessionID)
 			}
 		case "skip":
 			fmt.Fprintf(cmd.OutOrStdout(), "  -> Skipped\n\n")
 		}
 	}
 
-	if metadataErr != nil {
-		return fmt.Errorf("metadata check failed: %w", metadataErr)
+	if finalErr != nil {
+		return finalErr
 	}
 
 	return nil
@@ -324,7 +327,7 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	w := cmd.OutOrStdout()
 
 	if !disconnected {
-		fmt.Fprintln(w, "Metadata branches: OK")
+		fmt.Fprintln(w, "✓ Metadata branches: OK")
 		return nil
 	}
 
@@ -358,7 +361,7 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 		return fmt.Errorf("failed to reconcile metadata branches: %w", fixErr)
 	}
 
-	fmt.Fprintln(w, "  -> Fixed: metadata branches reconciled")
+	fmt.Fprintln(w, "  ✓ Fixed: metadata branches reconciled")
 	return nil
 }
 

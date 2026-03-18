@@ -143,6 +143,10 @@ func TestResetCmd_WithForce(t *testing.T) {
 		t.Fatalf("reset command error = %v", err)
 	}
 
+	if output := stdout.String(); !strings.Contains(output, "✓ Deleted shadow branch") {
+		t.Fatalf("expected reset success output, got: %q", output)
+	}
+
 	// Verify shadow branch deleted
 	refName := plumbing.NewBranchReferenceName(shadowBranch)
 	if _, err := repo.Reference(refName, true); err == nil {

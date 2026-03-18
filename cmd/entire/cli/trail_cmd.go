@@ -240,7 +240,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	if interactive {
 		// Interactive flow: title → body → branch (derived) → status
 		if err := runTrailCreateInteractive(&title, &body, &branch, &statusStr); err != nil {
-			return err
+			return handleFormCancellation(w, "Trail creation", err)
 		}
 	} else {
 		// Non-interactive: derive missing values from provided flags
@@ -265,9 +265,9 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		if err := createBranch(repo, branch); err != nil {
 			return fmt.Errorf("failed to create branch %q: %w", branch, err)
 		}
-		fmt.Fprintf(w, "Created branch %s\n", branch)
+		fmt.Fprintf(w, "✓ Created branch %s\n", branch)
 	} else if currentBranch != branch {
-		fmt.Fprintf(errW, "Note: trail will be created for branch %q (not the current branch)\n", branch)
+		fmt.Fprintf(w, "Note: trail will be created for branch %q (not the current branch)\n", branch)
 	}
 
 	// Check if trail already exists for this branch
@@ -317,14 +317,14 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		return fmt.Errorf("failed to create trail: %w", err)
 	}
 
-	fmt.Fprintf(w, "Created trail %q for branch %s (ID: %s)\n", title, branch, trailID)
+	fmt.Fprintf(w, "✓ Created trail %q for branch %s (ID: %s)\n", title, branch, trailID)
 
 	// Push the branch and trail data to origin
 	if needsCreation {
 		if err := pushBranchToOrigin(branch); err != nil {
 			fmt.Fprintf(errW, "Warning: failed to push branch: %v\n", err)
 		} else {
-			fmt.Fprintf(w, "Pushed branch %s to origin\n", branch)
+			fmt.Fprintf(w, "✓ Pushed branch %s to origin\n", branch)
 		}
 	}
 	if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
@@ -351,7 +351,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 			if err := CheckoutBranch(context.Background(), branch); err != nil {
 				return fmt.Errorf("failed to checkout branch %q: %w", branch, err)
 			}
-			fmt.Fprintf(w, "Switched to branch %s\n", branch)
+			fmt.Fprintf(w, "✓ Switched to branch %s\n", branch)
 		}
 	}
 
@@ -439,7 +439,7 @@ func runTrailUpdate(w, errW io.Writer, statusStr, title, body, branch string, la
 			),
 		)
 		if formErr := form.Run(); formErr != nil {
-			return fmt.Errorf("form cancelled: %w", formErr)
+			return handleFormCancellation(w, "Trail update", formErr)
 		}
 	}
 
@@ -474,7 +474,7 @@ func runTrailUpdate(w, errW io.Writer, statusStr, title, body, branch string, la
 		return fmt.Errorf("failed to update trail: %w", err)
 	}
 
-	fmt.Fprintf(w, "Updated trail for branch %s\n", branch)
+	fmt.Fprintf(w, "✓ Updated trail for branch %s\n", branch)
 
 	if err := strategy.PushTrailsBranch(context.Background(), "origin"); err != nil {
 		fmt.Fprintf(errW, "Warning: failed to push trail data: %v\n", err)
