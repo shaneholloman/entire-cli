@@ -205,6 +205,163 @@ func TestRecordError_ChildErrorFlagInOutput(t *testing.T) {
 	}
 }
 
+func TestChildStepKey_Deduplication(t *testing.T) {
+	t.Parallel()
+
+	const (
+		stepCheck  = "check_content"
+		stepSave   = "save_state"
+		stepUnique = "unique_step"
+	)
+
+	seen := make(map[string]int)
+
+	// First occurrence keeps original name
+	if got := childStepKey(stepCheck, seen); got != stepCheck {
+		t.Errorf("first check_content = %q, want %q", got, stepCheck)
+	}
+	if got := childStepKey(stepSave, seen); got != stepSave {
+		t.Errorf("first save_state = %q, want %q", got, stepSave)
+	}
+
+	// Second occurrence gets ~1 suffix
+	if got := childStepKey(stepCheck, seen); got != "check_content~1" {
+		t.Errorf("second check_content = %q, want %q", got, "check_content~1")
+	}
+	if got := childStepKey(stepSave, seen); got != "save_state~1" {
+		t.Errorf("second save_state = %q, want %q", got, "save_state~1")
+	}
+
+	// Third occurrence gets ~2
+	if got := childStepKey(stepCheck, seen); got != "check_content~2" {
+		t.Errorf("third check_content = %q, want %q", got, "check_content~2")
+	}
+
+	// Unique names are unaffected
+	if got := childStepKey(stepUnique, seen); got != stepUnique {
+		t.Errorf("unique_step = %q, want %q", got, stepUnique)
+	}
+}
+
+func TestEnd_DuplicateChildNames_AllPreserved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ctx, parent := Start(ctx, "post-commit")
+
+	// Simulate a loop creating children with the same names (e.g., per-session spans)
+	_, c1 := Start(ctx, "check_content")
+	c1.duration = 3000 * time.Millisecond
+	c1.ended = true
+
+	_, c2 := Start(ctx, "save_state")
+	c2.duration = 5 * time.Millisecond
+	c2.ended = true
+
+	// Second iteration — same names
+	_, c3 := Start(ctx, "check_content")
+	c3.duration = 0
+	c3.ended = true
+	c3.err = errors.New("test error")
+
+	_, c4 := Start(ctx, "save_state")
+	c4.duration = 2 * time.Millisecond
+	c4.ended = true
+
+	parent.End()
+
+	if len(parent.children) != 4 {
+		t.Fatalf("expected 4 children, got %d", len(parent.children))
+	}
+
+	// Verify the children have correct names for deduplication.
+	// End() uses childStepKey which gives: check_content, save_state, check_content~1, save_state~1
+	// We verify the structure is intact so End() can produce unique keys.
+	names := make([]string, len(parent.children))
+	for i, c := range parent.children {
+		names[i] = c.name
+	}
+	// All 4 children exist with their original names (dedup happens at serialization)
+	if names[0] != "check_content" || names[1] != "save_state" ||
+		names[2] != "check_content" || names[3] != "save_state" {
+		t.Errorf("children names = %v, expected [check_content save_state check_content save_state]", names)
+	}
+}
+
+func TestStartLoop_CreatesGroupSpan(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ctx, root := Start(ctx, "post-commit")
+
+	loopCtx, loop := StartLoop(ctx, "process_sessions")
+	_, iter0 := loop.Iteration(loopCtx)
+	iter0.duration = 100 * time.Millisecond
+	iter0.ended = true
+	_, iter1 := loop.Iteration(loopCtx)
+	iter1.duration = 200 * time.Millisecond
+	iter1.ended = true
+	loop.span.duration = 300 * time.Millisecond
+	loop.span.ended = true
+
+	root.End()
+
+	// Verify loop span has 2 children (the iterations)
+	if len(loop.span.children) != 2 {
+		t.Fatalf("loop should have 2 children, got %d", len(loop.span.children))
+	}
+	if loop.span.children[0] != iter0 {
+		t.Error("loop.children[0] should be iter0")
+	}
+	if loop.span.children[1] != iter1 {
+		t.Error("loop.children[1] should be iter1")
+	}
+}
+
+func TestStartLoop_IterationsAutoEnded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ctx, root := Start(ctx, "hook")
+	loopCtx, loop := StartLoop(ctx, "loop")
+	_, iter0 := loop.Iteration(loopCtx)
+	iter0.duration = 50 * time.Millisecond
+	// iter0.ended intentionally NOT set — should be auto-ended when loop.End() runs
+	loop.End()
+
+	if !iter0.ended {
+		t.Error("iteration should be auto-ended when loop.End() runs")
+	}
+
+	root.End()
+}
+
+func TestStartLoop_IterationWithErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	ctx, root := Start(ctx, "hook")
+	loopCtx, loop := StartLoop(ctx, "process_sessions")
+	_, iter0 := loop.Iteration(loopCtx)
+	iter0.duration = 100 * time.Millisecond
+	iter0.ended = true
+	_, iter1 := loop.Iteration(loopCtx)
+	iter1.duration = 200 * time.Millisecond
+	iter1.RecordError(errors.New("session failed"))
+	iter1.ended = true
+	loop.span.duration = 300 * time.Millisecond
+	loop.span.ended = true
+
+	root.End()
+
+	if iter0.err != nil {
+		t.Error("iter0 should have no error")
+	}
+	if iter1.err == nil {
+		t.Error("iter1 should have error recorded")
+	}
+}
+
 func TestEnd_NoErrorFlagByDefault(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
