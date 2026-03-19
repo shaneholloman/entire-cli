@@ -77,8 +77,12 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 		return fmt.Errorf("invalid %s event: %w", event.Type, err)
 	}
 
-	// Build informational message
+	// Build informational message — warn early if repo has no commits yet,
+	// since checkpoints require at least one commit to work.
 	message := "\n\nPowered by Entire:\n  This conversation will be linked to your next commit."
+	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
+		message = "\n\nPowered by Entire:\n  No commits yet — checkpoints will activate after your first commit."
+	}
 
 	// Check for concurrent sessions and append count if any
 	_, countSessionsSpan := perf.Start(ctx, "count_active_sessions")
@@ -301,11 +305,12 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	}
 
 	// Early check: bail out quickly if the repo has no commits yet.
+	// Return nil (not an error) so the hook exits 0 — agents treat non-zero
+	// exit codes as hook failures. The user was already warned at session start.
 	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
-		prepareSpan.RecordError(strategy.ErrEmptyRepository)
 		prepareSpan.End()
 		logging.Info(logCtx, "skipping checkpoint - will activate after first commit")
-		return NewSilentError(strategy.ErrEmptyRepository)
+		return nil
 	}
 	prepareSpan.End()
 

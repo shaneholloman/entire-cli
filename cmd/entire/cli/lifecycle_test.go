@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +155,79 @@ func TestHandleLifecycleSessionStart_EmptySessionID(t *testing.T) {
 	}
 }
 
+// mockHookResponseAgent extends mockLifecycleAgent with HookResponseWriter.
+type mockHookResponseAgent struct {
+	mockLifecycleAgent
+
+	lastMessage string
+}
+
+var _ agent.HookResponseWriter = (*mockHookResponseAgent)(nil)
+
+func (m *mockHookResponseAgent) WriteHookResponse(message string) error {
+	m.lastMessage = message
+	return nil
+}
+
+func newMockHookResponseAgent() *mockHookResponseAgent {
+	return &mockHookResponseAgent{
+		mockLifecycleAgent: mockLifecycleAgent{
+			name:      "mock-hrw",
+			agentType: "Mock HRW Agent",
+		},
+	}
+}
+
+func TestHandleLifecycleSessionStart_EmptyRepoWarning(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir) // no commits — empty repo
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	ag := newMockHookResponseAgent()
+	event := &agent.Event{
+		Type:      agent.SessionStart,
+		SessionID: "test-empty-repo-warning",
+		Timestamp: time.Now(),
+	}
+
+	err := handleLifecycleSessionStart(context.Background(), ag, event)
+	require.NoError(t, err)
+
+	if !strings.Contains(ag.lastMessage, "No commits yet") {
+		t.Errorf("expected message containing 'No commits yet', got: %q", ag.lastMessage)
+	}
+}
+
+func TestHandleLifecycleSessionStart_DefaultMessageWithCommits(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	ag := newMockHookResponseAgent()
+	event := &agent.Event{
+		Type:      agent.SessionStart,
+		SessionID: "test-default-message",
+		Timestamp: time.Now(),
+	}
+
+	err := handleLifecycleSessionStart(context.Background(), ag, event)
+	require.NoError(t, err)
+
+	if !strings.Contains(ag.lastMessage, "linked to your next commit") {
+		t.Errorf("expected message containing 'linked to your next commit', got: %q", ag.lastMessage)
+	}
+	if strings.Contains(ag.lastMessage, "No commits yet") {
+		t.Errorf("did not expect empty-repo warning, got: %q", ag.lastMessage)
+	}
+}
+
 // --- handleLifecycleTurnStart tests ---
 
 func TestHandleLifecycleTurnStart_EmptySessionID(t *testing.T) {
@@ -304,17 +376,10 @@ func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {
 
 	err := handleLifecycleTurnEnd(context.Background(), ag, event)
 
-	// Should return a SilentError wrapping ErrEmptyRepository
-	if err == nil {
-		t.Error("expected error for empty repository, got nil")
-	}
-
-	var silentErr *SilentError
-	if !errors.As(err, &silentErr) {
-		t.Errorf("expected SilentError, got: %T", err)
-	}
-	if !errors.Is(silentErr.Unwrap(), strategy.ErrEmptyRepository) {
-		t.Errorf("expected ErrEmptyRepository, got: %v", silentErr.Unwrap())
+	// Should return nil so the hook exits 0 — agents treat non-zero as failure.
+	// The user was already warned at session start.
+	if err != nil {
+		t.Errorf("expected nil for empty repository (graceful no-op), got: %v", err)
 	}
 }
 
