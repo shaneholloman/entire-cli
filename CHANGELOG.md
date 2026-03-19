@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-03-19
+
+### Added
+
+- Sparse metadata fetch with on-demand blob resolution for reduced memory and network cost ([#680](https://github.com/entireio/cli/pull/680), [#721](https://github.com/entireio/cli/pull/721))
+- `entire trace` command for diagnosing slow performance hooks and lifecycle events ([#652](https://github.com/entireio/cli/pull/652))
+- Opt-in PII redaction with typed tokens ([#397](https://github.com/entireio/cli/pull/397))
+- Auto-discover external agents during `entire enable`, `entire rewind`, and `entire resume` ([#678](https://github.com/entireio/cli/pull/678))
+- Preview support for dedicated remote repository for checkpoint data, onboarded the CLI repository ([#677](https://github.com/entireio/cli/pull/677), ([#732](https://github.com/entireio/cli/pull/732))
+)
+- E2E tests for external agents with roger-roger canary ([#700](https://github.com/entireio/cli/pull/700), [#702](https://github.com/entireio/cli/pull/702))
+- hk hook manager detection ([#657](https://github.com/entireio/cli/pull/657))
+
+### Changed
+
+- Bumped go-git with improved large packfile memory efficiency ([#731](https://github.com/entireio/cli/pull/731))
+- Use transcript size instead of line count for new content detection ([#726](https://github.com/entireio/cli/pull/726))
+- Improved traversal resistance with `os.OpenRoot` ([#704](https://github.com/entireio/cli/pull/704))
+- Upgraded to Go 1.26.1 and golangci-lint 2.11.3 ([#699](https://github.com/entireio/cli/pull/699))
+- CLI command output consistency improvements ([#709](https://github.com/entireio/cli/pull/709))
+
+### Fixed
+
+- Gemini CLI 0.33+ hook validation by stripping non-array values from hooks config ([#714](https://github.com/entireio/cli/pull/714))
+- Copilot checkpoint token scoping, session token backfill, and modelMetrics struct ([#717](https://github.com/entireio/cli/pull/717))
+- Cursor 2026.03.11 transitioning from flat to nested path during a session ([#707](https://github.com/entireio/cli/pull/707))
+- Rewind file path resolution when running from a subdirectory ([#663](https://github.com/entireio/cli/pull/663))
+- `GetWorktreeID` handling `.bare/worktrees/` layout in bare repos ([#669](https://github.com/entireio/cli/pull/669))
+- OpenCode over-redaction in session transcripts ([#703](https://github.com/entireio/cli/pull/703))
+- Factory AI Droid prompt fallback to script parsing when hooks don't provide it ([#705](https://github.com/entireio/cli/pull/705))
+- Resume fetching metadata branch on fresh clones where `entire/checkpoints/v1` doesn't exist locally ([#680](https://github.com/entireio/cli/pull/680))
+- Remote branch detection for v6 metadata merging ([#662](https://github.com/entireio/cli/pull/662))
+- Mise install detection for update command ([#659](https://github.com/entireio/cli/pull/659))
+- Cursor-cli E2E flakiness with isolated config dir ([#654](https://github.com/entireio/cli/pull/654))
+
+### Housekeeping
+
+- Factory AI Droid added to all documentation ([#655](https://github.com/entireio/cli/pull/655))
+- Copilot CLI added to all documentation ([#653](https://github.com/entireio/cli/pull/653))
+- Updated Discord release message to include installation link ([#646](https://github.com/entireio/cli/pull/646))
+- Dependency bumps: actions/create-github-app-token 3.0.0, jdx/mise-action 4, gitleaks 8.30.1 ([#706](https://github.com/entireio/cli/pull/706), [#694](https://github.com/entireio/cli/pull/694), [#689](https://github.com/entireio/cli/pull/689))
+- Added tests for git remote related flows ([#696](https://github.com/entireio/cli/pull/696))
+- "Why Entire" section in README ([#331](https://github.com/entireio/cli/pull/331))
+
+### Thanks
+
+Thanks to @mvanhorn for multiple contributions including hk hook manager detection, bare repo worktree ID fix, rewind subdirectory path fix, and mise install detection!
+
 ## [0.5.0] - 2026-03-06
 
 ### Added
