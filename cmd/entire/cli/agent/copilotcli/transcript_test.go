@@ -378,7 +378,7 @@ func TestCalculateTokenUsage_SessionShutdown(t *testing.T) {
 	ag := &CopilotCLIAgent{}
 
 	lines := append(testJSONLLines, //nolint:gocritic // append to copy is intentional
-		`{"type":"session.shutdown","data":{"modelMetrics":[{"modelId":"claude-sonnet-4.6","requests":{"count":3},"usage":{"inputTokens":64807,"outputTokens":289,"cacheReadTokens":42625,"cacheWriteTokens":100}}]},"id":"99","timestamp":"2026-03-03T00:01:00Z","parentId":""}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":3},"usage":{"inputTokens":64807,"outputTokens":289,"cacheReadTokens":42625,"cacheWriteTokens":100}}}},"id":"99","timestamp":"2026-03-03T00:01:00Z","parentId":""}`,
 	)
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
@@ -408,10 +408,7 @@ func TestCalculateTokenUsage_MultiModel(t *testing.T) {
 	ag := &CopilotCLIAgent{}
 
 	lines := []string{
-		`{"type":"session.shutdown","data":{"modelMetrics":[` +
-			`{"modelId":"gpt-4.1","requests":{"count":2},"usage":{"inputTokens":1000,"outputTokens":200,"cacheReadTokens":0,"cacheWriteTokens":0}},` +
-			`{"modelId":"claude-sonnet-4.6","requests":{"count":1},"usage":{"inputTokens":500,"outputTokens":100,"cacheReadTokens":300,"cacheWriteTokens":50}}` +
-			`]},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"gpt-4.1":{"requests":{"count":2},"usage":{"inputTokens":1000,"outputTokens":200,"cacheReadTokens":0,"cacheWriteTokens":0}},"claude-sonnet-4.6":{"requests":{"count":1},"usage":{"inputTokens":500,"outputTokens":100,"cacheReadTokens":300,"cacheWriteTokens":50}}}},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 
@@ -428,8 +425,35 @@ func TestCalculateTokenUsage_MultiModel(t *testing.T) {
 	if usage.CacheReadTokens != 300 {
 		t.Errorf("CacheReadTokens = %d, want 300", usage.CacheReadTokens)
 	}
+	if usage.CacheCreationTokens != 50 {
+		t.Errorf("CacheCreationTokens = %d, want 50", usage.CacheCreationTokens)
+	}
 	if usage.APICallCount != 3 {
 		t.Errorf("APICallCount = %d, want 3", usage.APICallCount)
+	}
+}
+
+func TestCalculateTokenUsage_EmptyModelMetrics(t *testing.T) {
+	t.Parallel()
+	ag := &CopilotCLIAgent{}
+
+	// session.shutdown with empty modelMetrics map is skipped by the len == 0 guard;
+	// fallback to summing assistant.message outputTokens must kick in.
+	lines := []string{
+		`{"type":"assistant.message","data":{"content":"hi","outputTokens":50},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{}},"id":"2","timestamp":"2026-03-03T00:00:01Z","parentId":""}`,
+	}
+	content := []byte(strings.Join(lines, "\n") + "\n")
+
+	usage, err := ag.CalculateTokenUsage(content, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d, want 50 (fallback to assistant.message)", usage.OutputTokens)
+	}
+	if usage.APICallCount != 1 {
+		t.Errorf("APICallCount = %d, want 1", usage.APICallCount)
 	}
 }
 
@@ -481,7 +505,7 @@ func TestCalculateTokenUsage_WithOffset(t *testing.T) {
 	lines := []string{
 		`{"type":"user.message","data":{"content":"hello"},"id":"1","timestamp":"2026-03-03T00:00:00Z","parentId":""}`,
 		`{"type":"assistant.message","data":{"content":"hi","outputTokens":25},"id":"2","timestamp":"2026-03-03T00:00:01Z","parentId":"1"}`,
-		`{"type":"session.shutdown","data":{"modelMetrics":[{"modelId":"claude-sonnet-4.6","requests":{"count":1},"usage":{"inputTokens":500,"outputTokens":50,"cacheReadTokens":0,"cacheWriteTokens":0}}]},"id":"3","timestamp":"2026-03-03T00:00:02Z","parentId":""}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":1},"usage":{"inputTokens":500,"outputTokens":50,"cacheReadTokens":0,"cacheWriteTokens":0}}}},"id":"3","timestamp":"2026-03-03T00:00:02Z","parentId":""}`,
 	}
 	content := []byte(strings.Join(lines, "\n") + "\n")
 

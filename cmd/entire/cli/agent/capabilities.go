@@ -27,7 +27,7 @@ type DeclaredCaps struct {
 
 // AsHookSupport returns the agent as HookSupport if it both implements the
 // interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsHookSupport(ag Agent) (HookSupport, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsHookSupport(ag Agent) (HookSupport, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -43,7 +43,7 @@ func AsHookSupport(ag Agent) (HookSupport, bool) { //nolint:ireturn // type-asse
 
 // AsTranscriptAnalyzer returns the agent as TranscriptAnalyzer if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsTranscriptAnalyzer(ag Agent) (TranscriptAnalyzer, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsTranscriptAnalyzer(ag Agent) (TranscriptAnalyzer, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -59,7 +59,7 @@ func AsTranscriptAnalyzer(ag Agent) (TranscriptAnalyzer, bool) { //nolint:iretur
 
 // AsTranscriptPreparer returns the agent as TranscriptPreparer if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsTranscriptPreparer(ag Agent) (TranscriptPreparer, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsTranscriptPreparer(ag Agent) (TranscriptPreparer, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -75,7 +75,7 @@ func AsTranscriptPreparer(ag Agent) (TranscriptPreparer, bool) { //nolint:iretur
 
 // AsTokenCalculator returns the agent as TokenCalculator if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsTokenCalculator(ag Agent) (TokenCalculator, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsTokenCalculator(ag Agent) (TokenCalculator, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -91,7 +91,7 @@ func AsTokenCalculator(ag Agent) (TokenCalculator, bool) { //nolint:ireturn // t
 
 // AsTextGenerator returns the agent as TextGenerator if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsTextGenerator(ag Agent) (TextGenerator, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsTextGenerator(ag Agent) (TextGenerator, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -107,7 +107,7 @@ func AsTextGenerator(ag Agent) (TextGenerator, bool) { //nolint:ireturn // type-
 
 // AsHookResponseWriter returns the agent as HookResponseWriter if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsHookResponseWriter(ag Agent) (HookResponseWriter, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsHookResponseWriter(ag Agent) (HookResponseWriter, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -126,7 +126,7 @@ func AsHookResponseWriter(ag Agent) (HookResponseWriter, bool) { //nolint:iretur
 // ExtractPrompts is conceptually part of transcript analysis, so it shares the same
 // capability gate — this prevents calling extract-prompts on external agent binaries
 // that never declared transcript_analyzer support.
-func AsPromptExtractor(ag Agent) (PromptExtractor, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsPromptExtractor(ag Agent) (PromptExtractor, bool) {
 	if ag == nil {
 		return nil, false
 	}
@@ -142,7 +142,7 @@ func AsPromptExtractor(ag Agent) (PromptExtractor, bool) { //nolint:ireturn // t
 
 // AsSubagentAwareExtractor returns the agent as SubagentAwareExtractor if it both
 // implements the interface and (for CapabilityDeclarer agents) has declared the capability.
-func AsSubagentAwareExtractor(ag Agent) (SubagentAwareExtractor, bool) { //nolint:ireturn // type-assertion helper must return interface
+func AsSubagentAwareExtractor(ag Agent) (SubagentAwareExtractor, bool) {
 	if ag == nil {
 		return nil, false
 	}

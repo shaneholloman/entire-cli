@@ -93,7 +93,7 @@ write_turn2_transcript() {
 {"type":"user.message","data":{"content":"Create beta.txt with beta"},"id":"6","timestamp":"2026-03-17T00:00:05Z","parentId":""}
 {"type":"assistant.message","data":{"content":"Created beta.txt","outputTokens":25},"id":"7","timestamp":"2026-03-17T00:00:06Z","parentId":"6"}
 {"type":"tool.execution_complete","data":{"toolCallId":"tool-2","model":"claude-sonnet-4.6","toolTelemetry":{"properties":{"filePaths":"[\\"beta.txt\\"]"},"metrics":{"linesAdded":1,"linesRemoved":0}}},"id":"8","timestamp":"2026-03-17T00:00:07Z","parentId":"7"}
-{"type":"session.shutdown","data":{"modelMetrics":[{"modelId":"claude-sonnet-4.6","requests":{"count":2},"usage":{"inputTokens":500,"outputTokens":35,"cacheReadTokens":20,"cacheWriteTokens":10}}]},"id":"9","timestamp":"2026-03-17T00:00:08Z","parentId":""}
+{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":2},"usage":{"inputTokens":500,"outputTokens":35,"cacheReadTokens":20,"cacheWriteTokens":10}}}},"id":"9","timestamp":"2026-03-17T00:00:08Z","parentId":""}
 EOF
 }
 

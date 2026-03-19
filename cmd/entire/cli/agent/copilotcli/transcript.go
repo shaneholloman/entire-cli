@@ -230,13 +230,15 @@ func extractModelFromEvents(events []copilotEvent) string {
 
 // sessionShutdownData is the data payload for session.shutdown events.
 // Contains aggregate model metrics for the entire session.
+// modelMetrics is a JSON object keyed by model name (e.g. "claude-sonnet-4.6"),
+// not an array — using map[string] here matches the real Copilot CLI wire format.
 type sessionShutdownData struct {
-	ModelMetrics []modelMetric `json:"modelMetrics"`
+	ModelMetrics map[string]modelMetric `json:"modelMetrics"`
 }
 
 // modelMetric contains per-model token usage aggregates.
+// The model name is the map key in sessionShutdownData.ModelMetrics, not a field.
 type modelMetric struct {
-	ModelID  string        `json:"modelId"`
 	Requests modelRequests `json:"requests"`
 	Usage    modelUsage    `json:"usage"`
 }
@@ -287,6 +289,8 @@ func extractTokenUsageFromEvents(events []copilotEvent, preferSessionShutdown bo
 
 			var data sessionShutdownData
 			if err := json.Unmarshal(events[i].Data, &data); err != nil {
+				logging.Debug(context.Background(), "copilot-cli: session.shutdown data unmarshal failed",
+					"err", err)
 				continue
 			}
 

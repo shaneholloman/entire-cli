@@ -314,6 +314,7 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 		if hasTokenUsageData(fullSessionUsage) {
 			return fullSessionUsage
 		}
+		logging.Debug(ctx, "copilot-cli: full-session token read produced no data, falling back to checkpoint usage")
 	}
 
 	if agentType == agent.AgentTypeCopilotCLI && hasTokenUsageData(checkpointUsage) {
