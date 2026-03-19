@@ -67,9 +67,9 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 	}
 
 	fmt.Fprintf(outW, "Device code: %s\n", start.UserCode)
-	approvalURL := start.VerificationURIComplete
+	approvalURL := start.VerificationURI
 	if approvalURL == "" {
-		approvalURL = start.VerificationURI
+		approvalURL = start.VerificationURIComplete
 	}
 
 	if canPromptInteractively() {
