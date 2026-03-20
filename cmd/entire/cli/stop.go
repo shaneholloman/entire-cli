@@ -58,8 +58,9 @@ Examples:
 // runStop is the main logic for the stop command.
 func runStop(ctx context.Context, cmd *cobra.Command, sessionID string, all, force bool) error {
 	// --session path: stop a specific session by explicit ID (no worktree scoping).
+	// Explicit ID is already a deliberate action — no confirmation needed.
 	if sessionID != "" {
-		return runStopSession(ctx, cmd, sessionID, force)
+		return runStopSession(ctx, cmd, sessionID, true)
 	}
 
 	// List all session states
