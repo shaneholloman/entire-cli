@@ -53,7 +53,6 @@ func searchTranscriptInProjectDirs(sessionID string, ag agentpkg.Agent) (string,
 
 	// Walk subdirectories with a max depth of 3 (baseDir/project/subdir/file)
 	// to avoid scanning unrelated project trees.
-	baseDirDepth := strings.Count(filepath.Clean(baseDir), string(filepath.Separator))
 	const maxExtraDepth = 3
 
 	var found string
@@ -64,8 +63,12 @@ func searchTranscriptInProjectDirs(sessionID string, ag agentpkg.Agent) (string,
 		if !d.IsDir() {
 			return nil
 		}
-		// Limit walk depth
-		depth := strings.Count(filepath.Clean(path), string(filepath.Separator)) - baseDirDepth
+		// Limit walk depth using relative path from base
+		rel, relErr := filepath.Rel(baseDir, path)
+		if relErr != nil {
+			return filepath.SkipDir
+		}
+		depth := strings.Count(rel, string(filepath.Separator))
 		if depth > maxExtraDepth {
 			return filepath.SkipDir
 		}
