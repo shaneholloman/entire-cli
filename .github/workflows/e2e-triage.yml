@@ -11,12 +11,12 @@ on:
         required: true
         type: string
       sha:
-        description: Commit SHA that failed
-        required: true
+        description: Commit SHA (auto-detected from run if omitted)
+        required: false
         type: string
       failed_agents:
-        description: Comma-separated list of failed agents
-        required: true
+        description: Comma-separated list of failed agents (auto-detected from run if omitted)
+        required: false
         type: string
       slack_channel:
         description: Slack channel ID for the originating thread
@@ -45,6 +45,7 @@ jobs:
         id: set
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REPO_NAME: ${{ github.repository }}
           RUN_URL_INPUT: ${{ inputs.run_url }}
@@ -57,11 +58,32 @@ jobs:
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             run_url="$RUN_URL_INPUT"
-            sha="$SHA_INPUT"
+            sha="${SHA_INPUT:-}"
             slack_channel="${SLACK_CHANNEL_INPUT:-}"
             slack_thread_ts="${SLACK_THREAD_TS_INPUT:-}"
-            failed_agents_raw="$FAILED_AGENTS_INPUT"
-            agents_json="$(printf '%s' "$failed_agents_raw" | jq -R -s -c 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')"
+
+            # Extract run ID from URL for API calls (if needed)
+            run_id=""
+            if [ -z "$sha" ] || [ -z "$FAILED_AGENTS_INPUT" ]; then
+              run_id=$(echo "$run_url" | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
+              if [ -z "$run_id" ]; then
+                echo "Could not extract run ID from run_url: $run_url" >&2
+                exit 1
+              fi
+            fi
+
+            # If sha not provided, fetch from run
+            if [ -z "$sha" ]; then
+              sha=$(gh run view "$run_id" --repo "$REPO_NAME" --json headSha --jq '.headSha')
+            fi
+
+            # If failed_agents not provided, fetch from run's failed jobs
+            if [ -n "$FAILED_AGENTS_INPUT" ]; then
+              agents_json="$(printf '%s' "$FAILED_AGENTS_INPUT" | jq -R -s -c 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')"
+            else
+              agents_json=$(gh api "repos/$REPO_NAME/actions/runs/$run_id/jobs" \
+                --jq '[.jobs[] | select(.conclusion == "failure") | .name | capture("\\((?<agent>[^)]+)\\)") | .agent]')
+            fi
           else
             trigger_text="$(jq -r '.client_payload.trigger_text // empty' "$GITHUB_EVENT_PATH")"
             repo="$(jq -r '.client_payload.repo // empty' "$GITHUB_EVENT_PATH")"
