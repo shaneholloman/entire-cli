@@ -124,7 +124,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           failed=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
-            --jq '[.jobs[] | select(.conclusion == "failure") | .name | capture("\\((?<agent>[^)]+)\\)") | .agent] | join(", ")')
+            --jq '[.jobs[]
+              | select(.conclusion == "failure")
+              | (.name | (try capture("\\((?<agent>[^)]+)\\)").agent catch null))
+              | select(. != null)
+            ] | join(", ")')
           failed_csv="${failed//, /,}"
           echo "agents=$failed" >> "$GITHUB_OUTPUT"
           echo "agents_csv=$failed_csv" >> "$GITHUB_OUTPUT"

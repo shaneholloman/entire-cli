@@ -28,6 +28,10 @@ permissions:
   actions: read
   contents: read
 
+concurrency:
+  group: e2e-triage-${{ inputs.run_url || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   matrix-setup:
     runs-on: ubuntu-latest
@@ -73,7 +77,11 @@ jobs:
               sha=$(echo "$run_data" | jq -r '.headSha')
             fi
             if [ -z "$FAILED_AGENTS_INPUT" ]; then
-              agents_json=$(echo "$run_data" | jq -c '[.jobs[] | select(.conclusion == "failure") | .name | capture("\\((?<agent>[^)]+)\\)") | .agent]')
+              agents_json=$(echo "$run_data" | jq -c '[.jobs[]
+                | select(.conclusion == "failure")
+                | (.name | (try capture("\\((?<agent>[^)]+)\\)").agent catch null))
+                | select(. != null)
+              ]')
             fi
           fi
 
@@ -90,7 +98,7 @@ jobs:
             exit 1
           fi
           if [ -z "$agents_json" ] || [ "$agents_json" = "[]" ] || [ "$agents_json" = "null" ]; then
-            echo "failed_agents is required" >&2
+            echo "agents is required (provide failed_agents input or ensure failed job names contain '(agent-name)')" >&2
             exit 1
           fi
 
