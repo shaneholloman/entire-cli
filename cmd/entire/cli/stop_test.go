@@ -57,9 +57,13 @@ func TestStopCmd_NoActiveSessions(t *testing.T) {
 	}
 }
 
-func TestStopCmd_SingleSession_Force(t *testing.T) {
+// TestStopCmd_SingleSession_EmptyWorktreePath_Force verifies that a session with an
+// empty WorktreePath (legacy session without worktree tracking) is included in the
+// current worktree's scope and stopped via the no-flags path.
+func TestStopCmd_SingleSession_EmptyWorktreePath_Force(t *testing.T) {
 	setupStopTestRepo(t)
 
+	// WorktreePath intentionally left empty — exercises the s.WorktreePath == "" fallback.
 	state := makeSessionState("test-stop-single-1", session.PhaseIdle)
 	state.StepCount = 0
 	if err := strategy.SaveSessionState(context.Background(), state); err != nil {
@@ -279,6 +283,72 @@ func TestStopCmd_AllFlag(t *testing.T) {
 	}
 }
 
+func TestStopCmd_AllFlag_ExcludesOtherWorktrees(t *testing.T) {
+	setupStopTestRepo(t)
+
+	ctx := context.Background()
+	worktreePath, wtErr := paths.WorktreeRoot(ctx)
+	if wtErr != nil {
+		t.Fatalf("WorktreeRoot() error = %v", wtErr)
+	}
+
+	inScope := makeSessionState("test-all-scope-in", session.PhaseIdle)
+	inScope.WorktreePath = worktreePath
+
+	outOfScope := makeSessionState("test-all-scope-out", session.PhaseIdle)
+	outOfScope.WorktreePath = "/other/worktree"
+
+	for _, s := range []*strategy.SessionState{inScope, outOfScope} {
+		if err := strategy.SaveSessionState(ctx, s); err != nil {
+			t.Fatalf("SaveSessionState() error = %v", err)
+		}
+	}
+
+	cmd := newStopCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--force"})
+
+	if err := cmd.ExecuteContext(ctx); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	stopped, err := strategy.LoadSessionState(ctx, "test-all-scope-in")
+	if err != nil {
+		t.Fatalf("LoadSessionState(in-scope) error = %v", err)
+	}
+	if stopped == nil || stopped.Phase != session.PhaseEnded {
+		t.Errorf("expected in-scope session to be PhaseEnded, got: %v", stopped.Phase)
+	}
+
+	untouched, err := strategy.LoadSessionState(ctx, "test-all-scope-out")
+	if err != nil {
+		t.Fatalf("LoadSessionState(out-of-scope) error = %v", err)
+	}
+	if untouched == nil || untouched.Phase == session.PhaseEnded {
+		t.Errorf("expected out-of-scope session to remain non-ended, got: %v", untouched.Phase)
+	}
+}
+
+func TestStopCmd_AllFlag_NoActiveSessions(t *testing.T) {
+	setupStopTestRepo(t)
+
+	cmd := newStopCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--force"})
+
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "No active sessions.") {
+		t.Errorf("expected 'No active sessions.' in output, got: %q", stdout.String())
+	}
+}
+
 func TestStopCmd_AllAndSessionMutuallyExclusive(t *testing.T) {
 	setupStopTestRepo(t)
 
@@ -366,32 +436,42 @@ func TestStopCmd_NotGitRepo(t *testing.T) {
 	}
 }
 
-func TestStopCmd_MultiSession_NoFlags(t *testing.T) {
+// TestStopSelectedSessions_StopsAll exercises stopSelectedSessions directly,
+// bypassing the TUI multi-select. Verifies all sessions in the list are ended
+// and that success lines are printed for each.
+func TestStopSelectedSessions_StopsAll(t *testing.T) {
 	setupStopTestRepo(t)
 
-	// Create two active sessions. The TUI multi-select would normally hang,
-	// so we do NOT execute the command. We just verify the session setup is
-	// consistent: both sessions are non-ended.
-	state1 := makeSessionState("test-stop-multi-sess-1", session.PhaseIdle)
-	state2 := makeSessionState("test-stop-multi-sess-2", session.PhaseIdle)
-	for _, s := range []*strategy.SessionState{state1, state2} {
-		if err := strategy.SaveSessionState(context.Background(), s); err != nil {
+	ctx := context.Background()
+	s1 := makeSessionState("test-batch-stop-1", session.PhaseIdle)
+	s2 := makeSessionState("test-batch-stop-2", session.PhaseIdle)
+	for _, s := range []*strategy.SessionState{s1, s2} {
+		if err := strategy.SaveSessionState(ctx, s); err != nil {
 			t.Fatalf("SaveSessionState() error = %v", err)
 		}
 	}
 
-	// Verify both sessions exist and are non-ended, so the multi-select path
-	// would be triggered by the command (not the no-sessions path).
-	for _, id := range []string{"test-stop-multi-sess-1", "test-stop-multi-sess-2"} {
-		loaded, err := strategy.LoadSessionState(context.Background(), id)
+	cmd := newStopCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	if err := stopSelectedSessions(ctx, cmd, []*strategy.SessionState{s1, s2}); err != nil {
+		t.Fatalf("stopSelectedSessions() error = %v", err)
+	}
+
+	out := stdout.String()
+	for _, id := range []string{"test-batch-stop-1", "test-batch-stop-2"} {
+		if !strings.Contains(out, id) {
+			t.Errorf("expected session ID %q in output, got: %q", id, out)
+		}
+
+		loaded, err := strategy.LoadSessionState(ctx, id)
 		if err != nil {
 			t.Fatalf("LoadSessionState(%s) error = %v", id, err)
 		}
-		if loaded == nil {
-			t.Fatalf("expected session %s to exist", id)
-		}
-		if loaded.Phase == session.PhaseEnded {
-			t.Errorf("expected session %s to be non-ended, got PhaseEnded", id)
+		if loaded == nil || loaded.Phase != session.PhaseEnded {
+			t.Errorf("expected session %s to be PhaseEnded after batch stop", id)
 		}
 	}
 }
@@ -440,8 +520,8 @@ func TestStopCmd_AlreadyStopped_EndedAtOnly(t *testing.T) {
 }
 
 // TestFilterActiveSessions_ExcludesEndedAtSet verifies that filterActiveSessions
-// excludes sessions with EndedAt set regardless of Phase, matching the status.go
-// invariant that EndedAt is the authoritative "ended" signal.
+// excludes sessions with EndedAt set regardless of Phase, and includes sessions in
+// both PhaseIdle and PhaseActive.
 func TestFilterActiveSessions_ExcludesEndedAtSet(t *testing.T) {
 	t.Parallel()
 
@@ -453,15 +533,17 @@ func TestFilterActiveSessions_ExcludesEndedAtSet(t *testing.T) {
 	properEnded := makeSessionState("proper-ended", session.PhaseEnded)
 	properEnded.EndedAt = &now
 
-	active := makeSessionState("active", session.PhaseIdle)
+	activeIdle := makeSessionState("active-idle", session.PhaseIdle)
+	activeWorking := makeSessionState("active-working", session.PhaseActive)
 
-	result := filterActiveSessions([]*strategy.SessionState{legacyEnded, properEnded, active})
+	result := filterActiveSessions([]*strategy.SessionState{legacyEnded, properEnded, activeIdle, activeWorking})
 
-	if len(result) != 1 {
-		t.Fatalf("expected 1 active session, got %d", len(result))
+	if len(result) != 2 {
+		t.Fatalf("expected 2 active sessions, got %d", len(result))
 	}
-	if result[0].SessionID != "active" {
-		t.Errorf("expected active session ID %q, got %q", "active", result[0].SessionID)
+	ids := map[string]bool{result[0].SessionID: true, result[1].SessionID: true}
+	if !ids["active-idle"] || !ids["active-working"] {
+		t.Errorf("expected active-idle and active-working in result, got: %v", result)
 	}
 }
 

@@ -48,7 +48,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVar(&sessionFlag, "session", "", "Stop a specific session by ID")
+	cmd.Flags().StringVar(&sessionFlag, "session", "", "Stop a specific session by ID (not scoped to current worktree)")
 	cmd.Flags().BoolVar(&allFlag, "all", false, "Stop all active sessions in current worktree")
 	cmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Skip confirmation prompt")
 
@@ -76,6 +76,7 @@ func runStop(ctx context.Context, cmd *cobra.Command, sessionID string, all, for
 	}
 
 	// No-flags path: scope to current worktree before presenting options.
+	// RunE already validated the git repo, so this call succeeds in practice.
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to resolve worktree root: %w", err)
@@ -104,11 +105,17 @@ func runStop(ctx context.Context, cmd *cobra.Command, sessionID string, all, for
 // filterActiveSessions returns sessions in PhaseIdle or PhaseActive — all sessions
 // that have not been explicitly ended. Both phases are considered stoppable: IDLE
 // means the agent finished its last turn but the session is still open.
-// Matches the EndedAt == nil check used by status.go to avoid false positives on
-// legacy sessions where Phase may have defaulted to Idle despite EndedAt being set.
+//
+// The dual check (Phase != PhaseEnded AND EndedAt == nil) is intentionally stricter
+// than status.go's EndedAt-only check: it ensures sessions where only the state
+// machine transition succeeded (Phase=Ended) but EndedAt was never written are still
+// treated as ended, avoiding an accidental re-stop of a partially-ended session.
 func filterActiveSessions(states []*strategy.SessionState) []*strategy.SessionState {
 	var active []*strategy.SessionState
 	for _, s := range states {
+		if s == nil {
+			continue
+		}
 		if s.Phase != session.PhaseEnded && s.EndedAt == nil {
 			active = append(active, s)
 		}
@@ -159,6 +166,7 @@ func runStopAll(ctx context.Context, cmd *cobra.Command, activeSessions []*strat
 	// Scope to current worktree. Sessions with an empty WorktreePath predate
 	// worktree-path tracking and cannot be attributed to any specific worktree —
 	// including them here prevents them from being permanently unreachable via --all.
+	// RunE already validated the git repo, so this call succeeds in practice.
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to resolve worktree root: %w", err)
@@ -256,18 +264,27 @@ func runStopMultiSelect(ctx context.Context, cmd *cobra.Command, activeSessions 
 	for _, id := range selectedIDs {
 		if s, ok := stateByID[id]; ok {
 			toStop = append(toStop, s)
+		} else {
+			// Session was concurrently stopped between form render and confirmation.
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: session %s no longer found, skipping.\n", id)
 		}
+	}
+	if len(toStop) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No sessions to stop.")
+		return nil
 	}
 	return stopSelectedSessions(ctx, cmd, toStop)
 }
 
 // stopSelectedSessions stops each session in the list and prints a result line.
-// Errors from individual sessions are all accumulated and returned as a joined error,
-// so a single failure does not prevent remaining sessions from being stopped.
+// Errors from individual sessions are accumulated so a single failure does not
+// prevent remaining sessions from being stopped. Each failure is printed to stderr
+// immediately so the user knows which sessions could not be stopped.
 func stopSelectedSessions(ctx context.Context, cmd *cobra.Command, sessions []*strategy.SessionState) error {
 	var errs []error
 	for _, s := range sessions {
 		if err := stopSessionAndPrint(ctx, cmd, s); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "✗ %v\n", err)
 			errs = append(errs, err)
 		}
 	}
@@ -284,7 +301,7 @@ func stopSessionAndPrint(ctx context.Context, cmd *cobra.Command, state *strateg
 	stepCount := state.StepCount
 
 	if err := markSessionEnded(ctx, nil, sessionID); err != nil {
-		return err
+		return fmt.Errorf("failed to stop session %s: %w", sessionID, err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ Session %s stopped.\n", sessionID)
