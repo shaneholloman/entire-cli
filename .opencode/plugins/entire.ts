@@ -4,8 +4,8 @@
 // Requires Bun runtime (used by OpenCode's plugin system for loading ESM plugins).
 import type { Plugin } from "@opencode-ai/plugin"
 
-export const EntirePlugin: Plugin = async ({ $, directory }) => {
-  const ENTIRE_CMD = "go run ${OPENCODE_PROJECT_DIR}/cmd/entire/main.go"
+export const EntirePlugin: Plugin = async ({ directory }) => {
+  const ENTIRE_CMD = "go run $(git rev-parse --show-toplevel)/cmd/entire/main.go"
   // Track seen user messages to fire turn-start only once per message
   const seenUserMessages = new Set<string>()
   // Track current session ID for message events (which don't include sessionID)
@@ -16,13 +16,28 @@ export const EntirePlugin: Plugin = async ({ $, directory }) => {
   const messageStore = new Map<string, any>()
 
   /**
+   * Build the shell command for a hook invocation.
+   * Uses sh -c so that shell command substitution in ENTIRE_CMD
+   * (e.g., $(git rev-parse --show-toplevel) for local-dev) is interpreted.
+   */
+  function hookCmd(hookName: string): string[] {
+    return ["sh", "-c", `${ENTIRE_CMD} hooks opencode ${hookName}`]
+  }
+
+  /**
    * Pipe JSON payload to an entire hooks command (async).
    * Errors are logged but never thrown — plugin failures must not crash OpenCode.
    */
   async function callHook(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      await $`echo ${json} | ${ENTIRE_CMD} hooks opencode ${hookName}`.cwd(directory).quiet().nothrow()
+      const proc = Bun.spawn(hookCmd(hookName), {
+        cwd: directory,
+        stdin: new Blob([json + "\n"]),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      await proc.exited
     } catch {
       // Silently ignore — plugin failures must not crash OpenCode
     }
@@ -37,7 +52,7 @@ export const EntirePlugin: Plugin = async ({ $, directory }) => {
   function callHookSync(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      Bun.spawnSync(["sh", "-c", `${ENTIRE_CMD} hooks opencode ${hookName}`], {
+      Bun.spawnSync(hookCmd(hookName), {
         cwd: directory,
         stdin: new TextEncoder().encode(json + "\n"),
         stdout: "ignore",
@@ -50,108 +65,112 @@ export const EntirePlugin: Plugin = async ({ $, directory }) => {
 
   return {
     event: async ({ event }) => {
-      switch (event.type) {
-        case "session.created": {
-          const session = (event as any).properties?.info
-          if (!session?.id) break
-          // Reset per-session tracking state when switching sessions.
-          if (currentSessionID !== session.id) {
+      try {
+        switch (event.type) {
+          case "session.created": {
+            const session = (event as any).properties?.info
+            if (!session?.id) break
+            // Reset per-session tracking state when switching sessions.
+            if (currentSessionID !== session.id) {
+              seenUserMessages.clear()
+              messageStore.clear()
+              currentModel = null
+            }
+            currentSessionID = session.id
+            await callHook("session-start", {
+              session_id: session.id,
+            })
+            break
+          }
+
+          case "message.updated": {
+            const msg = (event as any).properties?.info
+            if (!msg) break
+            // Store message metadata (role, time, tokens, etc.)
+            messageStore.set(msg.id, msg)
+            // Track model from assistant messages
+            if (msg.role === "assistant" && msg.modelID) {
+              currentModel = msg.modelID
+            }
+            break
+          }
+
+          case "message.part.updated": {
+            const part = (event as any).properties?.part
+            if (!part?.messageID) break
+
+            // Fire turn-start on the first text part of a new user message
+            const msg = messageStore.get(part.messageID)
+            if (msg?.role === "user" && part.type === "text" && !seenUserMessages.has(msg.id)) {
+              seenUserMessages.add(msg.id)
+              const sessionID = msg.sessionID ?? currentSessionID
+              if (sessionID) {
+                await callHook("turn-start", {
+                  session_id: sessionID,
+                  prompt: part.text ?? "",
+                  model: currentModel ?? "",
+                })
+              }
+            }
+            break
+          }
+
+          case "session.status": {
+            // session.status fires in both TUI and non-interactive (run) mode.
+            // session.idle is deprecated and not reliably emitted in run mode.
+            const props = (event as any).properties
+            if (props?.status?.type !== "idle") break
+            const sessionID = props?.sessionID ?? currentSessionID
+            if (!sessionID) break
+            // Use sync variant: `opencode run` exits on the same idle event,
+            // so an async hook would be killed before completing.
+            callHookSync("turn-end", {
+              session_id: sessionID,
+              model: currentModel ?? "",
+            })
+            break
+          }
+
+          case "session.compacted": {
+            const sessionID = (event as any).properties?.sessionID
+            if (!sessionID) break
+            await callHook("compaction", {
+              session_id: sessionID,
+            })
+            break
+          }
+
+          case "session.deleted": {
+            const session = (event as any).properties?.info
+            if (!session?.id) break
             seenUserMessages.clear()
             messageStore.clear()
-            currentModel = null
+            currentSessionID = null
+            // Use sync variant: session-end may fire during shutdown.
+            callHookSync("session-end", {
+              session_id: session.id,
+            })
+            break
           }
-          currentSessionID = session.id
-          await callHook("session-start", {
-            session_id: session.id,
-          })
-          break
-        }
 
-        case "message.updated": {
-          const msg = (event as any).properties?.info
-          if (!msg) break
-          // Store message metadata (role, time, tokens, etc.)
-          messageStore.set(msg.id, msg)
-          // Track model from assistant messages
-          if (msg.role === "assistant" && msg.modelID) {
-            currentModel = msg.modelID
+          case "server.instance.disposed": {
+            // Fires when OpenCode shuts down (TUI close or `opencode run` exit).
+            // session.deleted only fires on explicit user deletion, not on quit,
+            // so this is the only reliable way to end sessions on exit.
+            if (!currentSessionID) break
+            const sessionID = currentSessionID
+            seenUserMessages.clear()
+            messageStore.clear()
+            currentSessionID = null
+            // Use sync variant: this is the last event before process exit.
+            callHookSync("session-end", {
+              session_id: sessionID,
+            })
+            break
           }
-          break
         }
-
-        case "message.part.updated": {
-          const part = (event as any).properties?.part
-          if (!part?.messageID) break
-
-          // Fire turn-start on the first text part of a new user message
-          const msg = messageStore.get(part.messageID)
-          if (msg?.role === "user" && part.type === "text" && !seenUserMessages.has(msg.id)) {
-            seenUserMessages.add(msg.id)
-            const sessionID = msg.sessionID ?? currentSessionID
-            if (sessionID) {
-              await callHook("turn-start", {
-                session_id: sessionID,
-                prompt: part.text ?? "",
-                model: currentModel ?? "",
-              })
-            }
-          }
-          break
-        }
-
-        case "session.status": {
-          // session.status fires in both TUI and non-interactive (run) mode.
-          // session.idle is deprecated and not reliably emitted in run mode.
-          const props = (event as any).properties
-          if (props?.status?.type !== "idle") break
-          const sessionID = props?.sessionID ?? currentSessionID
-          if (!sessionID) break
-          // Use sync variant: `opencode run` exits on the same idle event,
-          // so an async hook would be killed before completing.
-          callHookSync("turn-end", {
-            session_id: sessionID,
-            model: currentModel ?? "",
-          })
-          break
-        }
-
-        case "session.compacted": {
-          const sessionID = (event as any).properties?.sessionID
-          if (!sessionID) break
-          await callHook("compaction", {
-            session_id: sessionID,
-          })
-          break
-        }
-
-        case "session.deleted": {
-          const session = (event as any).properties?.info
-          if (!session?.id) break
-          seenUserMessages.clear()
-          messageStore.clear()
-          currentSessionID = null
-          // Use sync variant: session-end may fire during shutdown.
-          callHookSync("session-end", {
-            session_id: session.id,
-          })
-          break
-        }
-
-        case "server.instance.disposed": {
-          // Fires when OpenCode shuts down (TUI close or `opencode run` exit).
-          // session.deleted only fires on explicit user deletion, not on quit,
-          // so this is the only reliable way to end sessions on exit.
-          if (!currentSessionID) break
-          const sessionID = currentSessionID
-          seenUserMessages.clear()
-          messageStore.clear()
-          currentSessionID = null
-          // Use sync variant: this is the last event before process exit.
-          callHookSync("session-end", {
-            session_id: sessionID,
-          })
-          break
-        }
+      } catch {
+        // Silently ignore — plugin failures must not crash OpenCode
       }
     },
   }
