@@ -22,6 +22,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/redact"
 
@@ -43,8 +44,18 @@ var errStopIteration = errors.New("stop iteration")
 //   - For incremental checkpoints: checkpoints/NNN-<tool-use-id>.json
 //   - For final checkpoints: checkpoint.json and agent-<agent-id>.jsonl
 func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOptions) error {
-	if err := validateWriteOpts(opts); err != nil {
-		return err
+	// Validate identifiers to prevent path traversal and malformed data
+	if opts.CheckpointID.IsEmpty() {
+		return errors.New("invalid checkpoint options: checkpoint ID is required")
+	}
+	if err := validation.ValidateSessionID(opts.SessionID); err != nil {
+		return fmt.Errorf("invalid checkpoint options: %w", err)
+	}
+	if err := validation.ValidateToolUseID(opts.ToolUseID); err != nil {
+		return fmt.Errorf("invalid checkpoint options: %w", err)
+	}
+	if err := validation.ValidateAgentID(opts.AgentID); err != nil {
+		return fmt.Errorf("invalid checkpoint options: %w", err)
 	}
 
 	// Ensure sessions branch exists
