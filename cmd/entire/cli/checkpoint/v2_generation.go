@@ -210,7 +210,7 @@ func (s *V2GitStore) nextGenerationNumber() (int, error) {
 }
 
 // rotateGeneration archives the current /full/current generation and creates
-// a fresh orphan. This is a 3-phase operation:
+// a fresh orphan. This is a 2-phase operation:
 //
 //  1. Archive: determine the next generation number, create a new ref pointing
 //     to the current /full/current commit.
