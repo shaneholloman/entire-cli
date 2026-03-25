@@ -1670,9 +1670,9 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 	if !skipContentDetection {
 		return false
 	}
+	logCtx := logging.WithComponent(ctx, "checkpoint")
 	for _, state := range sessions {
 		if state.Phase.IsActive() {
-			logCtx := logging.WithComponent(ctx, "checkpoint")
 			_ = s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source) //nolint:errcheck // always returns nil; kept for signature stability
 			return true
 		}
