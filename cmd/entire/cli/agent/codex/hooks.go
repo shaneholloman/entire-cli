@@ -18,7 +18,7 @@ const HooksFileName = "hooks.json"
 // entireHookPrefixes identifies Entire hook commands.
 var entireHookPrefixes = []string{
 	"entire ",
-	"go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go ",
+	`go run "$(git rev-parse --show-toplevel)"/cmd/entire/main.go `,
 }
 
 // InstallHooks installs Codex hooks in .codex/hooks.json.
@@ -65,16 +65,15 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 	}
 
 	// Build hook commands
-	var sessionStartCmd, userPromptSubmitCmd, stopCmd string
+	var cmdPrefix string
 	if localDev {
-		sessionStartCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks codex session-start"
-		userPromptSubmitCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks codex user-prompt-submit"
-		stopCmd = "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks codex stop"
+		cmdPrefix = `go run "$(git rev-parse --show-toplevel)"/cmd/entire/main.go hooks codex `
 	} else {
-		sessionStartCmd = "entire hooks codex session-start"
-		userPromptSubmitCmd = "entire hooks codex user-prompt-submit"
-		stopCmd = "entire hooks codex stop"
+		cmdPrefix = "entire hooks codex "
 	}
+	sessionStartCmd := cmdPrefix + "session-start"
+	userPromptSubmitCmd := cmdPrefix + "user-prompt-submit"
+	stopCmd := cmdPrefix + "stop"
 
 	count := 0
 
@@ -341,13 +340,9 @@ func ensureProjectFeatureEnabled(repoRoot string) error {
 // ensureProjectTrusted adds a trust entry for the repo in the user-level
 // ~/.codex/config.toml so Codex loads the project's .codex/ config layer.
 func ensureProjectTrusted(repoRoot string) error {
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home directory: %w", err)
-		}
-		codexHome = filepath.Join(homeDir, ".codex")
+	codexHome, err := resolveCodexHome()
+	if err != nil {
+		return err
 	}
 
 	absRoot, err := filepath.Abs(repoRoot)
@@ -374,7 +369,7 @@ func ensureProjectTrusted(repoRoot string) error {
 	}
 	content += "\n" + trustSection + "\n" + `trust_level = "trusted"` + "\n"
 
-	if err := os.MkdirAll(codexHome, 0o750); err != nil { //nolint:gosec // path from CODEX_HOME env or user home directory
+	if err := os.MkdirAll(codexHome, 0o750); err != nil {
 		return fmt.Errorf("failed to create codex home directory: %w", err)
 	}
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil { //nolint:gosec // path in user home directory

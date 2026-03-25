@@ -30,12 +30,8 @@ func (c *Codex) PromptPattern() string      { return `›` }
 func (c *Codex) TimeoutMultiplier() float64 { return 1.5 }
 
 func (c *Codex) Bootstrap() error {
-	// On CI, ensure OPENAI_API_KEY is available.
-	if os.Getenv("CI") == "" {
-		return nil
-	}
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		return nil
+	if os.Getenv("CI") != "" && os.Getenv("OPENAI_API_KEY") == "" {
+		return errors.New("OPENAI_API_KEY must be set on CI for Codex E2E tests")
 	}
 	return nil
 }
@@ -54,8 +50,7 @@ func (c *Codex) IsTransientError(out Output, err error) bool {
 }
 
 // codexHome creates an isolated CODEX_HOME for a test run.
-// This keeps trust entries and feature flags out of the real ~/.codex/config.toml.
-// Auth still works via OPENAI_API_KEY env var (checked before CODEX_HOME).
+// Auth still works via OPENAI_API_KEY env var or symlinked auth.json.
 func codexHome() (string, func(), error) {
 	dir, err := os.MkdirTemp("", "codex-home-*")
 	if err != nil {
@@ -76,35 +71,20 @@ func (c *Codex) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 	}
 	defer cleanup()
 
-	args := []string{
-		"exec",
-		"--dangerously-bypass-approvals-and-sandbox",
+	absDir, _ := filepath.Abs(dir)
+	if err := seedCodexHome(home, absDir); err != nil {
+		return Output{}, fmt.Errorf("seed codex home: %w", err)
 	}
+
+	args := []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
 	if cfg.Model != "" {
 		args = append(args, "-m", cfg.Model)
 	}
 	args = append(args, prompt)
 
-	displayArgs := []string{
-		"exec",
-		"--dangerously-bypass-approvals-and-sandbox",
-	}
-	if cfg.Model != "" {
-		displayArgs = append(displayArgs, "-m", cfg.Model)
-	}
-	displayArgs = append(displayArgs, fmt.Sprintf("%q", prompt))
-
 	env := append(filterEnv(os.Environ(), "ENTIRE_TEST_TTY", "CODEX_HOME"),
 		"CODEX_HOME="+home,
 	)
-
-	// entire enable wrote trust + feature flag via CODEX_HOME during SetupRepo.
-	// But SetupRepo's CODEX_HOME pointed at a different temp dir. We need to
-	// re-seed trust for this isolated home so Codex loads .codex/hooks.json.
-	absDir, _ := filepath.Abs(dir)
-	if err := seedCodexHome(home, absDir); err != nil {
-		return Output{}, fmt.Errorf("seed codex home: %w", err)
-	}
 
 	cmd := exec.CommandContext(ctx, c.Binary(), args...)
 	cmd.Dir = dir
@@ -132,7 +112,7 @@ func (c *Codex) RunPrompt(ctx context.Context, dir string, prompt string, opts .
 	}
 
 	return Output{
-		Command:  c.Binary() + " " + strings.Join(displayArgs, " "),
+		Command:  c.Binary() + " " + strings.Join(args[:len(args)-1], " ") + " " + fmt.Sprintf("%q", prompt),
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		ExitCode: exitCode,
@@ -153,9 +133,7 @@ func (c *Codex) StartSession(ctx context.Context, dir string) (Session, error) {
 		return nil, fmt.Errorf("seed codex home: %w", err)
 	}
 
-	env := filterEnv(os.Environ(), "ENTIRE_TEST_TTY", "CODEX_HOME")
-
-	s, err := NewTmuxSession(name, dir, nil, "env",
+	s, err := NewTmuxSession(name, dir, []string{"CODEX_HOME", "ENTIRE_TEST_TTY"}, "env",
 		"CODEX_HOME="+home,
 		"codex", "--dangerously-bypass-approvals-and-sandbox",
 	)
@@ -164,13 +142,6 @@ func (c *Codex) StartSession(ctx context.Context, dir string) (Session, error) {
 		return nil, err
 	}
 	s.OnClose(cleanup)
-
-	// Forward API key if present
-	for _, e := range env {
-		if strings.HasPrefix(e, "OPENAI_API_KEY=") {
-			_ = s.Send("export " + e)
-		}
-	}
 
 	// Dismiss startup dialogs (model upgrade prompts, etc.) until we reach
 	// the input prompt. Similar to Claude's startup dialog handling.
@@ -205,8 +176,6 @@ func seedCodexHome(home, projectDir string) error {
 	}
 
 	// Symlink auth.json from the real ~/.codex/ so API credentials are available.
-	// Auth via OPENAI_API_KEY env var still works, but codex may also check auth.json
-	// for OAuth/token-based auth.
 	if realHome, err := os.UserHomeDir(); err == nil {
 		src := filepath.Join(realHome, ".codex", "auth.json")
 		if _, err := os.Stat(src); err == nil {

@@ -76,7 +76,7 @@ func TestInstallHooks_LocalDev(t *testing.T) {
 	hooksPath := filepath.Join(tempDir, ".codex", HooksFileName)
 	data, err := os.ReadFile(hooksPath)
 	require.NoError(t, err)
-	require.Contains(t, string(data), "go run ${CLAUDE_PROJECT_DIR}/cmd/entire/main.go hooks codex session-start")
+	require.Contains(t, string(data), `go run \"$(git rev-parse --show-toplevel)\"/cmd/entire/main.go hooks codex session-start`)
 }
 
 func TestInstallHooks_Force(t *testing.T) {

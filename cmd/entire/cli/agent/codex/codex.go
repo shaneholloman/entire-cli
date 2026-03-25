@@ -56,23 +56,25 @@ func (c *CodexAgent) GetSessionID(input *agent.HookInput) string {
 	return input.SessionID
 }
 
+// resolveCodexHome returns the Codex home directory (CODEX_HOME or ~/.codex).
+func resolveCodexHome() (string, error) {
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		return codexHome, nil
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".codex"), nil
+}
+
 // GetSessionDir returns the directory where Codex stores session transcripts.
 // Codex stores transcripts (rollout files) in its home directory.
 func (c *CodexAgent) GetSessionDir(_ string) (string, error) {
 	if override := os.Getenv("ENTIRE_TEST_CODEX_SESSION_DIR"); override != "" {
 		return override, nil
 	}
-
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("failed to get home directory: %w", err)
-		}
-		codexHome = filepath.Join(homeDir, ".codex")
-	}
-
-	return codexHome, nil
+	return resolveCodexHome()
 }
 
 // ResolveSessionFile returns the path to a Codex session transcript file.
