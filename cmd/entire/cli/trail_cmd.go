@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	apiurl "github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
@@ -134,8 +134,8 @@ func runTrailListAll(ctx context.Context, w io.Writer, statusFilter string, json
 		return err
 	}
 
-	var listResp apiurl.TrailListResponse
-	if err := apiurl.DecodeJSON(resp, &listResp); err != nil {
+	var listResp api.TrailListResponse
+	if err := api.DecodeJSON(resp, &listResp); err != nil {
 		return fmt.Errorf("failed to decode trail list: %w", err)
 	}
 
@@ -312,7 +312,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		return fmt.Errorf("failed to resolve repository: %w", err)
 	}
 
-	createReq := apiurl.TrailCreateRequest{
+	createReq := api.TrailCreateRequest{
 		Title:      title,
 		Body:       body,
 		BranchName: branch,
@@ -329,8 +329,8 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		return err
 	}
 
-	var createResp apiurl.TrailCreateResponse
-	if err := apiurl.DecodeJSON(resp, &createResp); err != nil {
+	var createResp api.TrailCreateResponse
+	if err := api.DecodeJSON(resp, &createResp); err != nil {
 		return fmt.Errorf("failed to decode create response: %w", err)
 	}
 
@@ -475,8 +475,8 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, statusStr, title, bo
 		return err
 	}
 
-	var updateResp apiurl.TrailUpdateResponse
-	if err := apiurl.DecodeJSON(resp, &updateResp); err != nil {
+	var updateResp api.TrailUpdateResponse
+	if err := api.DecodeJSON(resp, &updateResp); err != nil {
 		return fmt.Errorf("failed to decode update response: %w", err)
 	}
 
@@ -485,8 +485,8 @@ func runTrailUpdate(ctx context.Context, w, errW io.Writer, statusStr, title, bo
 }
 
 // buildTrailUpdateRequest constructs a PATCH request body from the current trail and the requested changes.
-func buildTrailUpdateRequest(current *apiurl.TrailResource, statusStr, title, body string, labelAdd, labelRemove []string) apiurl.TrailUpdateRequest {
-	var req apiurl.TrailUpdateRequest
+func buildTrailUpdateRequest(current *api.TrailResource, statusStr, title, body string, labelAdd, labelRemove []string) api.TrailUpdateRequest {
+	var req api.TrailUpdateRequest
 
 	if statusStr != "" {
 		req.Status = &statusStr
@@ -602,7 +602,7 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 }
 
 // findTrailByBranch looks up a trail by branch name via the list API.
-func findTrailByBranch(ctx context.Context, client *apiurl.Client, host, owner, repo, branch string) (*apiurl.TrailResource, error) {
+func findTrailByBranch(ctx context.Context, client *api.Client, host, owner, repo, branch string) (*api.TrailResource, error) {
 	resp, err := client.Get(ctx, trailsBasePath(host, owner, repo))
 	if err != nil {
 		return nil, fmt.Errorf("list trails: %w", err)
@@ -612,8 +612,8 @@ func findTrailByBranch(ctx context.Context, client *apiurl.Client, host, owner, 
 		return nil, err
 	}
 
-	var listResp apiurl.TrailListResponse
-	if err := apiurl.DecodeJSON(resp, &listResp); err != nil {
+	var listResp api.TrailListResponse
+	if err := api.DecodeJSON(resp, &listResp); err != nil {
 		return nil, fmt.Errorf("decode trail list: %w", err)
 	}
 
@@ -641,7 +641,7 @@ func trailsBasePath(host, owner, repo string) string {
 // checkTrailResponse checks the API response and returns user-friendly errors.
 // For auth failures, it appends a hint to re-authenticate while preserving the server's error message.
 func checkTrailResponse(resp *http.Response) error {
-	if err := apiurl.CheckResponse(resp); err != nil {
+	if err := api.CheckResponse(resp); err != nil {
 		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 			return fmt.Errorf("%w — run 'entire login' to re-authenticate", err)
 		}
