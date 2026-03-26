@@ -420,16 +420,17 @@ func TestNextGenerationNumber_WithExisting(t *testing.T) {
 	assert.Equal(t, 3, next)
 }
 
-// populateFullCurrent writes N checkpoints to /full/current via WriteCommitted.
-func populateFullCurrent(t *testing.T, store *V2GitStore, n int) []id.CheckpointID {
+// populateFullCurrent writes n checkpoints to /full/current via WriteCommitted.
+// offset shifts the generated checkpoint IDs to avoid collisions across calls.
+func populateFullCurrent(t *testing.T, store *V2GitStore, n, offset int) []id.CheckpointID {
 	t.Helper()
 	ctx := context.Background()
 	cpIDs := make([]id.CheckpointID, n)
 	for i := range n {
-		cpIDs[i] = id.MustCheckpointID(fmt.Sprintf("%012x", i+1))
+		cpIDs[i] = id.MustCheckpointID(fmt.Sprintf("%012x", offset+i+1))
 		err := store.WriteCommitted(ctx, WriteCommittedOptions{
 			CheckpointID: cpIDs[i],
-			SessionID:    fmt.Sprintf("session-rot-%d", i),
+			SessionID:    fmt.Sprintf("session-rot-%d", offset+i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
 			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
@@ -448,7 +449,7 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	store.maxCheckpointsPerGeneration = 3
 
 	// Write 3 checkpoints — the 3rd triggers auto-rotation via writeCommittedFullTranscript
-	cpIDs := populateFullCurrent(t, store, 3)
+	cpIDs := populateFullCurrent(t, store, 3, 0)
 
 	// --- Verify archived ref ---
 	archiveRefName := fmt.Sprintf("%s%013d", paths.V2FullRefPrefix, 1)
@@ -502,11 +503,11 @@ func TestRotateGeneration_SequentialNumbering(t *testing.T) {
 	ctx := context.Background()
 
 	// First rotation: populate and rotate
-	populateFullCurrent(t, store, 2)
+	populateFullCurrent(t, store, 2, 0)
 	require.NoError(t, store.rotateGeneration(ctx))
 
-	// Second rotation: populate again and rotate
-	populateFullCurrent(t, store, 2)
+	// Second rotation: populate with different IDs and rotate
+	populateFullCurrent(t, store, 2, 100)
 	require.NoError(t, store.rotateGeneration(ctx))
 
 	// Verify both archived refs exist with correct generation numbers
