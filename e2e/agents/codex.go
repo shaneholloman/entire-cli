@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -200,12 +201,38 @@ func seedCodexHome(home, projectDir string) error {
 		return err
 	}
 
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
+		return writeCodexAPIKeyAuth(home, apiKey)
+	}
+
 	// Symlink auth.json from the real ~/.codex/ so API credentials are available.
 	if realHome, err := os.UserHomeDir(); err == nil {
 		src := filepath.Join(realHome, ".codex", "auth.json")
 		if _, err := os.Stat(src); err == nil {
 			_ = os.Symlink(src, filepath.Join(home, "auth.json"))
 		}
+	}
+
+	return nil
+}
+
+func writeCodexAPIKeyAuth(home, apiKey string) error {
+	auth := struct {
+		AuthMode     string `json:"auth_mode"`
+		OpenAIAPIKey string `json:"OPENAI_API_KEY"`
+	}{
+		AuthMode:     "apikey",
+		OpenAIAPIKey: apiKey,
+	}
+
+	data, err := json.MarshalIndent(auth, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal codex auth: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), data, 0o600); err != nil {
+		return fmt.Errorf("write codex auth: %w", err)
 	}
 
 	return nil
