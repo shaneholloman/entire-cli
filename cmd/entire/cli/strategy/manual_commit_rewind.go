@@ -634,7 +634,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 	if v2Enabled {
 		v2Store, v2Err := s.getV2CheckpointStore()
 		if v2Err == nil {
-			summary, _ = v2Store.ReadCommitted(ctx, point.CheckpointID)
+			summary, _ = v2Store.ReadCommitted(ctx, point.CheckpointID) //nolint:errcheck // v2 miss is expected, fall through to v1
 		}
 	}
 	if summary == nil {

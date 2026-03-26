@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -25,22 +26,22 @@ func (s *V2GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoi
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
 	_, rootTreeHash, err := s.getRefState(refName)
 	if err != nil {
-		return nil, nil //nolint:nilnil // Ref doesn't exist means no checkpoint
+		return nil, nil //nolint:nilnil,nilerr // Ref doesn't exist means no checkpoint
 	}
 
 	rootTree, err := s.repo.TreeObject(rootTreeHash)
 	if err != nil {
-		return nil, nil //nolint:nilnil // Tree not readable
+		return nil, nil //nolint:nilnil,nilerr // Tree not readable
 	}
 
 	cpTree, err := rootTree.Tree(checkpointID.Path())
 	if err != nil {
-		return nil, nil //nolint:nilnil // Checkpoint subtree not found
+		return nil, nil //nolint:nilnil,nilerr // Checkpoint subtree not found
 	}
 
 	metadataFile, err := cpTree.File(paths.MetadataFileName)
 	if err != nil {
-		return nil, nil //nolint:nilnil // metadata.json not found
+		return nil, nil //nolint:nilnil,nilerr // metadata.json not found
 	}
 
 	content, err := metadataFile.Contents()
@@ -91,7 +92,9 @@ func (s *V2GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Che
 
 	if metadataFile, fileErr := sessionTree.File(paths.MetadataFileName); fileErr == nil {
 		if content, contentErr := metadataFile.Contents(); contentErr == nil {
-			_ = json.Unmarshal([]byte(content), &result.Metadata)
+			if jsonErr := json.Unmarshal([]byte(content), &result.Metadata); jsonErr != nil {
+				return nil, fmt.Errorf("failed to parse session metadata: %w", jsonErr)
+			}
 		}
 	}
 
@@ -101,7 +104,7 @@ func (s *V2GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Che
 		}
 	}
 
-	transcript, _ := s.resolveTranscriptFromFull(ctx, checkpointID, sessionIndex)
+	transcript, _ := s.resolveTranscriptFromFull(ctx, checkpointID, sessionIndex) //nolint:errcheck // Missing transcript is not an error — caller handles empty transcript
 	result.Transcript = transcript
 
 	return result, nil
@@ -133,7 +136,7 @@ func (s *V2GitStore) resolveTranscriptFromFull(ctx context.Context, checkpointID
 		}
 	}
 
-	return nil, nil //nolint:nilnil // Transcript not found in any generation
+	return nil, nil
 }
 
 // readTranscriptFromRef reads the raw transcript from a specific /full/* ref.
@@ -146,12 +149,12 @@ func (s *V2GitStore) readTranscriptFromRef(refName plumbing.ReferenceName, sessi
 
 	rootTree, err := s.repo.TreeObject(rootTreeHash)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read tree: %w", err)
 	}
 
 	sessionTree, err := rootTree.Tree(sessionPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("session path %s not found: %w", sessionPath, err)
 	}
 
 	file, err := sessionTree.File(paths.TranscriptFileName)
@@ -186,7 +189,7 @@ func readChunkedTranscriptFromTree(tree *object.Tree) ([]byte, error) {
 	}
 
 	if len(chunks) == 0 {
-		return nil, fmt.Errorf("no transcript files found")
+		return nil, errors.New("no transcript files found")
 	}
 
 	sort.Slice(chunks, func(i, j int) bool {

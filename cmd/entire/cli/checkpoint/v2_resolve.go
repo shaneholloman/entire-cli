@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -74,7 +75,7 @@ func GetV2MetadataTree(ctx context.Context, treelessFetchFn, fullFetchFn FetchRe
 		}
 	}
 
-	return nil, nil, fmt.Errorf("v2 /main ref not available")
+	return nil, nil, errors.New("v2 /main ref not available")
 }
 
 // getV2RefTree reads the tree from a custom ref (not a branch — no refs/heads/ prefix).
@@ -89,5 +90,9 @@ func getV2RefTree(repo *git.Repository, refName plumbing.ReferenceName) (*object
 		return nil, fmt.Errorf("failed to get commit for ref %s: %w", refName, err)
 	}
 
-	return commit.Tree()
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree for ref %s: %w", refName, err)
+	}
+	return tree, nil
 }

@@ -42,7 +42,7 @@ func TestV2ReadCommitted_ReturnsNilForMissing(t *testing.T) {
 	ctx := context.Background()
 
 	summary, err := store.ReadCommitted(ctx, cpID)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, summary)
 }
 
