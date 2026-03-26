@@ -453,6 +453,46 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return nil
 }
 
+// FetchV2MainTreeOnly fetches the tip of the v2 /main ref from origin with
+// --depth=1 --filter=blob:none, downloading only the latest commit and its
+// tree objects (no blobs, no history).
+// Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
+func FetchV2MainTreeOnly(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "--depth=1", "--filter=blob:none", "origin", refSpec)
+	if output, err := fetchCmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("v2 treeless fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to treeless-fetch v2 /main from origin: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	return nil
+}
+
+// FetchV2MainRef fetches the v2 /main ref from origin (full fetch, including blobs).
+// Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
+func FetchV2MainRef(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", "origin", refSpec)
+	if output, err := fetchCmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("v2 fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to fetch v2 /main from origin: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	return nil
+}
+
 // FetchBlobsByHash fetches specific blob objects from the remote by their SHA-1 hashes.
 // Uses "git fetch origin <hash>" which goes through normal credential helpers,
 // unlike fetch-pack which bypasses them. Requires the server to support
