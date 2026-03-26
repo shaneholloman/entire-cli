@@ -167,6 +167,60 @@ func TestInstallHooks_PreservesExistingHooksJSON(t *testing.T) {
 	require.Contains(t, string(data), "entire hooks codex stop")
 }
 
+func TestInstallHooks_ErrorsOnMalformedManagedHook(t *testing.T) {
+	tempDir := setupTestEnv(t)
+
+	codexDir := filepath.Join(tempDir, ".codex")
+	require.NoError(t, os.MkdirAll(codexDir, 0o750))
+	existingConfig := `{
+		"hooks": {
+			"SessionStart": {"not": "an array"},
+			"PreToolUse": [
+				{
+					"matcher": "^Bash$",
+					"hooks": [
+						{"type": "command", "command": "my-custom-hook"}
+					]
+				}
+			]
+		}
+	}`
+	hooksPath := filepath.Join(codexDir, HooksFileName)
+	require.NoError(t, os.WriteFile(hooksPath, []byte(existingConfig), 0o600))
+
+	ag := &CodexAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to parse SessionStart hooks")
+
+	data, readErr := os.ReadFile(hooksPath)
+	require.NoError(t, readErr)
+	require.JSONEq(t, existingConfig, string(data))
+}
+
+func TestUninstallHooks_ErrorsOnMalformedManagedHook(t *testing.T) {
+	tempDir := setupTestEnv(t)
+
+	codexDir := filepath.Join(tempDir, ".codex")
+	require.NoError(t, os.MkdirAll(codexDir, 0o750))
+	existingConfig := `{
+		"hooks": {
+			"Stop": {"not": "an array"}
+		}
+	}`
+	hooksPath := filepath.Join(codexDir, HooksFileName)
+	require.NoError(t, os.WriteFile(hooksPath, []byte(existingConfig), 0o600))
+
+	ag := &CodexAgent{}
+	err := ag.UninstallHooks(context.Background())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to parse Stop hooks")
+
+	data, readErr := os.ReadFile(hooksPath)
+	require.NoError(t, readErr)
+	require.JSONEq(t, existingConfig, string(data))
+}
+
 func TestInstallHooks_DoesNotModifyUserConfig(t *testing.T) {
 	setupTestEnv(t)
 	codexHome := os.Getenv("CODEX_HOME")

@@ -54,9 +54,15 @@ func (c *CodexAgent) InstallHooks(ctx context.Context, localDev bool, force bool
 
 	// Parse event types we manage
 	var sessionStart, userPromptSubmit, stop []MatcherGroup
-	parseHookType(rawHooks, "SessionStart", &sessionStart)
-	parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
-	parseHookType(rawHooks, "Stop", &stop)
+	if err := parseHookType(rawHooks, "SessionStart", &sessionStart); err != nil {
+		return 0, err
+	}
+	if err := parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit); err != nil {
+		return 0, err
+	}
+	if err := parseHookType(rawHooks, "Stop", &stop); err != nil {
+		return 0, err
+	}
 
 	if force {
 		sessionStart = removeEntireHooks(sessionStart)
@@ -168,9 +174,15 @@ func (c *CodexAgent) UninstallHooks(ctx context.Context) error {
 	}
 
 	var sessionStart, userPromptSubmit, stop []MatcherGroup
-	parseHookType(rawHooks, "SessionStart", &sessionStart)
-	parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit)
-	parseHookType(rawHooks, "Stop", &stop)
+	if err := parseHookType(rawHooks, "SessionStart", &sessionStart); err != nil {
+		return err
+	}
+	if err := parseHookType(rawHooks, "UserPromptSubmit", &userPromptSubmit); err != nil {
+		return err
+	}
+	if err := parseHookType(rawHooks, "Stop", &stop); err != nil {
+		return err
+	}
 
 	sessionStart = removeEntireHooks(sessionStart)
 	userPromptSubmit = removeEntireHooks(userPromptSubmit)
@@ -225,11 +237,13 @@ func (c *CodexAgent) AreHooksInstalled(ctx context.Context) bool {
 
 // --- Helpers ---
 
-func parseHookType(rawHooks map[string]json.RawMessage, hookType string, target *[]MatcherGroup) {
+func parseHookType(rawHooks map[string]json.RawMessage, hookType string, target *[]MatcherGroup) error {
 	if data, ok := rawHooks[hookType]; ok {
-		//nolint:errcheck,gosec // Intentionally ignoring parse errors
-		json.Unmarshal(data, target)
+		if err := json.Unmarshal(data, target); err != nil {
+			return fmt.Errorf("failed to parse %s hooks: %w", hookType, err)
+		}
 	}
+	return nil
 }
 
 func marshalHookType(rawHooks map[string]json.RawMessage, hookType string, groups []MatcherGroup) {
