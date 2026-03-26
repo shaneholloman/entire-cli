@@ -19,5 +19,8 @@ func NewAuthenticatedAPIClient() (*apiurl.Client, error) {
 		return nil, errors.New("not logged in (run 'entire login' first)")
 	}
 
+  if err := apiurl.RequireSecureURL(apiurl.BaseURL()); err != nil {
+    return nil, err
+  }
 	return apiurl.NewClient(token), nil
 }
