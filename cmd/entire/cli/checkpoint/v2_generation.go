@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -165,8 +166,11 @@ func (s *V2GitStore) addGenerationToRootTree(rootTreeHash plumbing.Hash, gen Gen
 // generationRefWidth is the zero-padded width of archived generation ref names.
 const generationRefWidth = 13
 
+// generationRefPattern matches exactly 13 digits (the archived generation ref suffix format).
+var generationRefPattern = regexp.MustCompile(`^\d{13}$`)
+
 // listArchivedGenerations returns the names of all archived generation refs
-// (everything under V2FullRefPrefix except "current"), sorted ascending.
+// (everything under V2FullRefPrefix matching the expected numeric format), sorted ascending.
 func (s *V2GitStore) listArchivedGenerations() ([]string, error) {
 	refs, err := s.repo.References()
 	if err != nil {
@@ -180,7 +184,7 @@ func (s *V2GitStore) listArchivedGenerations() ([]string, error) {
 			return nil
 		}
 		suffix := strings.TrimPrefix(name, paths.V2FullRefPrefix)
-		if suffix == "current" {
+		if suffix == "current" || !generationRefPattern.MatchString(suffix) {
 			return nil
 		}
 		archived = append(archived, suffix)
