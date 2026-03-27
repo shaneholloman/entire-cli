@@ -57,7 +57,7 @@ func TestGetV2MetadataTree_NoRef_ReturnsError(t *testing.T) {
 
 	// No v2 ref exists, no fetch functions — should fail
 	tree, _, err := GetV2MetadataTree(ctx, nil, nil, openRepoFn)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Nil(t, tree)
 }
 

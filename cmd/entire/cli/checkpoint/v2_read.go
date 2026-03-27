@@ -225,7 +225,7 @@ func readTranscriptFromObjectTree(tree *object.Tree) ([]byte, error) {
 		}
 	}
 
-	return nil, nil //nolint:nilnil // Transcript not found in this ref
+	return nil, nil
 }
 
 // GetSessionLog reads the latest session's raw transcript and session ID from v2 refs.
