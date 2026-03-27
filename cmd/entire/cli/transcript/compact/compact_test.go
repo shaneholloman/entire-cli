@@ -28,12 +28,12 @@ func TestCompact_SimpleConversation(t *testing.T) {
 	t.Parallel()
 
 	input := []byte(`{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","parentUuid":"","cwd":"/repo","message":{"content":"hello"}}
-{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"text","text":"Hi!"}]}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"text","text":"Hi!"}],"usage":{"input_tokens":100,"output_tokens":50}}}
 `)
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi!"}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","input_tokens":100,"output_tokens":50,"content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -183,6 +183,64 @@ func TestCompact_ClaudeFixture2(t *testing.T) {
 	t.Parallel()
 
 	assertFixtureTransform(t, defaultOpts, "testdata/claude_full2.jsonl", "testdata/claude_expected2.jsonl")
+}
+
+// --- Token usage tests ---
+
+func TestCompact_AssistantTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t0","message":{"content":"hello"}}
+{"type":"assistant","timestamp":"t1","requestId":"r1","message":{"id":"m1","content":[{"type":"text","text":"Hi!"}],"usage":{"input_tokens":200,"output_tokens":75}}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t0","content":[{"text":"hello"}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t1","id":"m1","input_tokens":200,"output_tokens":75,"content":[{"type":"text","text":"Hi!"}]}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_StreamingFragmentTokenMerge(t *testing.T) {
+	t.Parallel()
+
+	// Two streaming fragments of the same message; the later one has the final token counts.
+	input := []byte(`{"type":"assistant","timestamp":"t1","requestId":"r1","message":{"id":"m1","content":[{"type":"thinking","thinking":"hmm"}],"usage":{"input_tokens":100,"output_tokens":5}}}
+{"type":"assistant","timestamp":"t2","requestId":"r1","message":{"id":"m1","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":42}}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","input_tokens":100,"output_tokens":42,"content":[{"type":"text","text":"done"}]}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_NoUsageOmitsTokenFields(t *testing.T) {
+	t.Parallel()
+
+	// Assistant without usage: input_tokens and output_tokens should be omitted.
+	input := []byte(`{"type":"assistant","timestamp":"t1","requestId":"r1","message":{"id":"m1","content":[{"type":"text","text":"Hi!"}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t1","id":"m1","content":[{"type":"text","text":"Hi!"}]}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
 }
 
 // --- Rich tool result metadata tests ---
@@ -339,7 +397,7 @@ func TestCompact_FullFixture_NoTruncation(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
-// --- Field order test (exact byte comparison since marshalOrdered is deterministic) ---
+// --- Field order test (exact byte comparison since struct field order is deterministic) ---
 
 func TestCompact_FieldOrder(t *testing.T) {
 	t.Parallel()

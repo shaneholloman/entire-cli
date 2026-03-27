@@ -44,14 +44,20 @@ type openCodeMessage struct {
 }
 
 type openCodeMessageInfo struct {
-	ID   string          `json:"id"`
-	Role string          `json:"role"`
-	Time openCodeMsgTime `json:"time"`
+	ID     string            `json:"id"`
+	Role   string            `json:"role"`
+	Time   openCodeMsgTime   `json:"time"`
+	Tokens *openCodeMsgToken `json:"tokens"`
 }
 
 type openCodeMsgTime struct {
 	Created   int64 `json:"created"`
 	Completed int64 `json:"completed"`
+}
+
+type openCodeMsgToken struct {
+	Input  int `json:"input"`
+	Output int `json:"output"`
 }
 
 // compactOpenCode converts a full OpenCode session JSON into transcript lines.
@@ -63,7 +69,7 @@ func compactOpenCode(content []byte, opts Options) ([]byte, error) {
 		return nil, fmt.Errorf("parsing opencode session: %w", err)
 	}
 
-	meta := newCompactMeta(opts)
+	base := newTranscriptLine(opts)
 	var result []byte
 
 	for _, msg := range session.Messages {
@@ -71,25 +77,17 @@ func compactOpenCode(content []byte, opts Options) ([]byte, error) {
 
 		switch msg.Info.Role {
 		case transcript.TypeUser:
-			lines := convertOpenCodeUser(msg, ts, meta)
-			for _, l := range lines {
-				result = append(result, l...)
-				result = append(result, '\n')
-			}
+			emitOpenCodeUser(&result, base, msg, ts)
 		case transcript.TypeAssistant:
-			lines := convertOpenCodeAssistant(msg, ts, meta)
-			for _, l := range lines {
-				result = append(result, l...)
-				result = append(result, '\n')
-			}
+			emitOpenCodeAssistant(&result, base, msg, ts)
 		}
 	}
 
 	return result, nil
 }
 
-func convertOpenCodeUser(msg openCodeMessage, ts json.RawMessage, meta compactMeta) [][]byte {
-	content := make([]map[string]json.RawMessage, 0, len(msg.Parts))
+func emitOpenCodeUser(result *[]byte, base transcriptLine, msg openCodeMessage, ts json.RawMessage) {
+	var blocks []json.RawMessage
 
 	for _, part := range msg.Parts {
 		if unquote(part["type"]) != transcript.ContentTypeText {
@@ -99,32 +97,24 @@ func convertOpenCodeUser(msg openCodeMessage, ts json.RawMessage, meta compactMe
 		if text == "" {
 			continue
 		}
-		block := map[string]json.RawMessage{
-			"text": mustMarshal(text),
-		}
+		tb := userTextBlock{Text: text}
 		if id := part["id"]; id != nil {
-			block["id"] = id
+			_ = json.Unmarshal(id, &tb.ID) //nolint:errcheck // best-effort
 		}
-		content = append(content, block)
+		b, _ := json.Marshal(tb) //nolint:errcheck,errchkjson // struct of strings never fails
+		blocks = append(blocks, b)
 	}
 
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return nil
-	}
+	contentJSON, _ := json.Marshal(blocks) //nolint:errcheck,errchkjson // slice of valid JSON never fails
 
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeUser),
-		"ts", ts,
-		"content", json.RawMessage(contentJSON),
-	)
-	return [][]byte{b}
+	line := base
+	line.Type = transcript.TypeUser
+	line.TS = ts
+	line.Content = contentJSON
+	appendLine(result, line)
 }
 
-func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta compactMeta) [][]byte {
+func emitOpenCodeAssistant(result *[]byte, base transcriptLine, msg openCodeMessage, ts json.RawMessage) {
 	content := make([]map[string]json.RawMessage, 0, len(msg.Parts))
 
 	for _, part := range msg.Parts {
@@ -132,21 +122,21 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 
 		switch partType {
 		case transcript.ContentTypeText:
+			b, _ := json.Marshal(transcript.ContentTypeText) //nolint:errcheck,errchkjson // string never fails
 			content = append(content, map[string]json.RawMessage{
-				"type": mustMarshal(transcript.ContentTypeText),
+				"type": b,
 				"text": part[transcript.ContentTypeText],
 			})
 		case "tool":
 			toolBlock := make(map[string]json.RawMessage)
-			toolBlock["type"] = mustMarshal(transcript.ContentTypeToolUse)
+			b, _ := json.Marshal(transcript.ContentTypeToolUse) //nolint:errcheck,errchkjson // string never fails
+			toolBlock["type"] = b
 			if callID := part["callID"]; callID != nil {
 				toolBlock["id"] = callID
 			}
-			// "tool" field is the tool name (string).
 			if toolName := part["tool"]; toolName != nil {
 				toolBlock["name"] = toolName
 			}
-			// Extract input and result from state if available.
 			if stateRaw := part["state"]; stateRaw != nil {
 				var state map[string]json.RawMessage
 				if json.Unmarshal(stateRaw, &state) == nil {
@@ -157,39 +147,35 @@ func convertOpenCodeAssistant(msg openCodeMessage, ts json.RawMessage, meta comp
 				}
 			}
 			content = append(content, toolBlock)
-			// step-start, step-finish carry no transcript-relevant data.
 		}
 	}
 
-	contentJSON, err := json.Marshal(content)
-	if err != nil {
-		return nil
-	}
+	contentJSON, _ := json.Marshal(content) //nolint:errcheck,errchkjson // slice of valid JSON never fails
 
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeAssistant),
-		"ts", ts,
-		"id", mustMarshal(msg.Info.ID),
-		"content", json.RawMessage(contentJSON),
-	)
-	return [][]byte{b}
+	line := base
+	line.Type = transcript.TypeAssistant
+	line.TS = ts
+	line.ID = msg.Info.ID
+	line.Content = contentJSON
+	if msg.Info.Tokens != nil {
+		line.InputTokens = msg.Info.Tokens.Input
+		line.OutputTokens = msg.Info.Tokens.Output
+	}
+	appendLine(result, line)
 }
 
 // openCodeToolResult builds the compact {"output":"...","status":"success"|"error"}
 // object from an OpenCode tool state map.
 func openCodeToolResult(state map[string]json.RawMessage) json.RawMessage {
-	status := "success"
+	r := toolResultJSON{
+		Output: unquote(state["output"]),
+		Status: "success",
+	}
 	if s := unquote(state["status"]); s != "" && s != "completed" {
-		status = "error"
+		r.Status = "error"
 	}
-	result := map[string]string{
-		"output": unquote(state["output"]),
-		"status": status,
-	}
-	return mustMarshal(result)
+	b, _ := json.Marshal(r) //nolint:errcheck,errchkjson // struct of primitives never fails
+	return b
 }
 
 // msToTimestamp converts a Unix millisecond timestamp to an RFC3339 JSON string.
@@ -198,5 +184,6 @@ func msToTimestamp(ms int64) json.RawMessage {
 		return nil
 	}
 	t := time.UnixMilli(ms).UTC()
-	return mustMarshal(t.Format(time.RFC3339Nano))
+	b, _ := json.Marshal(t.Format(time.RFC3339Nano)) //nolint:errcheck,errchkjson // string never fails
+	return b
 }

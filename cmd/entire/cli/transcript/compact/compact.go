@@ -21,20 +21,48 @@ type Options struct {
 	StartLine  int    // checkpoint_transcript_start (0 = no truncation)
 }
 
-// compactMeta holds pre-computed JSON fragments for fields that are identical
-// on every output line, avoiding repeated marshaling.
-type compactMeta struct {
-	v          json.RawMessage
-	agent      json.RawMessage
-	cliVersion json.RawMessage
+// transcriptLine is the uniform output format for every line in transcript.jsonl.
+// Field order is guaranteed by encoding/json (struct declaration order).
+type transcriptLine struct {
+	V            int             `json:"v"`
+	Agent        string          `json:"agent"`
+	CLIVersion   string          `json:"cli_version"`
+	Type         string          `json:"type"`
+	TS           json.RawMessage `json:"ts,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	InputTokens  int             `json:"input_tokens,omitempty"`
+	OutputTokens int             `json:"output_tokens,omitempty"`
+	Content      json.RawMessage `json:"content"`
 }
 
-func newCompactMeta(opts Options) compactMeta {
-	return compactMeta{
-		v:          mustMarshal(1),
-		agent:      mustMarshal(opts.Agent),
-		cliVersion: mustMarshal(opts.CLIVersion),
+// newTranscriptLine returns a transcriptLine pre-filled with the shared
+// metadata fields that are identical on every output line.
+func newTranscriptLine(opts Options) transcriptLine {
+	return transcriptLine{
+		V:          1,
+		Agent:      opts.Agent,
+		CLIVersion: opts.CLIVersion,
 	}
+}
+
+// toolResultJSON is the compact result object inlined into tool_use blocks.
+type toolResultJSON struct {
+	Output     string              `json:"output"`
+	Status     string              `json:"status"`
+	File       *toolResultFileJSON `json:"file,omitempty"`
+	MatchCount int                 `json:"matchCount,omitempty"`
+}
+
+// toolResultFileJSON carries structured file metadata from Read/Edit tool results.
+type toolResultFileJSON struct {
+	FilePath string `json:"filePath"`
+	NumLines int    `json:"numLines,omitempty"`
+}
+
+// userTextBlock is a text block within user message content.
+type userTextBlock struct {
+	ID   string `json:"id,omitempty"`
+	Text string `json:"text"`
 }
 
 // Compact converts a full.jsonl transcript into the condensed transcript.jsonl format.
@@ -108,14 +136,16 @@ func compactJSONL(content []byte, opts Options) ([]byte, error) {
 // parsedEntry is an intermediate representation of a JSONL line used during
 // the two-pass compact conversion.
 type parsedEntry struct {
-	kind        string // "user" or "assistant"
-	ts          json.RawMessage
-	id          string            // message ID (assistant only)
-	userID      string            // prompt ID (user only, e.g. Claude's promptId)
-	content     json.RawMessage   // stripped assistant content array, or nil
-	userText    string            // extracted user text
-	userImages  []json.RawMessage // image blocks from user messages
-	toolResults []toolResultEntry // user tool_result entries
+	kind         string // "user" or "assistant"
+	ts           json.RawMessage
+	id           string            // message ID (assistant only)
+	userID       string            // prompt ID (user only, e.g. Claude's promptId)
+	inputTokens  int               // API input tokens (assistant only)
+	outputTokens int               // API output tokens (assistant only)
+	content      json.RawMessage   // stripped assistant content array, or nil
+	userText     string            // extracted user text
+	userImages   []json.RawMessage // image blocks from user messages
+	toolResults  []toolResultEntry // user tool_result entries
 }
 
 // compactJSONLWith converts JSONL transcripts into the compact format.
@@ -125,7 +155,7 @@ type parsedEntry struct {
 //     from user lines into preceding assistant tool_use blocks, and drop
 //     tool-result-only user lines.
 func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor) ([]byte, error) {
-	meta := newCompactMeta(opts)
+	base := newTranscriptLine(opts)
 
 	// Pass 1: parse all lines into intermediate entries.
 	entries, err := parseJSONLEntries(content, preprocess)
@@ -156,8 +186,8 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 				// If the consumed user entry also had text or image content, emit it
 				// as a separate user line after the assistant.
 				if userEntry.userText != "" || len(userEntry.userImages) > 0 {
-					emitAssistant(&result, meta, merged)
-					emitUser(&result, meta, userEntry)
+					emitAssistant(&result, base, merged)
+					emitUser(&result, base, userEntry)
 					continue
 				}
 			}
@@ -166,7 +196,7 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 				continue
 			}
 
-			emitAssistant(&result, meta, merged)
+			emitAssistant(&result, base, merged)
 
 		case transcript.TypeUser:
 			// User entries that are purely tool results were already consumed
@@ -176,52 +206,50 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 			if hasToolResults(e) && e.userText == "" && len(e.userImages) == 0 {
 				continue
 			}
-			emitUser(&result, meta, e)
+			emitUser(&result, base, e)
 		}
 	}
 
 	return result, nil
 }
 
-func emitAssistant(result *[]byte, meta compactMeta, e parsedEntry) {
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeAssistant),
-		"ts", e.ts,
-		"id", jsonStringOrNil(e.id),
-		"content", e.content,
-	)
-	*result = append(*result, b...)
-	*result = append(*result, '\n')
+func emitAssistant(result *[]byte, base transcriptLine, e parsedEntry) {
+	line := base
+	line.Type = transcript.TypeAssistant
+	line.TS = e.ts
+	line.ID = e.id
+	line.InputTokens = e.inputTokens
+	line.OutputTokens = e.outputTokens
+	line.Content = e.content
+	appendLine(result, line)
 }
 
-func emitUser(result *[]byte, meta compactMeta, e parsedEntry) {
+func emitUser(result *[]byte, base transcriptLine, e parsedEntry) {
 	var blocks []json.RawMessage
 
 	// Text block (with optional prompt ID).
 	if e.userText != "" || len(e.userImages) == 0 {
-		block := marshalOrdered(
-			"id", jsonStringOrNil(e.userID),
-			"text", mustMarshal(e.userText),
-		)
-		blocks = append(blocks, block)
+		b, _ := json.Marshal(userTextBlock{ID: e.userID, Text: e.userText}) //nolint:errcheck,errchkjson // struct of strings never fails
+		blocks = append(blocks, b)
 	}
 
 	// Image blocks passed through verbatim.
 	blocks = append(blocks, e.userImages...)
 
-	contentJSON := mustMarshal(blocks)
+	contentJSON, _ := json.Marshal(blocks) //nolint:errcheck,errchkjson // slice of valid JSON never fails
 
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeUser),
-		"ts", e.ts,
-		"content", contentJSON,
-	)
+	line := base
+	line.Type = transcript.TypeUser
+	line.TS = e.ts
+	line.InputTokens = e.inputTokens
+	line.OutputTokens = e.outputTokens
+	line.Content = contentJSON
+	appendLine(result, line)
+}
+
+// appendLine marshals a transcriptLine and appends it (with newline) to result.
+func appendLine(result *[]byte, line transcriptLine) {
+	b, _ := json.Marshal(line) //nolint:errcheck,errchkjson // struct of primitives + RawMessage never fails
 	*result = append(*result, b...)
 	*result = append(*result, '\n')
 }
@@ -283,6 +311,7 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 			if contentRaw, ok := msg["content"]; ok {
 				e.content = stripAssistantContent(contentRaw)
 			}
+			e.inputTokens, e.outputTokens = extractUsageTokens(msg)
 		}
 
 	case transcript.TypeUser:
@@ -308,10 +337,17 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 }
 
 // mergeAssistantEntries combines two assistant entries with the same message ID.
-// Content arrays are concatenated; the later timestamp wins.
+// Content arrays are concatenated; the later timestamp and token counts win
+// (streaming fragments report cumulative usage, so the last fragment is final).
 func mergeAssistantEntries(a, b parsedEntry) parsedEntry {
 	merged := a
 	merged.ts = b.ts
+	if b.inputTokens > 0 {
+		merged.inputTokens = b.inputTokens
+	}
+	if b.outputTokens > 0 {
+		merged.outputTokens = b.outputTokens
+	}
 
 	var aBlocks, bBlocks []json.RawMessage
 	_ = json.Unmarshal(a.content, &aBlocks) //nolint:errcheck // best-effort merge
@@ -361,46 +397,39 @@ func inlineToolResults(assistant, user parsedEntry) parsedEntry {
 // buildToolResult constructs the compact result object for a tool_use block,
 // including optional rich metadata (file, matchCount) when available.
 func buildToolResult(tr toolResultEntry) json.RawMessage {
-	status := "success"
-	if tr.isError {
-		status = "error"
+	r := toolResultJSON{
+		Output:     tr.output,
+		Status:     "success",
+		MatchCount: tr.matchCount,
 	}
-
-	// Build file metadata JSON if present.
-	var fileJSON json.RawMessage
+	if tr.isError {
+		r.Status = "error"
+	}
 	if tr.file != nil {
-		if tr.file.numLines > 0 {
-			fileJSON = marshalOrdered(
-				"filePath", mustMarshal(tr.file.filePath),
-				"numLines", mustMarshal(tr.file.numLines),
-			)
-		} else {
-			fileJSON = marshalOrdered(
-				"filePath", mustMarshal(tr.file.filePath),
-			)
+		r.File = &toolResultFileJSON{
+			FilePath: tr.file.filePath,
+			NumLines: tr.file.numLines,
 		}
 	}
-
-	// matchCount: only include if > 0.
-	var matchCountJSON json.RawMessage
-	if tr.matchCount > 0 {
-		matchCountJSON = mustMarshal(tr.matchCount)
-	}
-
-	return marshalOrdered(
-		"output", mustMarshal(tr.output),
-		"status", mustMarshal(status),
-		"file", fileJSON,
-		"matchCount", matchCountJSON,
-	)
+	b, _ := json.Marshal(r) //nolint:errcheck,errchkjson // struct of primitives never fails
+	return b
 }
 
-// jsonStringOrNil returns a JSON-encoded string, or nil if s is empty.
-func jsonStringOrNil(s string) json.RawMessage {
-	if s == "" {
-		return nil
+// extractUsageTokens extracts input_tokens and output_tokens from a Claude
+// message's "usage" object. Returns (0, 0) if usage is absent or malformed.
+func extractUsageTokens(msg map[string]json.RawMessage) (inputTokens, outputTokens int) {
+	usageRaw, ok := msg["usage"]
+	if !ok {
+		return 0, 0
 	}
-	return mustMarshal(s)
+	var usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	if json.Unmarshal(usageRaw, &usage) != nil {
+		return 0, 0
+	}
+	return usage.InputTokens, usage.OutputTokens
 }
 
 // isEmptyContentArray returns true if raw is a JSON empty array (`[]`).
@@ -597,38 +626,6 @@ func stripAssistantContent(contentRaw json.RawMessage) json.RawMessage {
 	if err != nil {
 		return contentRaw
 	}
-	return b
-}
-
-// marshalOrdered produces a JSON object with keys in the given order.
-// Pairs with nil values are omitted.
-func marshalOrdered(pairs ...interface{}) []byte {
-	var buf bytes.Buffer
-	buf.WriteByte('{')
-	first := true
-	for i := 0; i < len(pairs)-1; i += 2 {
-		key := pairs[i].(string)               //nolint:errcheck,forcetypeassert // contract: keys are always strings
-		val, _ := pairs[i+1].(json.RawMessage) //nolint:errcheck // nil val is handled below
-		if val == nil {
-			continue
-		}
-		if !first {
-			buf.WriteByte(',')
-		}
-		keyJSON, _ := json.Marshal(key) //nolint:errcheck,errchkjson // string keys never fail
-		buf.Write(keyJSON)
-		buf.WriteByte(':')
-		buf.Write(val)
-		first = false
-	}
-	buf.WriteByte('}')
-	return buf.Bytes()
-}
-
-// mustMarshal marshals v to JSON, panicking on error (which should never
-// happen for the primitive types we pass).
-func mustMarshal(v interface{}) json.RawMessage {
-	b, _ := json.Marshal(v) //nolint:errcheck,errchkjson // only used with primitive types that never fail
 	return b
 }
 
