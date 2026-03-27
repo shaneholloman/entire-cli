@@ -453,6 +453,21 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return nil
 }
 
+// FetchMetadataFromCheckpointRemote fetches the entire/checkpoints/v1 branch from the
+// configured checkpoint_remote URL and updates the local branch.
+// Returns an error if the fetch fails or no checkpoint_remote is configured.
+func FetchMetadataFromCheckpointRemote(ctx context.Context) error {
+	checkpointURL, ok := strategy.ResolveCheckpointRemoteURL(ctx)
+	if !ok {
+		return errors.New("no checkpoint_remote configured")
+	}
+
+	if err := strategy.FetchMetadataBranch(ctx, checkpointURL); err != nil {
+		return fmt.Errorf("failed to fetch from checkpoint remote: %w", err)
+	}
+	return nil
+}
+
 // FetchBlobsByHash fetches specific blob objects from the remote by their SHA-1 hashes.
 // Uses "git fetch origin <hash>" which goes through normal credential helpers,
 // unlike fetch-pack which bypasses them. Requires the server to support
