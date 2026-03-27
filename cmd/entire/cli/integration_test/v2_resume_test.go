@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -177,13 +176,9 @@ func TestV2Resume_FallsBackToV1(t *testing.T) {
 
 	// Resume should fall back to v1 since data was written before v2 was enabled
 	output, err := env.RunResume(featureBranch)
-	if err != nil {
-		// Even if resume returns an error, check if it's because of missing v2 data
-		// The v1 fallback should still work
-		if !strings.Contains(output, "Restored session") && !strings.Contains(output, "claude -r") {
-			t.Fatalf("resume failed and didn't fall back to v1: %v\nOutput: %s", err, output)
-		}
-	}
+	require.NoError(t, err, "resume failed: %s", output)
 
 	assert.Equal(t, featureBranch, env.GetCurrentBranch())
+	assert.Contains(t, output, "Restored session")
+	assert.Contains(t, output, "claude -r")
 }
