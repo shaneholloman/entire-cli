@@ -43,7 +43,7 @@ jobs:
           if [ -n "$input" ]; then
             echo "agents=[\"$input\"]" >> "$GITHUB_OUTPUT"
           else
-            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli","copilot-cli","roger-roger"]' >> "$GITHUB_OUTPUT"
+            echo 'agents=["claude-code","opencode","gemini-cli","factoryai-droid","cursor-cli","copilot-cli","roger-roger","codex"]' >> "$GITHUB_OUTPUT"
           fi
 
   e2e-tests:
