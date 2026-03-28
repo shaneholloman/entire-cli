@@ -1401,9 +1401,28 @@ func (s *ManualCommitStrategy) sessionHasNewContent(ctx context.Context, repo *g
 	}
 
 	// No staged files - either PostCommit context or edge case.
-	// Return transcript growth status. For PostCommit with hasTranscriptFile=true,
-	// if there's no transcript growth, the session hasn't done new work since last checkpoint.
-	// (Carry-forward creates a shadow branch WITHOUT transcript, handled in the block above.)
+	//
+	// For recently-active IDLE sessions, the staged set is already gone by
+	// PostCommit, but carry-forward files from the just-ended turn must still
+	// count as "new content". The caller performs the stricter committed-file
+	// overlap check before actually condensing, which prevents false positives
+	// from unrelated commits.
+	//
+	// Stale IDLE sessions and ENDED sessions should NOT take this path. Those
+	// states may retain FilesTouched from older work, and treating that alone as
+	// fresh content would incorrectly condense old sessions into unrelated commits.
+	if hasUncommittedFiles && state.Phase == session.PhaseIdle && isRecentInteraction(state.LastInteractionTime) {
+		logging.Debug(logCtx, "sessionHasNewContent: no staged files, returning true due to recent idle carry-forward files",
+			slog.String("session_id", state.SessionID),
+			slog.Bool("has_transcript_growth", hasTranscriptGrowth),
+			slog.Bool("has_uncommitted_files", hasUncommittedFiles),
+			slog.String("phase", string(state.Phase)),
+		)
+		return true, nil
+	}
+
+	// No staged files and no carry-forward files: transcript growth is the only
+	// remaining signal that there is new session content to condense.
 	logging.Debug(logCtx, "sessionHasNewContent: no staged files, returning transcript growth",
 		slog.String("session_id", state.SessionID),
 		slog.Bool("has_transcript_growth", hasTranscriptGrowth),

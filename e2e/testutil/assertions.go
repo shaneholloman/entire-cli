@@ -211,6 +211,26 @@ func AssertCheckpointExists(t *testing.T, dir string, checkpointID string) {
 		"checkpoint %s metadata not found at %s", checkpointID, path)
 }
 
+// WaitForCheckpointExists polls until the checkpoint ID appears on the
+// checkpoint branch and its metadata.json is readable, or fails after timeout.
+func WaitForCheckpointExists(t *testing.T, dir string, checkpointID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out := gitOutputSafe(dir, "log", "entire/checkpoints/v1", "--grep="+checkpointID, "--oneline")
+		if out != "" {
+			path := CheckpointPath(checkpointID) + "/metadata.json"
+			blob := "entire/checkpoints/v1:" + path
+			raw := gitOutputSafe(dir, "show", blob)
+			if raw != "" {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("checkpoint %s not found on checkpoint branch within %s", checkpointID, timeout)
+}
+
 // AssertCommitLinkedToCheckpoint asserts the trailer exists AND the
 // checkpoint data exists on the checkpoint branch.
 func AssertCommitLinkedToCheckpoint(t *testing.T, dir string, ref string) {
