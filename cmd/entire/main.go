@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/entireio/cli/cmd/entire/cli"
 	"github.com/spf13/cobra"
@@ -18,7 +20,11 @@ func main() {
 
 	// Handle interrupt signals
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, terminationSignals()...)
+	signals := []os.Signal{os.Interrupt}
+	if runtime.GOOS != "windows" {
+		signals = append(signals, syscall.SIGTERM)
+	}
+	signal.Notify(sigChan, signals...)
 	go func() {
 		<-sigChan
 		cancel()

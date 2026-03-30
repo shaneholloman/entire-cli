@@ -7,5 +7,5 @@ set -euo pipefail
 rm -rf completions
 mkdir completions
 for sh in bash zsh fish; do
-    go run ./cmd/entire completion "$sh" >"completions/entire.$sh"
+    go run ./cmd/entire/main.go completion "$sh" >"completions/entire.$sh"
 done
