@@ -1,6 +1,7 @@
 name: E2E Tests (Windows)
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       test:
