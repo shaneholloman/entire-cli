@@ -36,6 +36,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/go-git/go-git/v6/utils/binary"
+	"github.com/go-git/go-git/v6/x/plugin"
 )
 
 // errStopIteration is used to stop commit iteration early in GetCheckpointAuthor.
@@ -427,8 +428,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 // writeCheckpointSummary writes the root-level CheckpointSummary with aggregated statistics.
 // sessions is the complete sessions array (already built by the caller).
 func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry, sessions []SessionFilePaths) error {
-	checkpointsCount, filesTouched, tokenUsage, err :=
-		s.reaggregateFromEntries(basePath, len(sessions), entries)
+	checkpointsCount, filesTouched, tokenUsage, err := s.reaggregateFromEntries(basePath, len(sessions), entries)
 	if err != nil {
 		return fmt.Errorf("failed to aggregate session stats: %w", err)
 	}
@@ -1762,6 +1762,10 @@ func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
+	if err := signCommitBestEffort(commit); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("failed to sign commit: %w", err)
+	}
+
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to encode commit: %w", err)
@@ -1773,6 +1777,41 @@ func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 	}
 
 	return hash, nil
+}
+
+// signCommitBestEffort signs the commit using the registered ObjectSigner plugin.
+// If no signer is registered, the commit is left unsigned and no error is returned.
+func signCommitBestEffort(commit *object.Commit) error {
+	if !plugin.Has(plugin.ObjectSigner()) {
+		return nil
+	}
+
+	signer, err := plugin.Get(plugin.ObjectSigner())
+	if err != nil {
+		return fmt.Errorf("getting object signer: %w", err)
+	}
+
+	if signer == nil {
+		return nil
+	}
+
+	encoded := &plumbing.MemoryObject{}
+	if err = commit.EncodeWithoutSignature(encoded); err != nil {
+		return fmt.Errorf("encoding commit for signing: %w", err)
+	}
+
+	r, err := encoded.Reader()
+	if err != nil {
+		return fmt.Errorf("reading encoded commit: %w", err)
+	}
+
+	sig, err := signer.Sign(r)
+	if err != nil {
+		return fmt.Errorf("signing commit: %w", err)
+	}
+
+	commit.Signature = string(sig)
+	return nil
 }
 
 // readTranscriptFromTree reads a transcript from a git tree, handling both chunked and non-chunked formats.
