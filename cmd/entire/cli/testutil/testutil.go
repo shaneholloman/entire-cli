@@ -293,7 +293,7 @@ func gitEmptyConfigPath() string {
 		if err != nil {
 			panic("create empty git config: " + err.Error())
 		}
-		f.Close()
+		_ = f.Close()
 		gitEmptyConfig = f.Name()
 	}
 	return gitEmptyConfig

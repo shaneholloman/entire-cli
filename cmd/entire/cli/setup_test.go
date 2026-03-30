@@ -1435,6 +1435,7 @@ func TestConfigureCmd_CheckpointRemote_UpdatesProjectSettings(t *testing.T) {
 	remote := s.GetCheckpointRemote()
 	if remote == nil {
 		t.Fatal("expected checkpoint_remote to be set")
+		return
 	}
 	if remote.Provider != "github" || remote.Repo != "ashtom/zeugs-checkpoints" {
 		t.Errorf("unexpected checkpoint_remote: %+v", remote)
