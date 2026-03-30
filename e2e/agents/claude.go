@@ -207,7 +207,7 @@ func cleanConfigDir() (string, error) {
 		if home, err := os.UserHomeDir(); err == nil {
 			src := filepath.Join(home, ".claude", ".claude.json")
 			if _, err := os.Stat(src); err == nil {
-				_ = os.Symlink(src, filepath.Join(dst, ".claude.json"))
+				_ = linkFile(src, filepath.Join(dst, ".claude.json"))
 			}
 		}
 	} else {
