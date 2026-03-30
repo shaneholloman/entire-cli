@@ -4,9 +4,11 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
@@ -113,4 +115,84 @@ func TestShortRefName(t *testing.T) {
 			assert.Equal(t, tt.expected, shortRefName(plumbing.ReferenceName(tt.input)))
 		})
 	}
+}
+
+// writeV2Checkpoint writes a checkpoint to both /main and /full/current via V2GitStore.
+func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID, sessionID string) {
+	t.Helper()
+	store := checkpoint.NewV2GitStore(repo)
+	err := store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    sessionID,
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"from":"` + sessionID + `"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+}
+
+// TestFetchAndMergeRef_MergesTrees verifies that fetchAndMergeRef correctly
+// merges divergent trees from two repos sharing a common ref.
+// Not parallel: uses t.Chdir()
+func TestFetchAndMergeRef_MergesTrees(t *testing.T) {
+	ctx := context.Background()
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+
+	// Create source repo with a v2 /main ref containing one checkpoint
+	srcDir := setupRepoWithV2Ref(t)
+	srcRepo, err := git.PlainOpen(srcDir)
+	require.NoError(t, err)
+	writeV2Checkpoint(t, srcRepo, id.MustCheckpointID("aabbccddeeff"), "session-src")
+
+	// Create a bare "remote" and push src to it
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, initCmd.Run())
+
+	pushCmd := exec.CommandContext(ctx, "git", "push", bareDir,
+		string(refName)+":"+string(refName))
+	pushCmd.Dir = srcDir
+	require.NoError(t, pushCmd.Run())
+
+	// Create a local repo that also has the ref but with a different checkpoint
+	localDir := setupRepoWithV2Ref(t)
+	localRepo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	writeV2Checkpoint(t, localRepo, id.MustCheckpointID("112233445566"), "session-local")
+
+	t.Chdir(localDir)
+
+	// Fetch and merge — should combine both checkpoints
+	err = fetchAndMergeRef(ctx, bareDir, refName)
+	require.NoError(t, err)
+
+	// Verify merged tree contains both checkpoints on /main
+	mergedRepo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	ref, err := mergedRepo.Reference(refName, true)
+	require.NoError(t, err)
+	commit, err := mergedRepo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	tree, err := commit.Tree()
+	require.NoError(t, err)
+
+	entries := make(map[string]object.TreeEntry)
+	require.NoError(t, checkpoint.FlattenTree(mergedRepo, tree, "", entries))
+
+	// Should have entries from both checkpoints (aa/ shard and 11/ shard)
+	hasAA := false
+	has11 := false
+	for path := range entries {
+		if strings.HasPrefix(path, "aa/") {
+			hasAA = true
+		}
+		if strings.HasPrefix(path, "11/") {
+			has11 = true
+		}
+	}
+	assert.True(t, hasAA, "merged tree should contain checkpoint aabbccddeeff")
+	assert.True(t, has11, "merged tree should contain checkpoint 112233445566")
 }

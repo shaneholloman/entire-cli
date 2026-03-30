@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // pushRefIfNeeded pushes a custom ref to the given target if it exists locally.
@@ -93,9 +96,88 @@ func doPushRef(ctx context.Context, target string, refName plumbing.ReferenceNam
 }
 
 // fetchAndMergeRef fetches a remote custom ref and merges it into the local ref.
-// Placeholder — implemented in Task 4.
-func fetchAndMergeRef(_ context.Context, _ string, _ plumbing.ReferenceName) error {
-	return fmt.Errorf("fetchAndMergeRef not yet implemented")
+// Uses the same tree-flattening merge as v1 (sharded paths are unique, so no conflicts).
+func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.ReferenceName) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	// Fetch to a temp ref
+	tmpRefSuffix := strings.ReplaceAll(string(refName), "/", "-")
+	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + tmpRefSuffix)
+	refSpec := fmt.Sprintf("+%s:%s", refName, tmpRefName)
+
+	fetchCmd := exec.CommandContext(ctx, "git", "fetch", target, refSpec)
+	fetchCmd.Stdin = nil
+	if output, err := fetchCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("fetch failed: %s", output)
+	}
+
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Get local ref state
+	localRef, err := repo.Reference(refName, true)
+	if err != nil {
+		return fmt.Errorf("failed to get local ref: %w", err)
+	}
+	localCommit, err := repo.CommitObject(localRef.Hash())
+	if err != nil {
+		return fmt.Errorf("failed to get local commit: %w", err)
+	}
+	localTree, err := localCommit.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to get local tree: %w", err)
+	}
+
+	// Get fetched remote state
+	remoteRef, err := repo.Reference(tmpRefName, true)
+	if err != nil {
+		return fmt.Errorf("failed to get remote ref: %w", err)
+	}
+	remoteCommit, err := repo.CommitObject(remoteRef.Hash())
+	if err != nil {
+		return fmt.Errorf("failed to get remote commit: %w", err)
+	}
+	remoteTree, err := remoteCommit.Tree()
+	if err != nil {
+		return fmt.Errorf("failed to get remote tree: %w", err)
+	}
+
+	// Flatten both trees and combine entries
+	entries := make(map[string]object.TreeEntry)
+	if err := checkpoint.FlattenTree(repo, localTree, "", entries); err != nil {
+		return fmt.Errorf("failed to flatten local tree: %w", err)
+	}
+	if err := checkpoint.FlattenTree(repo, remoteTree, "", entries); err != nil {
+		return fmt.Errorf("failed to flatten remote tree: %w", err)
+	}
+
+	// Build merged tree
+	mergedTreeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	if err != nil {
+		return fmt.Errorf("failed to build merged tree: %w", err)
+	}
+
+	// Create merge commit
+	mergeCommitHash, err := createMergeCommitCommon(repo, mergedTreeHash,
+		[]plumbing.Hash{localRef.Hash(), remoteRef.Hash()},
+		"Merge remote "+shortRefName(refName))
+	if err != nil {
+		return fmt.Errorf("failed to create merge commit: %w", err)
+	}
+
+	// Update local ref
+	newRef := plumbing.NewHashReference(refName, mergeCommitHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("failed to update ref: %w", err)
+	}
+
+	// Clean up temp ref (best-effort)
+	_ = repo.Storer.RemoveReference(tmpRefName) //nolint:errcheck // cleanup is best-effort
+
+	return nil
 }
 
 // shortRefName returns a human-readable short form of a ref name for log output.
