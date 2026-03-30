@@ -1662,9 +1662,9 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 		normalized := make([]string, 0, len(modifiedFiles))
 		for _, f := range modifiedFiles {
 			if rel := paths.ToRelativePath(f, basePath); rel != "" {
-				normalized = append(normalized, rel)
+				normalized = append(normalized, filepath.ToSlash(rel))
 			} else {
-				normalized = append(normalized, f)
+				normalized = append(normalized, filepath.ToSlash(f))
 			}
 		}
 		modifiedFiles = normalized
@@ -2105,7 +2105,7 @@ func getStagedFiles(ctx context.Context) ([]string, error) {
 	staged := []string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if line != "" {
-			staged = append(staged, line)
+			staged = append(staged, filepath.ToSlash(line))
 		}
 	}
 	return staged, nil
