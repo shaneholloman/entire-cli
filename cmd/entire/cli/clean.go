@@ -60,7 +60,7 @@ Use --dry-run to preview what would be deleted without prompting.`,
 			}
 
 			if allFlag {
-				return runCleanAll(ctx, cmd.OutOrStdout(), forceFlag, dryRunFlag)
+				return runCleanAll(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), forceFlag, dryRunFlag)
 			}
 
 			// Check if in git repository
@@ -137,7 +137,7 @@ func runCleanCurrentHead(ctx context.Context, cmd *cobra.Command, force, dryRun 
 		}
 	}
 
-	if err := strat.Reset(ctx, cmd.ErrOrStderr()); err != nil {
+	if err := strat.Reset(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 		return fmt.Errorf("clean failed: %w", err)
 	}
 
@@ -248,7 +248,7 @@ func runCleanSession(ctx context.Context, cmd *cobra.Command, strat *strategy.Ma
 		}
 	}
 
-	if err := strat.ResetSession(ctx, cmd.ErrOrStderr(), sessionID); err != nil {
+	if err := strat.ResetSession(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), sessionID); err != nil {
 		return fmt.Errorf("%s session failed: %w", strings.ToLower(actionVerb), err)
 	}
 
@@ -257,7 +257,7 @@ func runCleanSession(ctx context.Context, cmd *cobra.Command, strat *strategy.Ma
 }
 
 // runCleanAll cleans all orphaned data across the repository (old `entire clean` behavior).
-func runCleanAll(ctx context.Context, w io.Writer, force, dryRun bool) error {
+func runCleanAll(ctx context.Context, w, errW io.Writer, force, dryRun bool) error {
 	// List all cleanup items
 	items, err := strategy.ListAllCleanupItems(ctx)
 	if err != nil {
@@ -271,12 +271,12 @@ func runCleanAll(ctx context.Context, w io.Writer, force, dryRun bool) error {
 		fmt.Fprintf(errW, "Warning: failed to list temp files: %v\n", err)
 	}
 
-	return runCleanAllWithItems(ctx, w, force, dryRun, items, tempFiles)
+	return runCleanAllWithItems(ctx, w, errW, force, dryRun, items, tempFiles)
 }
 
 // runCleanAllWithItems is the core logic for cleaning all orphaned items.
 // Separated for testability.
-func runCleanAllWithItems(ctx context.Context, w io.Writer, force, dryRun bool, items []strategy.CleanupItem, tempFiles []string) error {
+func runCleanAllWithItems(ctx context.Context, w, errW io.Writer, force, dryRun bool, items []strategy.CleanupItem, tempFiles []string) error {
 	// Handle no items case
 	if len(items) == 0 && len(tempFiles) == 0 {
 		fmt.Fprintln(w, "No orphaned items to clean up.")
@@ -388,33 +388,33 @@ func runCleanAllWithItems(ctx context.Context, w io.Writer, force, dryRun bool, 
 	}
 
 	if totalFailed > 0 {
-		fmt.Fprintf(w, "\nFailed to delete %d %s:\n", totalFailed, itemWord(totalFailed))
+		fmt.Fprintf(errW, "\nFailed to delete %d %s:\n", totalFailed, itemWord(totalFailed))
 
 		if len(result.FailedBranches) > 0 {
-			fmt.Fprintf(w, "\nShadow branches:\n")
+			fmt.Fprintf(errW, "\nShadow branches:\n")
 			for _, branch := range result.FailedBranches {
-				fmt.Fprintf(w, "  %s\n", branch)
+				fmt.Fprintf(errW, "  %s\n", branch)
 			}
 		}
 
 		if len(result.FailedStates) > 0 {
-			fmt.Fprintf(w, "\nSession states:\n")
+			fmt.Fprintf(errW, "\nSession states:\n")
 			for _, state := range result.FailedStates {
-				fmt.Fprintf(w, "  %s\n", state)
+				fmt.Fprintf(errW, "  %s\n", state)
 			}
 		}
 
 		if len(result.FailedCheckpoints) > 0 {
-			fmt.Fprintf(w, "\nCheckpoints:\n")
+			fmt.Fprintf(errW, "\nCheckpoints:\n")
 			for _, cp := range result.FailedCheckpoints {
-				fmt.Fprintf(w, "  %s\n", cp)
+				fmt.Fprintf(errW, "  %s\n", cp)
 			}
 		}
 
 		if len(failedTempFiles) > 0 {
-			fmt.Fprintf(w, "\nTemp files:\n")
+			fmt.Fprintf(errW, "\nTemp files:\n")
 			for _, fe := range failedTempFiles {
-				fmt.Fprintf(w, "  %s: %v\n", fe.File, fe.Err)
+				fmt.Fprintf(errW, "  %s: %v\n", fe.File, fe.Err)
 			}
 		}
 
@@ -527,4 +527,12 @@ func activeSessionsOnCurrentHead(ctx context.Context) ([]*session.State, error) 
 	}
 
 	return active, nil
+}
+
+// itemWord returns "item" or "items" based on count.
+func itemWord(n int) string {
+	if n == 1 {
+		return "item"
+	}
+	return "items"
 }

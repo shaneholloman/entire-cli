@@ -79,7 +79,7 @@ func newResetCmd() *cobra.Command {
 				}
 			}
 
-			if err := strat.Reset(ctx, cmd.ErrOrStderr()); err != nil {
+			if err := strat.Reset(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 				return fmt.Errorf("reset failed: %w", err)
 			}
 
