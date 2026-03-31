@@ -383,6 +383,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		TokenUsage:                  opts.TokenUsage,
 		SessionMetrics:              opts.SessionMetrics,
 		InitialAttribution:          opts.InitialAttribution,
+		PromptAttributions:          opts.PromptAttributionsJSON,
 		Summary:                     redactSummary(opts.Summary),
 		CLIVersion:                  versioninfo.Version,
 	}
@@ -414,15 +415,25 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 		return fmt.Errorf("failed to aggregate session stats: %w", err)
 	}
 
+	var combinedAttribution *InitialAttribution
+	rootMetadataPath := basePath + paths.MetadataFileName
+	if entry, exists := entries[rootMetadataPath]; exists {
+		existingSummary, readErr := s.readSummaryFromBlob(entry.Hash)
+		if readErr == nil {
+			combinedAttribution = existingSummary.CombinedAttribution
+		}
+	}
+
 	summary := CheckpointSummary{
-		CheckpointID:     opts.CheckpointID,
-		CLIVersion:       versioninfo.Version,
-		Strategy:         opts.Strategy,
-		Branch:           opts.Branch,
-		CheckpointsCount: checkpointsCount,
-		FilesTouched:     filesTouched,
-		Sessions:         sessions,
-		TokenUsage:       tokenUsage,
+		CheckpointID:        opts.CheckpointID,
+		CLIVersion:          versioninfo.Version,
+		Strategy:            opts.Strategy,
+		Branch:              opts.Branch,
+		CheckpointsCount:    checkpointsCount,
+		FilesTouched:        filesTouched,
+		Sessions:            sessions,
+		TokenUsage:          tokenUsage,
+		CombinedAttribution: combinedAttribution,
 	}
 
 	metadataJSON, err := jsonutil.MarshalIndentWithNewline(summary, "", "  ")
@@ -438,6 +449,76 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 		Mode: filemode.Regular,
 		Hash: metadataHash,
 	}
+	return nil
+}
+
+// UpdateCheckpointSummary updates root-level checkpoint metadata fields that depend
+// on the full set of sessions already written to the checkpoint.
+func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.CheckpointID, combinedAttribution *InitialAttribution) error {
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	if err := s.ensureSessionsBranch(); err != nil {
+		return fmt.Errorf("failed to ensure sessions branch: %w", err)
+	}
+
+	parentHash, rootTreeHash, err := s.getSessionsBranchRef()
+	if err != nil {
+		return err
+	}
+
+	basePath := checkpointID.Path() + "/"
+	checkpointPath := checkpointID.Path()
+	entries, err := s.flattenCheckpointEntries(rootTreeHash, checkpointPath)
+	if err != nil {
+		return err
+	}
+
+	rootMetadataPath := basePath + paths.MetadataFileName
+	entry, exists := entries[rootMetadataPath]
+	if !exists {
+		return ErrCheckpointNotFound
+	}
+
+	summary, err := s.readSummaryFromBlob(entry.Hash)
+	if err != nil {
+		return fmt.Errorf("failed to read checkpoint summary: %w", err)
+	}
+	summary.CombinedAttribution = combinedAttribution
+
+	metadataJSON, err := jsonutil.MarshalIndentWithNewline(summary, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal checkpoint summary: %w", err)
+	}
+	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	if err != nil {
+		return fmt.Errorf("failed to create checkpoint summary blob: %w", err)
+	}
+	entries[rootMetadataPath] = object.TreeEntry{
+		Name: rootMetadataPath,
+		Mode: filemode.Regular,
+		Hash: metadataHash,
+	}
+
+	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+
+	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	commitMsg := fmt.Sprintf("Update checkpoint summary for %s", checkpointID)
+	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	if err != nil {
+		return err
+	}
+
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	newRef := plumbing.NewHashReference(refName, newCommitHash)
+	if err := s.repo.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("failed to set branch reference: %w", err)
+	}
+
 	return nil
 }
 
