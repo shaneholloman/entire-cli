@@ -65,10 +65,13 @@ most recent commit with a checkpoint.  You'll be prompted to confirm resuming in
 }
 
 func runResume(ctx context.Context, cmd *cobra.Command, branchName string, force bool) error {
-	// Initialize logging so structured logs go to .entire/logs/ instead of stderr.
-	logging.SetLogLevelGetter(GetLogLevel)
-	if err := logging.Init(ctx, ""); err == nil {
-		defer logging.Close()
+	// Only initialize logging when inside a git worktree to avoid
+	// creating .entire/logs/ in arbitrary directories.
+	if _, err := paths.WorktreeRoot(ctx); err == nil {
+		logging.SetLogLevelGetter(GetLogLevel)
+		if err := logging.Init(ctx, ""); err == nil {
+			defer logging.Close()
+		}
 	}
 
 	w := cmd.OutOrStdout()

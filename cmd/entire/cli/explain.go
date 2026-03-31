@@ -125,9 +125,13 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 				return nil
 			}
 
-			logging.SetLogLevelGetter(GetLogLevel)
-			if err := logging.Init(cmd.Context(), ""); err == nil {
-				defer logging.Close()
+			// Only initialize logging when inside a git worktree to avoid
+			// creating .entire/logs/ in arbitrary directories.
+			if _, err := paths.WorktreeRoot(cmd.Context()); err == nil {
+				logging.SetLogLevelGetter(GetLogLevel)
+				if err := logging.Init(cmd.Context(), ""); err == nil {
+					defer logging.Close()
+				}
 			}
 
 			// Validate flag dependencies
