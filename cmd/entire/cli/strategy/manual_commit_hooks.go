@@ -877,6 +877,12 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	}
 	processSessionsLoop.End()
 
+	if err := s.updateCombinedAttributionForCheckpoint(ctx, repo, checkpointID); err != nil {
+		logging.Warn(logCtx, "failed to update combined checkpoint attribution",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("error", err.Error()))
+	}
+
 	// Clean up shadow branches — only delete when ALL sessions on the branch are non-active
 	// or were condensed during this PostCommit.
 	_, cleanupBranchesSpan := perf.Start(ctx, "cleanup_shadow_branches")
@@ -901,6 +907,76 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	cleanupBranchesSpan.End()
 
 	return nil
+}
+
+func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID) error {
+	store := checkpoint.NewGitStore(repo)
+
+	summary, err := store.ReadCommitted(ctx, checkpointID)
+	if err != nil {
+		return fmt.Errorf("reading checkpoint summary: %w", err)
+	}
+	if summary == nil || len(summary.Sessions) <= 1 {
+		return nil
+	}
+
+	combined := aggregateCheckpointAttribution()
+	for i := range len(summary.Sessions) {
+		content, readErr := store.ReadSessionContent(ctx, checkpointID, i)
+		if readErr != nil || content == nil || content.Metadata.InitialAttribution == nil {
+			continue
+		}
+		combined.add(content.Metadata.InitialAttribution)
+	}
+
+	if !combined.hasData() {
+		return nil
+	}
+
+	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined.snapshot()); err != nil {
+		return fmt.Errorf("updating combined attribution: %w", err)
+	}
+
+	return nil
+}
+
+type checkpointAttributionAggregate struct {
+	agentLines     int
+	humanAdded     int
+	humanModified  int
+	humanRemoved   int
+	totalCommitted int
+}
+
+func aggregateCheckpointAttribution() *checkpointAttributionAggregate {
+	return &checkpointAttributionAggregate{}
+}
+
+func (a *checkpointAttributionAggregate) add(attr *checkpoint.InitialAttribution) {
+	a.agentLines += attr.AgentLines
+	a.humanAdded += attr.HumanAdded
+	a.humanModified += attr.HumanModified
+	a.humanRemoved += attr.HumanRemoved
+	a.totalCommitted += attr.TotalCommitted
+}
+
+func (a *checkpointAttributionAggregate) hasData() bool {
+	return a.agentLines != 0 || a.humanAdded != 0 || a.humanModified != 0 || a.humanRemoved != 0 || a.totalCommitted != 0
+}
+
+func (a *checkpointAttributionAggregate) snapshot() *checkpoint.InitialAttribution {
+	attr := &checkpoint.InitialAttribution{
+		CalculatedAt:   time.Now().UTC(),
+		AgentLines:     a.agentLines,
+		HumanAdded:     a.humanAdded,
+		HumanModified:  a.humanModified,
+		HumanRemoved:   a.humanRemoved,
+		TotalCommitted: a.totalCommitted,
+	}
+	if a.totalCommitted > 0 {
+		attr.AgentPercentage = float64(a.agentLines) / float64(a.totalCommitted) * 100
+	}
+	return attr
 }
 
 // postCommitProcessSession handles a single session within the PostCommit loop.

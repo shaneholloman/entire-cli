@@ -266,6 +266,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		TokenUsage:                  sessionData.TokenUsage,
 		SessionMetrics:              buildSessionMetrics(state),
 		InitialAttribution:          attribution,
+		PromptAttributionsJSON:      marshalPromptAttributions(state.PromptAttributions),
 		Summary:                     summary,
 	}
 
@@ -289,6 +290,19 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 // buildSessionMetrics creates a SessionMetrics from session state if any metrics are available.
 // Returns nil if no hook-provided metrics exist (e.g., for agents that don't report them).
+// marshalPromptAttributions encodes PromptAttributions to JSON for diagnostic persistence.
+// Returns nil if there are no attributions to persist.
+func marshalPromptAttributions(pas []PromptAttribution) json.RawMessage {
+	if len(pas) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(pas)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 func buildSessionMetrics(state *SessionState) *cpkg.SessionMetrics {
 	if state.SessionDurationMs == 0 && state.SessionTurnCount == 0 && state.ContextTokens == 0 && state.ContextWindowSize == 0 {
 		return nil
@@ -430,9 +444,19 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 			slog.String("attribution_base", attrBase))
 	}
 
+	// Include PendingPromptAttribution if it was never moved to PromptAttributions.
+	// This happens when an agent commits mid-turn without calling SaveStep (e.g., Codex).
+	// PendingPromptAttribution is set during UserPromptSubmit but only moved to
+	// PromptAttributions during SaveStep. Without this, mid-turn commits have no PA
+	// data and pre-session worktree dirt cannot be identified for baseline exclusion.
+	promptAttrs := state.PromptAttributions
+	if state.PendingPromptAttribution != nil {
+		promptAttrs = append(promptAttrs, *state.PendingPromptAttribution)
+	}
+
 	// Log accumulated prompt attributions for debugging
 	var totalUserAdded, totalUserRemoved int
-	for i, pa := range state.PromptAttributions {
+	for i, pa := range promptAttrs {
 		totalUserAdded += pa.UserLinesAdded
 		totalUserRemoved += pa.UserLinesRemoved
 		logging.Debug(logCtx, "prompt attribution data",
@@ -450,7 +474,7 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 		shadowTree,
 		headTree,
 		sessionData.FilesTouched,
-		state.PromptAttributions,
+		promptAttrs,
 		o.repoDir,
 		o.parentCommitHash,
 		o.attributionBaseCommit,

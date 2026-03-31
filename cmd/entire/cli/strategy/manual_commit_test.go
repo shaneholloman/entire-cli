@@ -2453,19 +2453,20 @@ func TestCondenseSession_AttributionWithoutShadowBranch_MixedHumanAgent(t *testi
 	t.Logf("Attribution (mixed, no shadow): agent=%d, human_added=%d, total=%d, percentage=%.1f%%",
 		attr.AgentLines, attr.HumanAdded, attr.TotalCommitted, attr.AgentPercentage)
 
-	// src/app.go has 7 lines (agent), docs/notes.md has 4 lines (human)
+	// src/app.go has 7 lines (agent). docs/notes.md was added before the session
+	// (captured by PA1) so it's pre-session baseline — excluded from human count.
 	if attr.AgentLines != 7 {
 		t.Errorf("AgentLines = %d, want 7 (src/app.go has 7 lines)", attr.AgentLines)
 	}
-	if attr.HumanAdded != 4 {
-		t.Errorf("HumanAdded = %d, want 4 (docs/notes.md has 4 lines)", attr.HumanAdded)
+	if attr.HumanAdded != 0 {
+		t.Errorf("HumanAdded = %d, want 0 (docs/notes.md is pre-session baseline, excluded)", attr.HumanAdded)
 	}
-	if attr.TotalCommitted != 11 {
-		t.Errorf("TotalCommitted = %d, want 11 (7 agent + 4 human)", attr.TotalCommitted)
+	if attr.TotalCommitted != 7 {
+		t.Errorf("TotalCommitted = %d, want 7 (agent-only, pre-session excluded)", attr.TotalCommitted)
 	}
-	// Agent wrote 7/11 = 63.6%
-	if attr.AgentPercentage < 60 || attr.AgentPercentage > 70 {
-		t.Errorf("AgentPercentage = %.1f%%, want ~63.6%% (7/11)", attr.AgentPercentage)
+	// Agent wrote 7/7 = 100%
+	if attr.AgentPercentage < 99.0 {
+		t.Errorf("AgentPercentage = %.1f%%, want ~100%% (pre-session human file excluded)", attr.AgentPercentage)
 	}
 }
 

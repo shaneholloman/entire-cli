@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/gitops"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
@@ -205,16 +206,32 @@ func CalculateAttributionWithAccumulated(
 		return nil
 	}
 
-	// Sum accumulated user lines from prompt attributions
-	// Also aggregate per-file user additions for accurate modification tracking
+	// Sum accumulated user lines from prompt attributions.
+	// Also aggregate per-file user additions for accurate modification tracking.
+	//
+	// BASELINE SPLIT: PA1 (CheckpointNumber <= 1) captures pre-session worktree
+	// state — files already dirty when the session started (CLI config files,
+	// leftover changes from previous sessions). PA1 data is accumulated normally
+	// for agent line correction (subtracted from totalAgentAndUserWork) but is
+	// tracked separately so it can be EXCLUDED from human contribution counts.
+	// Only PA2+ represents genuine human edits during the session.
 	var accumulatedUserAdded, accumulatedUserRemoved int
+	var baselineUserRemoved int
 	accumulatedUserAddedPerFile := make(map[string]int)
+	baselineUserAddedPerFile := make(map[string]int)
+
 	for _, pa := range promptAttributions {
 		accumulatedUserAdded += pa.UserLinesAdded
 		accumulatedUserRemoved += pa.UserLinesRemoved
-		// Merge per-file data from all prompt attributions
 		for filePath, added := range pa.UserAddedPerFile {
 			accumulatedUserAddedPerFile[filePath] += added
+		}
+		// Track baseline (PA1) separately
+		if pa.CheckpointNumber <= 1 {
+			baselineUserRemoved += pa.UserLinesRemoved
+			for filePath, added := range pa.UserAddedPerFile {
+				baselineUserAddedPerFile[filePath] += added
+			}
 		}
 	}
 
@@ -266,6 +283,9 @@ func CalculateAttributionWithAccumulated(
 		if slices.Contains(filesTouched, filePath) {
 			continue // Skip agent-touched files
 		}
+		if strings.HasPrefix(filePath, ".entire/") || strings.HasPrefix(filePath, paths.EntireMetadataDir+"/") {
+			continue // Skip CLI metadata — matches filter in calculatePromptAttributionAtStart
+		}
 
 		baseContent := getFileContent(baseTree, filePath)
 		headContent := getFileContent(headTree, filePath)
@@ -302,14 +322,27 @@ func CalculateAttributionWithAccumulated(
 	// Post-checkpoint edits to non-agent files = total edits - accumulated portion (never negative)
 	postToNonAgentFiles := max(0, allUserEditsToNonAgentFiles-accumulatedToCommittedNonAgentFiles)
 
-	// Total user contribution = accumulated (committed files only) + post-checkpoint edits
-	relevantAccumulatedUser := accumulatedToAgentFiles + accumulatedToCommittedNonAgentFiles
+	// Compute baseline (PA1) contributions to subtract from accumulated totals.
+	// PA1 data was used above for agent correction (accumulatedToAgentFiles) but should
+	// not be counted as human work — it's pre-session state.
+	var baselineToAgentFiles, baselineToCommittedNonAgentFiles int
+	for filePath, added := range baselineUserAddedPerFile {
+		if slices.Contains(filesTouched, filePath) {
+			baselineToAgentFiles += added
+		} else if _, ok := committedNonAgentSet[filePath]; ok {
+			baselineToCommittedNonAgentFiles += added
+		}
+	}
+
+	// Total user contribution = session-time accumulated + post-checkpoint edits.
+	// Subtract baseline contributions so pre-session dirt doesn't count as human.
+	sessionAccumulatedToAgentFiles := max(0, accumulatedToAgentFiles-baselineToAgentFiles)
+	sessionAccumulatedToNonAgent := max(0, accumulatedToCommittedNonAgentFiles-baselineToCommittedNonAgentFiles)
+	relevantAccumulatedUser := sessionAccumulatedToAgentFiles + sessionAccumulatedToNonAgent
 	totalUserAdded := relevantAccumulatedUser + postCheckpointUserAdded + postToNonAgentFiles
-	// TODO: accumulatedUserRemoved also includes removals from uncommitted files,
-	// but we don't have per-file tracking for removals yet. In practice, removals
-	// from uncommitted files are rare and the impact is minor (could slightly reduce
-	// totalCommitted via pureUserRemoved). Add UserRemovedPerFile if this becomes an issue.
-	totalUserRemoved := accumulatedUserRemoved + postCheckpointUserRemoved
+	// Exclude baseline removals (pre-session state) from human removal count.
+	sessionAccumulatedUserRemoved := max(0, accumulatedUserRemoved-baselineUserRemoved)
+	totalUserRemoved := sessionAccumulatedUserRemoved + postCheckpointUserRemoved
 
 	// Estimate modified lines (user changed existing lines)
 	// Lines that were both added and removed are treated as modifications.
