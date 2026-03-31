@@ -127,6 +127,41 @@ func TestAppendCheckpointTokenEnv(t *testing.T) {
 	})
 }
 
+func TestIsValidToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		token string
+		valid bool
+	}{
+		{"normal token", "ghp_abc123XYZ", true},
+		{"with hyphen and underscore", "token-with_special.chars", true},
+		{"contains CR", "token\rinjection", false},
+		{"contains LF", "token\ninjection", false},
+		{"contains CRLF", "token\r\ninjection", false},
+		{"contains null byte", "token\x00injection", false},
+		{"contains tab", "token\tvalue", false},
+		{"contains DEL", "token\x7Fvalue", false},
+		{"contains bell", "token\x07value", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.valid, isValidToken(tt.token))
+		})
+	}
+}
+
+// Not parallel: uses t.Setenv()
+func TestCheckpointGitCommand_ControlCharsInToken(t *testing.T) {
+	t.Setenv(CheckpointTokenEnvVar, "token\r\nEvil: injected-header")
+
+	cmd := CheckpointGitCommand(context.Background(), "https://github.com/org/repo.git", "fetch", "origin")
+	assert.Nil(t, cmd.Env, "env should not be set when token contains control characters")
+}
+
 // Not parallel: uses t.Setenv()
 func TestCheckpointGitCommand_NoToken(t *testing.T) {
 	t.Setenv(CheckpointTokenEnvVar, "")
@@ -162,10 +197,15 @@ func TestCheckpointGitCommand_HTTPS_InjectsToken(t *testing.T) {
 func TestCheckpointGitCommand_SSH_WarnsAndSkips(t *testing.T) {
 	t.Setenv(CheckpointTokenEnvVar, "ghp_test123")
 
-	// Capture stderr
+	// Reset the Once so the warning fires in this test
+	sshTokenWarningOnce = sync.Once{}
+	t.Cleanup(func() { sshTokenWarningOnce = sync.Once{} })
+
+	// Capture stderr with cleanup guard in case of panic
 	oldStderr := os.Stderr
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
+	t.Cleanup(func() { os.Stderr = oldStderr })
 	os.Stderr = w
 
 	cmd := CheckpointGitCommand(context.Background(), "git@github.com:org/repo.git", "push", "origin", "main")
