@@ -417,7 +417,7 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 			)
 		}
 	} else {
-		logging.Debug(logCtx, "checkpoint remote fetch failed or not configured",
+		logging.Debug(logCtx, "checkpoint remote fetch skipped or failed",
 			slog.String("error", fetchErr.Error()),
 		)
 	}

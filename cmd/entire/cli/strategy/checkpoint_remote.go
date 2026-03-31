@@ -335,7 +335,7 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 		"GIT_TERMINAL_PROMPT=0",
 	)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		// Include redactedURL output for diagnostics without leaking credentials.
+		// Include redacted output for diagnostics without leaking credentials.
 		// Git stderr may echo the URL with embedded credentials, so replace it.
 		redactedURL := redactURL(remoteURL)
 		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
