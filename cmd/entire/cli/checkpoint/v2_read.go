@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -126,6 +128,7 @@ func (s *V2GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Che
 
 // readTranscriptFromFullRefs reads the raw transcript for a checkpoint session
 // by searching /full/current first, then archived generations in reverse order.
+// If not found locally, attempts to discover and fetch remote /full/* refs.
 func (s *V2GitStore) readTranscriptFromFullRefs(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, agentType types.AgentType) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
@@ -133,6 +136,7 @@ func (s *V2GitStore) readTranscriptFromFullRefs(ctx context.Context, checkpointI
 
 	sessionPath := fmt.Sprintf("%s/%d", checkpointID.Path(), sessionIndex)
 
+	// Search locally first
 	transcript, err := s.readTranscriptFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName), sessionPath, agentType)
 	if err == nil && len(transcript) > 0 {
 		return transcript, nil
@@ -150,7 +154,84 @@ func (s *V2GitStore) readTranscriptFromFullRefs(ctx context.Context, checkpointI
 		}
 	}
 
+	// Not found locally — try fetching remote /full/* refs
+	if fetchErr := s.fetchRemoteFullRefs(ctx); fetchErr != nil {
+		logging.Debug(ctx, "failed to fetch remote /full/* refs",
+			slog.String("error", fetchErr.Error()),
+		)
+		return nil, nil
+	}
+
+	// Search newly fetched refs only
+	newArchived, err := s.ListArchivedGenerations()
+	if err != nil {
+		return nil, nil
+	}
+	existingSet := make(map[string]bool, len(archived))
+	for _, a := range archived {
+		existingSet[a] = true
+	}
+	for i := len(newArchived) - 1; i >= 0; i-- {
+		if existingSet[newArchived[i]] {
+			continue
+		}
+		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + newArchived[i])
+		transcript, err := s.readTranscriptFromRef(refName, sessionPath, agentType)
+		if err == nil && len(transcript) > 0 {
+			return transcript, nil
+		}
+	}
+
+	// Also retry /full/current in case it was updated by the fetch
+	transcript, err = s.readTranscriptFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName), sessionPath, agentType)
+	if err == nil && len(transcript) > 0 {
+		return transcript, nil
+	}
+
 	return nil, nil
+}
+
+// fetchRemoteFullRefs discovers and fetches /full/* refs from origin that aren't local.
+func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	lsCmd := exec.CommandContext(ctx, "git", "ls-remote", "origin", paths.V2FullRefPrefix+"*")
+	output, err := lsCmd.Output()
+	if err != nil {
+		return fmt.Errorf("ls-remote failed: %w", err)
+	}
+
+	var refSpecs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		remoteRefName := parts[1]
+
+		// Skip refs that already exist locally
+		if _, refErr := s.repo.Reference(plumbing.ReferenceName(remoteRefName), true); refErr == nil {
+			continue
+		}
+
+		refSpecs = append(refSpecs, fmt.Sprintf("+%s:%s", remoteRefName, remoteRefName))
+	}
+
+	if len(refSpecs) == 0 {
+		return nil
+	}
+
+	args := append([]string{"fetch", "origin"}, refSpecs...)
+	fetchCmd := exec.CommandContext(ctx, "git", args...)
+	if fetchOutput, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
+		return fmt.Errorf("fetch failed: %s", fetchOutput)
+	}
+
+	return nil
 }
 
 // readTranscriptFromRef reads the raw transcript from a specific /full/* ref.
