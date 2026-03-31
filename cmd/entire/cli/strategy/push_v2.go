@@ -129,14 +129,15 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer func() {
+		_ = repo.Storer.RemoveReference(tmpRefName) //nolint:errcheck // cleanup is best-effort
+	}()
 
 	// Check for rotation conflict on /full/current
 	if refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
 		remoteOnlyArchives, detectErr := detectRemoteOnlyArchives(ctx, target, repo)
 		if detectErr == nil && len(remoteOnlyArchives) > 0 {
-			err := handleRotationConflict(ctx, target, repo, refName, tmpRefName, remoteOnlyArchives)
-			_ = repo.Storer.RemoveReference(tmpRefName) //nolint:errcheck // cleanup is best-effort
-			return err
+			return handleRotationConflict(ctx, target, repo, refName, tmpRefName, remoteOnlyArchives)
 		}
 	}
 
@@ -192,7 +193,6 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 		return fmt.Errorf("failed to update ref: %w", err)
 	}
 
-	_ = repo.Storer.RemoveReference(tmpRefName) //nolint:errcheck // cleanup is best-effort
 	return nil
 }
 
