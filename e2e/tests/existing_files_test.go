@@ -74,14 +74,12 @@ func TestMixedNewAndModifiedFiles(t *testing.T) {
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
-		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
-
 		// Commit remaining files (use "." to catch any extras the agent created).
 		s.Git(t, "add", ".")
 		s.Git(t, "commit", "-m", "Add utils.go and types.go")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 30*time.Second)
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
+		testutil.WaitForCheckpointExists(t, s.Dir, cpID2, 30*time.Second)
 
 		assert.NotEqual(t, cpID1, cpID2, "checkpoint IDs should be distinct")
 		testutil.AssertCheckpointExists(t, s.Dir, cpID1)

@@ -8,7 +8,7 @@ on:
         required: true
         default: "gemini-cli"
         type: choice
-        options: [claude-code, opencode, gemini-cli, cursor-cli, factoryai-droid, copilot-cli, roger-roger]
+        options: [claude-code, opencode, gemini-cli, cursor-cli, factoryai-droid, copilot-cli, roger-roger, codex]
       test:
         description: "Test name filter (regex)"
         required: true

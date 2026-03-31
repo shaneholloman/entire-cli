@@ -34,14 +34,12 @@ func TestUserSplitsAgentChanges(t *testing.T) {
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
-		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
-
 		// Commit everything remaining (c.md + d.md + any extra files the agent might have created).
 		s.Git(t, "add", "-A")
 		s.Git(t, "commit", "-m", "Commit remaining changes (including c.md and d.md)")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 30*time.Second)
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
+		testutil.WaitForCheckpointExists(t, s.Dir, cpID2, 30*time.Second)
 
 		assert.NotEqual(t, cpID1, cpID2, "checkpoint IDs should be distinct")
 		testutil.AssertCheckpointExists(t, s.Dir, cpID1)
@@ -78,8 +76,6 @@ func TestPartialStaging(t *testing.T) {
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
-		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
-
 		// Second prompt: agent modifies the same file again.
 		_, err = s.RunPrompt(t, ctx,
 			"modify src/main.go to also print \"goodbye world\" after the hello line. Do not ask for confirmation, just make the change.",
@@ -91,8 +87,8 @@ func TestPartialStaging(t *testing.T) {
 		s.Git(t, "add", "-A")
 		s.Git(t, "commit", "-m", "Add goodbye world")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 30*time.Second)
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
+		testutil.WaitForCheckpointExists(t, s.Dir, cpID2, 30*time.Second)
 
 		assert.NotEqual(t, cpID1, cpID2, "checkpoint IDs should be distinct")
 		testutil.AssertCheckpointExists(t, s.Dir, cpID1)
@@ -131,22 +127,20 @@ func TestSplitModificationsToExistingFiles(t *testing.T) {
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
 		cpID1 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
-		cpBranch1 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
 		// Commit view.go.
 		s.Git(t, "add", "src/view.go")
 		s.Git(t, "commit", "-m", "Update view.go")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch1, 30*time.Second)
 		cpID2 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
-		cpBranch2 := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
+		testutil.WaitForCheckpointExists(t, s.Dir, cpID2, 30*time.Second)
 
 		// Commit everything remaining (controller.go + any extra files the agent might have created).
 		s.Git(t, "add", "-A")
 		s.Git(t, "commit", "-m", "Commit remaining changes")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranch2, 30*time.Second)
 		cpID3 := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
+		testutil.WaitForCheckpointExists(t, s.Dir, cpID3, 30*time.Second)
 
 		// All three checkpoints should be distinct and valid.
 		assert.NotEqual(t, cpID1, cpID2, "checkpoint 1 and 2 should be distinct")

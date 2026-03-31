@@ -102,9 +102,10 @@ func TestDirtyWorkingTree(t *testing.T) {
 			t.Fatalf("write file: %v", err)
 		}
 
+		prompt := "create a markdown file at docs/red.md with a paragraph about the colour red, then commit it. Do not ask for confirmation, just make the change. Do not create the file under human/."
+
 		// Agent creates and commits its own file.
-		_, err := s.RunPrompt(t, ctx,
-			"create a markdown file at docs/red.md with a paragraph about the colour red, then commit it. Do not ask for confirmation, just make the change.")
+		_, err := s.RunPrompt(t, ctx, prompt)
 		if err != nil {
 			t.Fatalf("agent failed: %v", err)
 		}
@@ -177,14 +178,13 @@ func TestAgentCommitsMidTurnUserCommitsRemainder(t *testing.T) {
 		testutil.AssertNewCommits(t, s, 1)
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
-		cpBranchAfterAgent := testutil.GitOutput(t, s.Dir, "rev-parse", "entire/checkpoints/v1")
 
 		s.Git(t, "add", "user_remainder.go")
 		s.Git(t, "commit", "-m", "Add user remainder")
 
-		testutil.WaitForCheckpointAdvanceFrom(t, s.Dir, cpBranchAfterAgent, 30*time.Second)
 		userCpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
 		agentCpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD~1")
+		testutil.WaitForCheckpointExists(t, s.Dir, userCpID, 30*time.Second)
 
 		assert.NotEqual(t, userCpID, agentCpID,
 			"user and agent checkpoints should have distinct IDs")
