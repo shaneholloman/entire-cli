@@ -664,7 +664,11 @@ func checkRemoteMetadata(ctx context.Context, checkpointID id.CheckpointID) erro
 
 	// Nothing worked — print helpful error message
 	if hasCheckpointRemote {
-		fmt.Fprintf(os.Stderr, "Checkpoint '%s' found in commit but its metadata could not be fetched from the checkpoint remote.\n", checkpointID)
+		if resolveErr != nil {
+			fmt.Fprintf(os.Stderr, "Checkpoint '%s' found in commit but the checkpoint remote URL could not be resolved: %s\n", checkpointID, resolveErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "Checkpoint '%s' found in commit but its metadata could not be fetched from the checkpoint remote.\n", checkpointID)
+		}
 		fmt.Fprintf(os.Stderr, "Ensure you have access to the checkpoint remote configured in .entire/settings.json.\n")
 	} else {
 		fmt.Fprintf(os.Stderr, "Checkpoint '%s' found in commit but the entire/checkpoints/v1 branch is not available locally or on the remote.\n", checkpointID)
