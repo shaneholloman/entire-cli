@@ -179,8 +179,11 @@ func countLinesStr(content string) int {
 // 4. Estimate user self-modifications vs agent modifications using per-file tracking
 // 5. Compute percentages
 //
-// attributionBaseCommit and headCommitHash are optional commit hashes for fast non-agent
-// file detection via git diff-tree. When empty, falls back to go-git tree walk.
+// parentCommitHash, attributionBaseCommit, and headCommitHash are optional commit hashes
+// for fast non-agent file detection via git diff-tree. When a first parent exists,
+// parentCommitHash→headCommitHash is preferred so only files from THIS commit count.
+// For initial commits (no parent), falls back to attributionBaseCommit→headCommitHash.
+// When hashes are empty, falls back to go-git tree walk.
 //
 // Note: Binary files (detected by null bytes) are silently excluded from attribution
 // calculations since line-based diffing only applies to text files.
@@ -194,6 +197,7 @@ func CalculateAttributionWithAccumulated(
 	filesTouched []string,
 	promptAttributions []PromptAttribution,
 	repoDir string,
+	parentCommitHash string,
 	attributionBaseCommit string,
 	headCommitHash string,
 ) *checkpoint.InitialAttribution {
@@ -243,8 +247,13 @@ func CalculateAttributionWithAccumulated(
 	}
 
 	// Calculate total user edits to non-agent files (files not in filesTouched)
-	// These files are not in the shadow tree, so base→head captures ALL their user edits
-	allChangedFiles, err := getAllChangedFiles(ctx, baseTree, headTree, repoDir, attributionBaseCommit, headCommitHash)
+	// These files are not in the shadow tree. Prefer parent→head so only THIS
+	// commit's non-agent files count; initial commits fall back to session base→head.
+	diffBaseCommit := parentCommitHash
+	if diffBaseCommit == "" {
+		diffBaseCommit = attributionBaseCommit
+	}
+	allChangedFiles, err := getAllChangedFiles(ctx, baseTree, headTree, repoDir, diffBaseCommit, headCommitHash)
 	if err != nil {
 		logging.Warn(logging.WithComponent(ctx, "attribution"),
 			"attribution: failed to enumerate changed files",

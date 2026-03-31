@@ -639,11 +639,18 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	)
 
 	if shouldCondense {
+		parentCommitHash := ""
+		if h.commit.NumParents() > 0 {
+			if parent, err := h.commit.Parent(0); err == nil {
+				parentCommitHash = parent.Hash.String()
+			}
+		}
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
-			shadowRef:      h.shadowRef,
-			headTree:       h.headTree,
-			repoDir:        h.repoDir,
-			headCommitHash: h.newHead,
+			shadowRef:        h.shadowRef,
+			headTree:         h.headTree,
+			repoDir:          h.repoDir,
+			parentCommitHash: parentCommitHash,
+			headCommitHash:   h.newHead,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -665,11 +672,18 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	)
 
 	if shouldCondense {
+		parentCommitHash := ""
+		if h.commit.NumParents() > 0 {
+			if parent, err := h.commit.Parent(0); err == nil {
+				parentCommitHash = parent.Hash.String()
+			}
+		}
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
-			shadowRef:      h.shadowRef,
-			headTree:       h.headTree,
-			repoDir:        h.repoDir,
-			headCommitHash: h.newHead,
+			shadowRef:        h.shadowRef,
+			headTree:         h.headTree,
+			repoDir:          h.repoDir,
+			parentCommitHash: parentCommitHash,
+			headCommitHash:   h.newHead,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
