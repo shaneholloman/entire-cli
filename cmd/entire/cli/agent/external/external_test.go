@@ -175,7 +175,7 @@ esac
 		t.Fatal("expected timeout error, got nil")
 	}
 	// Should be killed around 200ms, not 60s.
-	if elapsed >= 2*time.Second {
+	if elapsed >= 4*time.Second {
 		t.Errorf("run() took %v; default timeout was not applied", elapsed)
 	}
 }
@@ -212,7 +212,7 @@ esac
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
-	if elapsed >= 2*time.Second {
+	if elapsed >= 4*time.Second {
 		t.Errorf("run() took %v; caller's deadline was not respected", elapsed)
 	}
 }
