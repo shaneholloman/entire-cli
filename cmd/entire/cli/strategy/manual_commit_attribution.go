@@ -201,6 +201,7 @@ func CalculateAttributionWithAccumulated(
 	parentCommitHash string,
 	attributionBaseCommit string,
 	headCommitHash string,
+	parentTree *object.Tree,
 ) *checkpoint.InitialAttribution {
 	if len(filesTouched) == 0 {
 		return nil
@@ -287,9 +288,16 @@ func CalculateAttributionWithAccumulated(
 			continue // Skip CLI metadata — matches filter in calculatePromptAttributionAtStart
 		}
 
-		baseContent := getFileContent(baseTree, filePath)
+		// Use parentTree for line counting when available so only THIS commit's
+		// changes are counted (consistent with parentCommitHash file scoping).
+		// For initial commits or when parentTree is nil, fall back to baseTree.
+		nonAgentDiffTree := parentTree
+		if nonAgentDiffTree == nil {
+			nonAgentDiffTree = baseTree
+		}
+		diffBaseContent := getFileContent(nonAgentDiffTree, filePath)
 		headContent := getFileContent(headTree, filePath)
-		_, userAdded, _ := diffLines(baseContent, headContent)
+		_, userAdded, _ := diffLines(diffBaseContent, headContent)
 		allUserEditsToNonAgentFiles += userAdded
 	}
 

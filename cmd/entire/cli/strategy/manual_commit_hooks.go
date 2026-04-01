@@ -617,10 +617,11 @@ type postCommitActionHandler struct {
 	// Cached git objects — resolved once per PostCommit invocation to avoid
 	// redundant reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// CondenseSession, and calculateSessionAttributions.
-	headTree   *object.Tree        // HEAD commit tree (shared across all sessions)
-	parentTree *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
-	shadowRef  *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
-	shadowTree *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
+	headTree         *object.Tree        // HEAD commit tree (shared across all sessions)
+	parentTree       *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
+	parentCommitHash string              // HEAD's first parent hash (empty for initial commits)
+	shadowRef        *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
+	shadowTree       *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	condensed bool
@@ -639,17 +640,12 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	)
 
 	if shouldCondense {
-		parentCommitHash := ""
-		if h.commit.NumParents() > 0 {
-			if parent, err := h.commit.Parent(0); err == nil {
-				parentCommitHash = parent.Hash.String()
-			}
-		}
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:        h.shadowRef,
 			headTree:         h.headTree,
+			parentTree:       h.parentTree,
 			repoDir:          h.repoDir,
-			parentCommitHash: parentCommitHash,
+			parentCommitHash: h.parentCommitHash,
 			headCommitHash:   h.newHead,
 		})
 	} else {
@@ -672,17 +668,12 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 	)
 
 	if shouldCondense {
-		parentCommitHash := ""
-		if h.commit.NumParents() > 0 {
-			if parent, err := h.commit.Parent(0); err == nil {
-				parentCommitHash = parent.Hash.String()
-			}
-		}
 		h.condensed = h.s.condenseAndUpdateState(h.ctx, h.repo, h.checkpointID, state, h.head, h.shadowBranchName, h.shadowBranchesToDelete, h.committedFileSet, condenseOpts{
 			shadowRef:        h.shadowRef,
 			headTree:         h.headTree,
+			parentTree:       h.parentTree,
 			repoDir:          h.repoDir,
-			parentCommitHash: parentCommitHash,
+			parentCommitHash: h.parentCommitHash,
 			headCommitHash:   h.newHead,
 		})
 	} else {
@@ -851,7 +842,9 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		headTree = t
 	}
 	var parentTree *object.Tree
-	if commit.NumParents() > 0 {
+	var parentCommitHash string
+	if commit.NumParents() > 0 && len(commit.ParentHashes) > 0 {
+		parentCommitHash = commit.ParentHashes[0].String()
 		if parent, err := commit.Parent(0); err == nil {
 			if t, err := parent.Tree(); err == nil {
 				parentTree = t
@@ -871,8 +864,8 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		}
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
-			head, commit, newHead, worktreePath, headTree, parentTree, committedFileSet,
-			shadowBranchesToDelete, uncondensedActiveOnBranch)
+			head, commit, newHead, worktreePath, headTree, parentTree, parentCommitHash,
+			committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch)
 		iterSpan.End()
 	}
 	processSessionsLoop.End()
@@ -993,6 +986,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	newHead string,
 	repoDir string,
 	headTree, parentTree *object.Tree,
+	parentCommitHash string,
 	committedFileSet map[string]struct{},
 	shadowBranchesToDelete map[string]struct{},
 	uncondensedActiveOnBranch map[string]bool,
@@ -1084,6 +1078,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		filesTouchedBefore:     filesTouchedBefore,
 		headTree:               headTree,
 		parentTree:             parentTree,
+		parentCommitHash:       parentCommitHash,
 		shadowRef:              shadowRef,
 		shadowTree:             shadowTree,
 	}

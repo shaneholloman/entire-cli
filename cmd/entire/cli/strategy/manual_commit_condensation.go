@@ -89,6 +89,7 @@ func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointI
 type condenseOpts struct {
 	shadowRef        *plumbing.Reference // Pre-resolved shadow branch ref (nil = resolve from repo)
 	headTree         *object.Tree        // Pre-resolved HEAD tree (passed through to calculateSessionAttributions)
+	parentTree       *object.Tree        // Pre-resolved parent tree (nil for initial commits, for consistent non-agent line counting)
 	repoDir          string              // Repository worktree path for git CLI commands
 	parentCommitHash string              // HEAD's first parent hash for per-commit non-agent file detection
 	headCommitHash   string              // HEAD commit hash (passed through for attribution)
@@ -196,6 +197,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	attribution := calculateSessionAttributions(ctx, repo, ref, sessionData, state, attributionOpts{
 		headTree:              o.headTree,
+		parentTree:            o.parentTree,
 		repoDir:               o.repoDir,
 		attributionBaseCommit: attrBase,
 		parentCommitHash:      o.parentCommitHash,
@@ -353,6 +355,7 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 type attributionOpts struct {
 	headTree              *object.Tree // HEAD commit tree (already resolved by PostCommit)
 	shadowTree            *object.Tree // Shadow branch tree (already resolved by PostCommit)
+	parentTree            *object.Tree // Parent commit tree (nil for initial commits, for consistent non-agent line counting)
 	repoDir               string       // Repository worktree path for git CLI commands
 	attributionBaseCommit string       // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
 	parentCommitHash      string       // HEAD's first parent hash (preferred diff base for non-agent files)
@@ -479,6 +482,7 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 		o.parentCommitHash,
 		o.attributionBaseCommit,
 		o.headCommitHash,
+		o.parentTree,
 	)
 
 	if attribution != nil {
