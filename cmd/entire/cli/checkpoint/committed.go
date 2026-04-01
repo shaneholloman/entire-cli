@@ -776,7 +776,8 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 // ReadSessionContent reads the actual content for a specific session within a checkpoint.
 // sessionIndex is 0-based (0 for first session, 1 for second, etc.).
 // Returns the session's metadata, transcript, prompts, and context.
-// Returns an error if the checkpoint or session doesn't exist.
+// Returns ErrCheckpointNotFound if the checkpoint or session doesn't exist.
+// Returns ErrNoTranscript if the session exists but has no transcript.
 func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err //nolint:wrapcheck // Propagating context cancellation
@@ -822,6 +823,10 @@ func (s *GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Check
 		if content, contentErr := file.Contents(); contentErr == nil {
 			result.Prompts = content
 		}
+	}
+
+	if len(result.Transcript) == 0 {
+		return nil, ErrNoTranscript
 	}
 
 	return result, nil
@@ -988,13 +993,7 @@ func (s *GitStore) GetTranscript(ctx context.Context, checkpointID id.Checkpoint
 func (s *GitStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string, error) {
 	content, err := s.ReadLatestSessionContent(ctx, cpID)
 	if err != nil {
-		if errors.Is(err, ErrCheckpointNotFound) {
-			return nil, "", ErrCheckpointNotFound
-		}
-		return nil, "", fmt.Errorf("failed to read checkpoint: %w", err)
-	}
-	if len(content.Transcript) == 0 {
-		return nil, "", ErrNoTranscript
+		return nil, "", err
 	}
 	return content.Transcript, content.Metadata.SessionID, nil
 }
