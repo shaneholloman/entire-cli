@@ -338,12 +338,12 @@ func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, 
 			Mode: filemode.Regular,
 			Hash: blobHash,
 		}
-		filePaths.CompactTranscript = "/" + sessionPath + paths.CompactTranscriptFileName
+		filePaths.Transcript = "/" + sessionPath + paths.CompactTranscriptFileName
 
 		if err := s.writeCompactTranscriptHash(opts.CompactTranscript, sessionPath, entries); err != nil {
 			return filePaths, fmt.Errorf("failed to write compact transcript hash: %w", err)
 		}
-		filePaths.CompactTranscriptHash = "/" + sessionPath + paths.CompactTranscriptHashFileName
+		filePaths.ContentHash = "/" + sessionPath + paths.CompactTranscriptHashFileName
 	}
 
 	// Write session metadata

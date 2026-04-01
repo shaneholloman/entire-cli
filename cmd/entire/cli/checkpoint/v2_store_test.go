@@ -337,13 +337,13 @@ func TestV2GitStore_WriteCommittedMain_WritesCompactTranscript(t *testing.T) {
 	assert.True(t, strings.HasPrefix(hashContent, "sha256:"),
 		"transcript_hash.txt should be a sha256 hash")
 
-	// SessionFilePaths should include compact transcript paths
+	// SessionFilePaths should repurpose transcript/content_hash for compact artifacts
 	summaryContent := v2ReadFile(t, tree, cpPath+"/"+paths.MetadataFileName)
 	var summary CheckpointSummary
 	require.NoError(t, json.Unmarshal([]byte(summaryContent), &summary))
 	require.Len(t, summary.Sessions, 1)
-	assert.Contains(t, summary.Sessions[0].CompactTranscript, paths.CompactTranscriptFileName)
-	assert.Contains(t, summary.Sessions[0].CompactTranscriptHash, paths.CompactTranscriptHashFileName)
+	assert.Contains(t, summary.Sessions[0].Transcript, paths.CompactTranscriptFileName)
+	assert.Contains(t, summary.Sessions[0].ContentHash, paths.CompactTranscriptHashFileName)
 }
 
 func TestV2GitStore_WriteCommittedMain_NoCompactTranscript_SkipsGracefully(t *testing.T) {
