@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -110,11 +108,7 @@ func (s *V2GitStore) ReadSessionContent(ctx context.Context, checkpointID id.Che
 
 	transcript, transcriptErr := s.readTranscriptFromFullRefs(ctx, checkpointID, sessionIndex, result.Metadata.Agent)
 	if transcriptErr != nil {
-		logging.Debug(ctx, "v2 raw transcript read failed",
-			slog.String("checkpoint_id", string(checkpointID)),
-			slog.Int("session_index", sessionIndex),
-			slog.String("error", transcriptErr.Error()),
-		)
+		return nil, fmt.Errorf("failed to read transcript from /full/* refs: %w", transcriptErr)
 	}
 	if len(transcript) == 0 {
 		return nil, ErrNoTranscript
