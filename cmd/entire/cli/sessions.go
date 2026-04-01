@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ func newSessionsCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newListCmd())
+	cmd.AddCommand(newInfoCmd())
 	cmd.AddCommand(newStopCmd())
 
 	return cmd
@@ -140,7 +142,7 @@ func sessionWorktreeLabel(s *strategy.SessionState) string {
 	if s.WorktreePath != "" {
 		return filepath.Base(s.WorktreePath)
 	}
-	return "(unknown)"
+	return unknownPlaceholder
 }
 
 // sessionPhaseLabel returns the display status for a session.
@@ -266,6 +268,195 @@ func writeSessionCard(w io.Writer, s *strategy.SessionState, sty statusStyles) {
 	statsLine := strings.Join(stats, sty.render(sty.dim, " · "))
 	fmt.Fprintln(w, sty.render(sty.dim, statsLine))
 	fmt.Fprintln(w)
+}
+
+func newInfoCmd() *cobra.Command {
+	var jsonFlag bool
+
+	cmd := &cobra.Command{
+		Use:   "info <session-id>",
+		Short: "Show detailed session information",
+		Long: `Display detailed state for a session.
+
+Shows agent, model, status, worktree, timing, token usage, checkpoint linkage,
+and files touched. Works for both active and ended sessions.
+
+Examples:
+  entire sessions info 639f4185-7de6-4a6c-9bcb-9f2ef841f919
+  entire sessions info 639f4185-7de6-4a6c-9bcb-9f2ef841f919 --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+
+			if _, err := paths.WorktreeRoot(ctx); err != nil {
+				return errors.New("not a git repository")
+			}
+
+			return runSessionInfo(ctx, cmd, args[0], jsonFlag)
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func runSessionInfo(ctx context.Context, cmd *cobra.Command, sessionID string, jsonOutput bool) error {
+	state, err := strategy.LoadSessionState(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+	if state == nil {
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), "Session not found.")
+		return NewSilentError(fmt.Errorf("session not found: %s", sessionID))
+	}
+
+	status := sessionPhaseLabel(state)
+
+	if jsonOutput {
+		return writeSessionInfoJSON(cmd.OutOrStdout(), state, status)
+	}
+	return writeSessionInfoText(cmd.OutOrStdout(), state, status)
+}
+
+// sessionInfoJSON is the JSON output structure for sessions info --json.
+type sessionInfoJSON struct {
+	SessionID      string         `json:"session_id"`
+	Agent          string         `json:"agent"`
+	Model          string         `json:"model,omitempty"`
+	Status         string         `json:"status"`
+	WorktreeID     string         `json:"worktree_id,omitempty"`
+	WorktreePath   string         `json:"worktree_path,omitempty"`
+	StartedAt      time.Time      `json:"started_at"`
+	EndedAt        *time.Time     `json:"ended_at,omitempty"`
+	LastActive     *time.Time     `json:"last_active,omitempty"`
+	Turns          int            `json:"turns"`
+	Checkpoints    int            `json:"checkpoints"`
+	LastCheckpoint string         `json:"last_checkpoint_id,omitempty"`
+	Tokens         *tokenInfoJSON `json:"tokens,omitempty"`
+	LastPrompt     string         `json:"last_prompt,omitempty"`
+	FilesTouched   []string       `json:"files_touched,omitempty"`
+}
+
+type tokenInfoJSON struct {
+	Total      int `json:"total"`
+	Input      int `json:"input"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+	Output     int `json:"output"`
+}
+
+func writeSessionInfoJSON(w io.Writer, state *strategy.SessionState, status string) error {
+	info := sessionInfoJSON{
+		SessionID:      state.SessionID,
+		Agent:          string(state.AgentType),
+		Model:          state.ModelName,
+		Status:         status,
+		WorktreeID:     state.WorktreeID,
+		WorktreePath:   state.WorktreePath,
+		StartedAt:      state.StartedAt,
+		EndedAt:        state.EndedAt,
+		LastActive:     state.LastInteractionTime,
+		Turns:          state.SessionTurnCount,
+		Checkpoints:    state.StepCount,
+		LastCheckpoint: string(state.LastCheckpointID),
+		LastPrompt:     state.LastPrompt,
+		FilesTouched:   state.FilesTouched,
+	}
+	if state.TokenUsage != nil {
+		info.Tokens = &tokenInfoJSON{
+			Total:      totalTokens(state.TokenUsage),
+			Input:      state.TokenUsage.InputTokens,
+			CacheRead:  state.TokenUsage.CacheReadTokens,
+			CacheWrite: state.TokenUsage.CacheCreationTokens,
+			Output:     state.TokenUsage.OutputTokens,
+		}
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(info); err != nil {
+		return fmt.Errorf("failed to encode session info: %w", err)
+	}
+	return nil
+}
+
+func writeSessionInfoText(w io.Writer, state *strategy.SessionState, status string) error {
+	fmt.Fprintf(w, "Session %s\n\n", state.SessionID)
+
+	agentLabel := string(state.AgentType)
+	if agentLabel == "" {
+		agentLabel = "(unknown)"
+	}
+	fmt.Fprintf(w, "Agent:       %s\n", agentLabel)
+	if state.ModelName != "" {
+		fmt.Fprintf(w, "Model:       %s\n", state.ModelName)
+	}
+
+	fmt.Fprintf(w, "Status:      %s\n", status)
+
+	wt := sessionWorktreeLabel(state)
+	fmt.Fprintf(w, "Worktree:    %s\n", wt)
+
+	fmt.Fprintf(w, "Started:     %s (%s)\n",
+		state.StartedAt.Local().Format("2006-01-02 15:04"), timeAgo(state.StartedAt))
+
+	if state.EndedAt != nil {
+		fmt.Fprintf(w, "Ended:       %s (%s)\n",
+			state.EndedAt.Local().Format("2006-01-02 15:04"), timeAgo(*state.EndedAt))
+	}
+
+	if state.LastInteractionTime != nil {
+		fmt.Fprintf(w, "Last active: %s (%s)\n",
+			state.LastInteractionTime.Local().Format("2006-01-02 15:04"),
+			timeAgo(*state.LastInteractionTime))
+	}
+
+	if state.SessionTurnCount > 0 {
+		fmt.Fprintf(w, "Turns:       %d\n", state.SessionTurnCount)
+	}
+
+	fmt.Fprintf(w, "Checkpoints: %d\n", state.StepCount)
+
+	if state.LastCheckpointID != "" {
+		fmt.Fprintf(w, "Checkpoint:  %s\n", state.LastCheckpointID)
+	}
+
+	if state.TokenUsage != nil {
+		total := totalTokens(state.TokenUsage)
+		fmt.Fprintf(w, "\nTokens:      %s\n", formatTokenCount(total))
+
+		var parts []string
+		if state.TokenUsage.InputTokens > 0 {
+			parts = append(parts, "Input: "+formatTokenCount(state.TokenUsage.InputTokens))
+		}
+		if state.TokenUsage.CacheReadTokens > 0 {
+			parts = append(parts, "Cache read: "+formatTokenCount(state.TokenUsage.CacheReadTokens))
+		}
+		if state.TokenUsage.CacheCreationTokens > 0 {
+			parts = append(parts, "Cache write: "+formatTokenCount(state.TokenUsage.CacheCreationTokens))
+		}
+		if state.TokenUsage.OutputTokens > 0 {
+			parts = append(parts, "Output: "+formatTokenCount(state.TokenUsage.OutputTokens))
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(w, "  %s\n", strings.Join(parts, " · "))
+		}
+	}
+
+	if state.LastPrompt != "" {
+		fmt.Fprintf(w, "\nLast prompt: %q\n", state.LastPrompt)
+	}
+
+	if len(state.FilesTouched) > 0 {
+		fmt.Fprintln(w, "\nFiles touched:")
+		for _, f := range state.FilesTouched {
+			fmt.Fprintf(w, "  %s\n", f)
+		}
+	}
+
+	return nil
 }
 
 // runStopSession stops a single session by ID, with optional confirmation.
