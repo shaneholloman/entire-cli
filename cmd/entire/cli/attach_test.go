@@ -47,7 +47,7 @@ func TestAttach_TranscriptNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, "nonexistent-session-id", agent.AgentNameClaudeCode, false)
+	err := runAttach(context.Background(), &out, "nonexistent-session-id", agent.AgentNameClaudeCode, true)
 	if err == nil {
 		t.Fatal("expected error for missing transcript")
 	}
@@ -64,7 +64,7 @@ func TestAttach_Success(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestAttach_SessionAlreadyTracked_NoCheckpoint(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err = runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, false)
+	err = runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("expected attach to handle already-tracked session, got error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestAttach_OutputContainsCheckpointID(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestAttach_PopulatesTokenUsage(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, false); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestAttach_SetsSessionTurnCount(t *testing.T) {
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, false); err != nil {
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestAttach_GeminiSubdirectorySession(t *testing.T) {
 	t.Setenv("ENTIRE_TEST_GEMINI_PROJECT_DIR", emptyProjectDir)
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestAttach_GeminiSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameGemini, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestAttach_CursorSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestAttach_FactoryAIDroidSuccess(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameFactoryAIDroid, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameFactoryAIDroid, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestAttach_CursorNestedLayout(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, false)
+	err := runAttach(context.Background(), &out, sessionID, agent.AgentNameCursor, true)
 	if err != nil {
 		t.Fatalf("runAttach failed: %v", err)
 	}
