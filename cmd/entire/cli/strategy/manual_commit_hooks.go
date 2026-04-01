@@ -2351,7 +2351,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 		// Generate compact transcript for v2 /main
 		if v2Store != nil && len(fullTranscript) > 0 {
-			finalAg, _ := agent.GetByAgentType(state.AgentType)
+			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
 			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, fullTranscript, state.CheckpointTranscriptStart)
 		}
 
