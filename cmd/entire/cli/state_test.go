@@ -799,14 +799,15 @@ func TestMergeUnique(t *testing.T) {
 
 func TestFilterToUncommittedFiles_CRLFNormalization(t *testing.T) {
 	// Regression test: on Windows with core.autocrlf=true, the working tree
-	// has CRLF line endings while git blobs store LF. filterToUncommittedFiles
-	// must normalize line endings before comparing so committed files are
-	// correctly filtered out.
+	// may have CRLF line endings while the committed blob can contain LF
+	// content. This test commits LF content, then rewrites the working-tree
+	// file with CRLF. filterToUncommittedFiles must normalize line endings
+	// before comparing so committed files are correctly filtered out.
 
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	// Commit file with LF content via go-git (blobs always store LF)
+	// Commit file with LF content via go-git so the committed blob is LF.
 	repo, err := git.PlainInit(tmpDir, false)
 	if err != nil {
 		t.Fatalf("failed to init repo: %v", err)
