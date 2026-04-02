@@ -10,7 +10,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -364,7 +363,6 @@ func TestParseHookEvent_TurnEnd_InvalidSessionID(t *testing.T) {
 
 func TestFetchAndCacheExport_UsesRedirectedExportWhenPipeOutputWouldBeInvalid(t *testing.T) {
 	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
 	t.Chdir(tmpDir)
 
 	paths.ClearWorktreeRootCache()
