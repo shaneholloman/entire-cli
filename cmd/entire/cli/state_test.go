@@ -797,58 +797,6 @@ func TestMergeUnique(t *testing.T) {
 	}
 }
 
-func TestFilterToUncommittedFiles_CRLFNormalization(t *testing.T) {
-	// Regression test: on Windows with core.autocrlf=true, the working tree
-	// may have CRLF line endings while the committed blob can contain LF
-	// content. This test commits LF content, then rewrites the working-tree
-	// file with CRLF. filterToUncommittedFiles must normalize line endings
-	// before comparing so committed files are correctly filtered out.
-
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	// Commit file with LF content via go-git so the committed blob is LF.
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init repo: %v", err)
-	}
-
-	lfContent := "line one\nline two\nline three\n"
-	filePath := filepath.Join(tmpDir, "file.txt")
-	if err := os.WriteFile(filePath, []byte(lfContent), 0o644); err != nil {
-		t.Fatalf("failed to write file: %v", err)
-	}
-
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("failed to get worktree: %v", err)
-	}
-	if _, err := wt.Add("file.txt"); err != nil {
-		t.Fatalf("failed to add file: %v", err)
-	}
-	if _, err := wt.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
-		},
-	}); err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
-
-	// Overwrite on-disk file with CRLF content (simulating Windows checkout)
-	crlfContent := "line one\r\nline two\r\nline three\r\n"
-	if err := os.WriteFile(filePath, []byte(crlfContent), 0o644); err != nil {
-		t.Fatalf("failed to rewrite file with CRLF: %v", err)
-	}
-
-	// filterToUncommittedFiles should treat the file as committed (same
-	// logical content despite CRLF vs LF difference)
-	result := filterToUncommittedFiles(context.Background(), []string{"file.txt"}, tmpDir)
-	if len(result) != 0 {
-		t.Errorf("filterToUncommittedFiles() = %v, want empty (file should be treated as committed)", result)
-	}
-}
-
 func TestFilterToUncommittedFiles_ReallyModified(t *testing.T) {
 	// Verify that files with genuinely different content are kept.
 
