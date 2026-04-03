@@ -94,6 +94,11 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 	for i := 0; i < len(lines); i++ {
 		cl := lines[i]
 
+		// Consume token_count lines at the top level (e.g. before any assistant).
+		if isCodexTokenCountLine(cl) {
+			continue
+		}
+
 		var p codexPayload
 		if json.Unmarshal(cl.Payload, &p) != nil {
 			continue
@@ -128,24 +133,35 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 
 			// Collect any function_calls that follow this assistant message.
 			var toolBlocks []map[string]json.RawMessage
+			var inTok, outTok int
 			for i+1 < len(lines) {
 				next := lines[i+1]
+				if isCodexTokenCountLine(next) {
+					inTok, outTok = codexTokenCount(next.Payload)
+					i++
+					continue
+				}
 				var np codexPayload
 				if json.Unmarshal(next.Payload, &np) != nil {
 					break
 				}
 				if np.Type == codexTypeFunctionCall {
 					tb := codexToolUseBlock(np)
+					i++ // consume the function_call line
+					// Skip token_count lines between function_call and output.
+					for i+1 < len(lines) && isCodexTokenCountLine(lines[i+1]) {
+						inTok, outTok = codexTokenCount(lines[i+1].Payload)
+						i++
+					}
 					// Look ahead for the matching output.
-					if i+2 < len(lines) {
+					if i+1 < len(lines) {
 						var outp codexPayload
-						if json.Unmarshal(lines[i+2].Payload, &outp) == nil && outp.Type == codexTypeFunctionCallOutput && outp.CallID == np.CallID {
+						if json.Unmarshal(lines[i+1].Payload, &outp) == nil && outp.Type == codexTypeFunctionCallOutput && outp.CallID == np.CallID {
 							tb["result"] = buildToolResult(toolResultEntry{output: outp.Output})
 							i++ // consume the output line
 						}
 					}
 					toolBlocks = append(toolBlocks, tb)
-					i++ // consume the function_call line
 					continue
 				}
 				// function_call_output without a preceding function_call — skip.
@@ -160,18 +176,31 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 			line := base
 			line.Type = transcript.TypeAssistant
 			line.TS = ts
+			line.InputTokens = inTok
+			line.OutputTokens = outTok
 			line.Content = contentArr
 			appendLine(&result, line)
 
 		case p.Type == codexTypeFunctionCall:
 			// Standalone function_call not preceded by assistant text.
 			tb := codexToolUseBlock(p)
+			var inTok, outTok int
+			// Skip token_count lines between function_call and output.
+			for i+1 < len(lines) && isCodexTokenCountLine(lines[i+1]) {
+				inTok, outTok = codexTokenCount(lines[i+1].Payload)
+				i++
+			}
 			if i+1 < len(lines) {
 				var np codexPayload
 				if json.Unmarshal(lines[i+1].Payload, &np) == nil && np.Type == codexTypeFunctionCallOutput && np.CallID == p.CallID {
 					tb["result"] = buildToolResult(toolResultEntry{output: np.Output})
 					i++
 				}
+			}
+			// Also consume any trailing token_count.
+			for i+1 < len(lines) && isCodexTokenCountLine(lines[i+1]) {
+				inTok, outTok = codexTokenCount(lines[i+1].Payload)
+				i++
 			}
 			contentArr, err := json.Marshal([]map[string]json.RawMessage{tb})
 			if err != nil {
@@ -180,6 +209,8 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 			line := base
 			line.Type = transcript.TypeAssistant
 			line.TS = ts
+			line.InputTokens = inTok
+			line.OutputTokens = outTok
 			line.Content = contentArr
 			appendLine(&result, line)
 		}
@@ -188,7 +219,8 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 	return result, nil
 }
 
-// parseCodexLines reads all JSONL lines, keeping only response_item entries.
+// parseCodexLines reads all JSONL lines, keeping response_item and
+// token_count event_msg entries.
 func parseCodexLines(content []byte) ([]codexLine, error) {
 	reader := bufio.NewReader(bytes.NewReader(content))
 	var lines []codexLine
@@ -201,8 +233,10 @@ func parseCodexLines(content []byte) ([]codexLine, error) {
 
 		if len(bytes.TrimSpace(lineBytes)) > 0 {
 			var cl codexLine
-			if json.Unmarshal(lineBytes, &cl) == nil && cl.Type == "response_item" {
-				lines = append(lines, cl)
+			if json.Unmarshal(lineBytes, &cl) == nil {
+				if cl.Type == "response_item" || isCodexTokenCountLine(cl) {
+					lines = append(lines, cl)
+				}
 			}
 		}
 
@@ -211,6 +245,29 @@ func parseCodexLines(content []byte) ([]codexLine, error) {
 		}
 	}
 	return lines, nil
+}
+
+// isCodexTokenCountLine checks if a codexLine is an event_msg with token_count payload.
+func isCodexTokenCountLine(cl codexLine) bool {
+	if cl.Type != "event_msg" {
+		return false
+	}
+	var p struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(cl.Payload, &p) == nil && p.Type == "token_count"
+}
+
+// codexTokenCount extracts input/output tokens from a token_count payload.
+func codexTokenCount(payload json.RawMessage) (input, output int) {
+	var tc struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	if json.Unmarshal(payload, &tc) == nil {
+		return tc.InputTokens, tc.OutputTokens
+	}
+	return 0, 0
 }
 
 // codexUserText extracts the actual user prompt text from a Codex user message,
