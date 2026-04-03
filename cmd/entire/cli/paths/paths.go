@@ -20,6 +20,8 @@ const (
 	EntireDir         = ".entire"
 	EntireTmpDir      = ".entire/tmp"
 	EntireMetadataDir = ".entire/metadata"
+
+	osWindows = "windows"
 )
 
 // Metadata file names
@@ -160,6 +162,13 @@ func ToRelativePath(absPath, cwd string) string {
 	absPath = normalizeMSYSPath(absPath)
 	cwd = normalizeMSYSPath(cwd)
 
+	// On Windows, MSYS/Git Bash sometimes omits the drive letter, producing
+	// paths like /Users/... that filepath.IsAbs doesn't recognize. Prepend
+	// the drive letter from cwd so filepath.Rel can match them.
+	if runtime.GOOS == osWindows && len(absPath) > 0 && absPath[0] == '/' && len(cwd) >= 2 && cwd[1] == ':' {
+		absPath = cwd[:2] + absPath
+	}
+
 	if !filepath.IsAbs(absPath) {
 		return absPath
 	}
@@ -177,7 +186,7 @@ func ToRelativePath(absPath, cwd string) string {
 // Claude Code on Windows outputs MSYS paths in its transcript, but Go's
 // filepath package only recognizes Windows-style absolute paths.
 func normalizeMSYSPath(p string) string {
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != osWindows {
 		return p
 	}
 	// MSYS paths look like /c/Users/... where the second char is a drive letter

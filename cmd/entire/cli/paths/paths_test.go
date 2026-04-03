@@ -123,6 +123,48 @@ func TestGetClaudeProjectDir_Default(t *testing.T) {
 	}
 }
 
+func TestToRelativePath_MSYSPaths(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skip("MSYS path handling is Windows-only")
+	}
+	tests := []struct {
+		name    string
+		absPath string
+		cwd     string
+		want    string
+	}{
+		{
+			name:    "msys with drive letter",
+			absPath: "/c/Users/test/repo/docs/red.md",
+			cwd:     "C:/Users/test/repo",
+			want:    "docs\\red.md",
+		},
+		{
+			name:    "msys without drive letter",
+			absPath: "/Users/test/repo/docs/red.md",
+			cwd:     "C:/Users/test/repo",
+			want:    "docs\\red.md",
+		},
+		{
+			name:    "msys without drive letter different cwd drive",
+			absPath: "/Users/test/repo/docs/red.md",
+			cwd:     "D:/Users/test/repo",
+			want:    "docs\\red.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ToRelativePath(tt.absPath, tt.cwd)
+			if got != tt.want {
+				t.Errorf("ToRelativePath(%q, %q) = %q, want %q", tt.absPath, tt.cwd, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeMSYSPath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
