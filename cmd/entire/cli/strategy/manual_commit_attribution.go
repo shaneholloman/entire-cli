@@ -202,6 +202,7 @@ func CalculateAttributionWithAccumulated(
 	attributionBaseCommit string,
 	headCommitHash string,
 	parentTree *object.Tree,
+	allAgentFiles map[string]struct{},
 ) *checkpoint.InitialAttribution {
 	if len(filesTouched) == 0 {
 		return nil
@@ -281,11 +282,8 @@ func CalculateAttributionWithAccumulated(
 	}
 	var allUserEditsToNonAgentFiles int
 	for _, filePath := range allChangedFiles {
-		if slices.Contains(filesTouched, filePath) {
-			continue // Skip agent-touched files
-		}
-		if strings.HasPrefix(filePath, ".entire/") || strings.HasPrefix(filePath, paths.EntireMetadataDir+"/") {
-			continue // Skip CLI metadata — matches filter in calculatePromptAttributionAtStart
+		if isAgentOrMetadataFile(filePath, filesTouched, allAgentFiles) {
+			continue
 		}
 
 		// Use parentTree for line counting when available so only THIS commit's
@@ -309,7 +307,7 @@ func CalculateAttributionWithAccumulated(
 	// that should not affect attribution.
 	committedNonAgentSet := make(map[string]struct{}, len(allChangedFiles))
 	for _, f := range allChangedFiles {
-		if !slices.Contains(filesTouched, f) {
+		if !isAgentOrMetadataFile(f, filesTouched, allAgentFiles) {
 			committedNonAgentSet[f] = struct{}{}
 		}
 	}
@@ -348,6 +346,7 @@ func CalculateAttributionWithAccumulated(
 	sessionAccumulatedToNonAgent := max(0, accumulatedToCommittedNonAgentFiles-baselineToCommittedNonAgentFiles)
 	relevantAccumulatedUser := sessionAccumulatedToAgentFiles + sessionAccumulatedToNonAgent
 	totalUserAdded := relevantAccumulatedUser + postCheckpointUserAdded + postToNonAgentFiles
+
 	// Exclude baseline removals (pre-session state) from human removal count.
 	sessionAccumulatedUserRemoved := max(0, accumulatedUserRemoved-baselineUserRemoved)
 	totalUserRemoved := sessionAccumulatedUserRemoved + postCheckpointUserRemoved
@@ -487,4 +486,18 @@ func CalculatePromptAttribution(
 	}
 
 	return result
+}
+
+// isAgentOrMetadataFile returns true if the file was touched by any agent session
+// (this session or another) or is CLI metadata that should be excluded from attribution.
+func isAgentOrMetadataFile(filePath string, filesTouched []string, allAgentFiles map[string]struct{}) bool {
+	if slices.Contains(filesTouched, filePath) {
+		return true
+	}
+	if allAgentFiles != nil {
+		if _, ok := allAgentFiles[filePath]; ok {
+			return true
+		}
+	}
+	return strings.HasPrefix(filePath, ".entire/") || strings.HasPrefix(filePath, paths.EntireMetadataDir+"/")
 }

@@ -93,6 +93,7 @@ type condenseOpts struct {
 	repoDir          string              // Repository worktree path for git CLI commands
 	parentCommitHash string              // HEAD's first parent hash for per-commit non-agent file detection
 	headCommitHash   string              // HEAD commit hash (passed through for attribution)
+	allAgentFiles    map[string]struct{} // Union of all sessions' FilesTouched for cross-session exclusion (nil = single-session)
 }
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
@@ -173,10 +174,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 
 		if len(sessionData.FilesTouched) == 0 && !hadFilesBeforeFiltering {
-			sessionData.FilesTouched = make([]string, 0, len(committedFiles))
-			for f := range committedFiles {
-				sessionData.FilesTouched = append(sessionData.FilesTouched, f)
-			}
+			sessionData.FilesTouched = committedFilesExcludingMetadata(committedFiles)
 		}
 	}
 
@@ -202,6 +200,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		attributionBaseCommit: attrBase,
 		parentCommitHash:      o.parentCommitHash,
 		headCommitHash:        o.headCommitHash,
+		allAgentFiles:         o.allAgentFiles,
 	})
 
 	// Get current branch name
@@ -353,13 +352,14 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 
 // attributionOpts provides pre-resolved git objects to avoid redundant reads.
 type attributionOpts struct {
-	headTree              *object.Tree // HEAD commit tree (already resolved by PostCommit)
-	shadowTree            *object.Tree // Shadow branch tree (already resolved by PostCommit)
-	parentTree            *object.Tree // Parent commit tree (nil for initial commits, for consistent non-agent line counting)
-	repoDir               string       // Repository worktree path for git CLI commands
-	attributionBaseCommit string       // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
-	parentCommitHash      string       // HEAD's first parent hash (preferred diff base for non-agent files)
-	headCommitHash        string       // HEAD commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	headTree              *object.Tree        // HEAD commit tree (already resolved by PostCommit)
+	shadowTree            *object.Tree        // Shadow branch tree (already resolved by PostCommit)
+	parentTree            *object.Tree        // Parent commit tree (nil for initial commits, for consistent non-agent line counting)
+	repoDir               string              // Repository worktree path for git CLI commands
+	attributionBaseCommit string              // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	parentCommitHash      string              // HEAD's first parent hash (preferred diff base for non-agent files)
+	headCommitHash        string              // HEAD commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	allAgentFiles         map[string]struct{} // Union of all sessions' FilesTouched (nil = single-session)
 }
 
 func calculateSessionAttributions(ctx context.Context, repo *git.Repository, shadowRef *plumbing.Reference, sessionData *ExtractedSessionData, state *SessionState, opts ...attributionOpts) *cpkg.InitialAttribution {
@@ -483,6 +483,7 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 		o.attributionBaseCommit,
 		o.headCommitHash,
 		o.parentTree,
+		o.allAgentFiles,
 	)
 
 	if attribution != nil {
@@ -499,6 +500,20 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 	}
 
 	return attribution
+}
+
+// committedFilesExcludingMetadata returns committed files with CLI metadata paths filtered out.
+// `.entire/` files are created by `entire enable`, not by the agent, and should not be
+// attributed as agent work when used as a fallback for sessions with no FilesTouched.
+func committedFilesExcludingMetadata(committedFiles map[string]struct{}) []string {
+	result := make([]string, 0, len(committedFiles))
+	for f := range committedFiles {
+		if strings.HasPrefix(f, ".entire/") || strings.HasPrefix(f, paths.EntireMetadataDir+"/") {
+			continue
+		}
+		result = append(result, f)
+	}
+	return result
 }
 
 // extractSessionData extracts session data from the shadow branch.

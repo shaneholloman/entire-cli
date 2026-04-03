@@ -623,6 +623,7 @@ type postCommitActionHandler struct {
 	parentCommitHash string              // HEAD's first parent hash (empty for initial commits)
 	shadowRef        *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
 	shadowTree       *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
+	allAgentFiles    map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	condensed bool
@@ -648,6 +649,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			repoDir:          h.repoDir,
 			parentCommitHash: h.parentCommitHash,
 			headCommitHash:   h.newHead,
+			allAgentFiles:    h.allAgentFiles,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -676,6 +678,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			repoDir:          h.repoDir,
 			parentCommitHash: h.parentCommitHash,
 			headCommitHash:   h.newHead,
+			allAgentFiles:    h.allAgentFiles,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -896,6 +899,16 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit, headTree, parentTree)
 	resolveTreesSpan.End()
 
+	// Compute union of all sessions' FilesTouched for cross-session attribution.
+	// This lets each session's attribution exclude files created by other agent sessions,
+	// preventing files from session B being counted as "human work" in session A.
+	allAgentFiles := make(map[string]struct{})
+	for _, state := range sessions {
+		for _, f := range state.FilesTouched {
+			allAgentFiles[f] = struct{}{}
+		}
+	}
+
 	loopCtx, processSessionsLoop := perf.StartLoop(ctx, "process_sessions")
 	for _, state := range sessions {
 		// Skip fully-condensed ended sessions — no work remains.
@@ -906,7 +919,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
 			head, commit, newHead, worktreePath, headTree, parentTree, parentCommitHash,
-			committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch)
+			committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch, allAgentFiles)
 		iterSpan.End()
 	}
 	processSessionsLoop.End()
@@ -1035,6 +1048,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	committedFileSet map[string]struct{},
 	shadowBranchesToDelete map[string]struct{},
 	uncondensedActiveOnBranch map[string]bool,
+	allAgentFiles map[string]struct{},
 ) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
@@ -1126,6 +1140,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		parentCommitHash:       parentCommitHash,
 		shadowRef:              shadowRef,
 		shadowTree:             shadowTree,
+		allAgentFiles:          allAgentFiles,
 	}
 
 	if err := TransitionAndLog(ctx, state, session.EventGitCommit, *transitionCtx, handler); err != nil {
@@ -2071,33 +2086,33 @@ func (s *ManualCommitStrategy) calculatePromptAttributionAtStart(
 	nextCheckpointNum := state.StepCount + 1
 	result := PromptAttribution{CheckpointNumber: nextCheckpointNum}
 
-	// Get last checkpoint tree from shadow branch (if it exists)
-	// For the first checkpoint, no shadow branch exists yet - this is fine,
-	// CalculatePromptAttribution will use baseTree as the reference instead.
+	// Get last checkpoint tree from shadow branch (if it exists).
+	// For a new session (StepCount == 0), always use baseTree as the reference.
+	// The shadow branch may contain checkpoints from OTHER concurrent sessions,
+	// and using that tree would miss pre-session worktree dirt (e.g., .claude/settings.json)
+	// because it appears unchanged when compared to another session's snapshot.
 	var lastCheckpointTree *object.Tree
-	shadowBranchName := checkpoint.ShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
-	refName := plumbing.NewBranchReferenceName(shadowBranchName)
-	ref, err := repo.Reference(refName, true)
-	if err != nil {
-		logging.Debug(logCtx, "prompt attribution: no shadow branch yet (first checkpoint)",
-			slog.String("shadow_branch", shadowBranchName))
-		// Continue with lastCheckpointTree = nil
-	} else {
-		shadowCommit, err := repo.CommitObject(ref.Hash())
-		if err != nil {
+	if state.StepCount > 0 {
+		// Existing session with prior checkpoints — use shadow branch as reference.
+		shadowBranchName := checkpoint.ShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
+		refName := plumbing.NewBranchReferenceName(shadowBranchName)
+		if ref, err := repo.Reference(refName, true); err != nil {
+			logging.Debug(logCtx, "prompt attribution: no shadow branch",
+				slog.String("shadow_branch", shadowBranchName))
+		} else if shadowCommit, err := repo.CommitObject(ref.Hash()); err != nil {
 			logging.Debug(logCtx, "prompt attribution: failed to get shadow commit",
 				slog.String("shadow_ref", ref.Hash().String()),
 				slog.String("error", err.Error()))
-			// Continue with lastCheckpointTree = nil
+		} else if tree, err := shadowCommit.Tree(); err != nil {
+			logging.Debug(logCtx, "prompt attribution: failed to get shadow tree",
+				slog.String("error", err.Error()))
 		} else {
-			lastCheckpointTree, err = shadowCommit.Tree()
-			if err != nil {
-				logging.Debug(logCtx, "prompt attribution: failed to get shadow tree",
-					slog.String("error", err.Error()))
-				// Continue with lastCheckpointTree = nil
-			}
+			lastCheckpointTree = tree
 		}
 	}
+	// For new sessions (StepCount == 0), lastCheckpointTree stays nil.
+	// CalculatePromptAttribution falls back to baseTree, ensuring pre-session
+	// worktree dirt is captured even when the shadow branch has other sessions' data.
 
 	// Get base tree for agent lines calculation
 	var baseTree *object.Tree
