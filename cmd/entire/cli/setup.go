@@ -275,9 +275,11 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 
 	// If user deselected all agents, remove them all and show guidance
 	if len(selectedAgentNames) == 0 {
+		var errs []error
 		for _, name := range installedNames {
 			ag, err := agent.Get(name)
 			if err != nil {
+				errs = append(errs, fmt.Errorf("failed to load agent %s: %w", name, err))
 				continue
 			}
 			hookAgent, ok := agent.AsHookSupport(ag)
@@ -285,8 +287,11 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 				continue
 			}
 			if err := hookAgent.UninstallHooks(ctx); err != nil {
-				return fmt.Errorf("failed to remove %s hooks: %w", ag.Type(), err)
+				errs = append(errs, fmt.Errorf("failed to remove %s hooks: %w", ag.Type(), err))
 			}
+		}
+		if len(errs) > 0 {
+			return errors.Join(errs...)
 		}
 		fmt.Fprintln(w, "All agents have been removed.")
 		fmt.Fprintln(w, "To add agents again, run: entire configure --agent <name>")
@@ -323,7 +328,7 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 		}
 		ag, err := agent.Get(name)
 		if err != nil {
-			continue
+			return fmt.Errorf("failed to load deselected agent %s: %w", name, err)
 		}
 		removedAgents = append(removedAgents, ag)
 	}
