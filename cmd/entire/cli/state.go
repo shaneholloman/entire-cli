@@ -291,46 +291,37 @@ func DetectFileChanges(ctx context.Context, previouslyUntracked []string) (*File
 // HEAD or with different content in the working tree are kept. Fails open: if any git
 // operation errors, returns the original list unchanged.
 func filterToUncommittedFiles(ctx context.Context, files []string, repoRoot string) []string {
-	logCtx := logging.WithComponent(ctx, "filter-uncommitted")
-
 	if len(files) == 0 {
 		return files
 	}
 
 	repo, err := openRepository(ctx)
 	if err != nil {
-		logging.Debug(logCtx, "openRepository failed, returning all files",
-			slog.String("error", err.Error()))
 		return files // fail open
 	}
 
 	head, err := repo.Head()
 	if err != nil {
-		logging.Debug(logCtx, "repo.Head() failed, returning all files",
-			slog.String("error", err.Error()))
 		return files // fail open (empty repo, detached HEAD, etc.)
 	}
 
 	commit, err := repo.CommitObject(head.Hash())
 	if err != nil {
-		logging.Debug(logCtx, "repo.CommitObject failed, returning all files",
-			slog.String("error", err.Error()),
-			slog.String("head", head.Hash().String()))
 		return files // fail open
 	}
 
 	headTree, err := commit.Tree()
 	if err != nil {
-		logging.Debug(logCtx, "commit.Tree() failed, returning all files",
-			slog.String("error", err.Error()))
 		return files // fail open
 	}
+
+	logCtx := logging.WithComponent(ctx, "filter-uncommitted")
 
 	var result []string
 	for _, relPath := range files {
 		headFile, err := headTree.File(relPath)
 		if err != nil {
-			// File not in HEAD — it's uncommitted
+			// File not in HEAD — it's uncommitted (or path normalization bug)
 			logging.Debug(logCtx, "file not in HEAD tree, keeping",
 				slog.String("file", relPath),
 				slog.String("error", err.Error()))
@@ -342,45 +333,25 @@ func filterToUncommittedFiles(ctx context.Context, files []string, repoRoot stri
 		absPath := filepath.Join(repoRoot, relPath)
 		workingContent, err := os.ReadFile(absPath) //nolint:gosec // path from controlled source
 		if err != nil {
-			logging.Debug(logCtx, "cannot read working tree file, keeping",
-				slog.String("file", relPath),
-				slog.String("error", err.Error()))
+			// Can't read working tree file (deleted?) — keep it
 			result = append(result, relPath)
 			continue
 		}
 
 		headContent, err := headFile.Contents()
 		if err != nil {
-			logging.Debug(logCtx, "cannot read HEAD blob, keeping",
-				slog.String("file", relPath),
-				slog.String("error", err.Error()))
 			result = append(result, relPath)
 			continue
 		}
 
 		if string(workingContent) != headContent {
 			// Working tree differs from HEAD — uncommitted changes
-			logging.Debug(logCtx, "content differs from HEAD, keeping",
-				slog.String("file", relPath),
-				slog.Int("working_len", len(workingContent)),
-				slog.Int("head_len", len(headContent)),
-				slog.String("working_first_20", safePrefix(workingContent, 20)),
-				slog.String("head_first_20", safePrefix([]byte(headContent), 20)))
 			result = append(result, relPath)
 		}
 		// else: content matches HEAD — already committed, skip
 	}
 
 	return result
-}
-
-// safePrefix returns the first n bytes as a string, replacing non-printable
-// characters with their hex escape. Used for diagnostic logging only.
-func safePrefix(b []byte, n int) string {
-	if len(b) < n {
-		n = len(b)
-	}
-	return fmt.Sprintf("%q", string(b[:n]))
 }
 
 // FilterAndNormalizePaths converts absolute paths to relative and filters out
