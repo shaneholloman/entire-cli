@@ -360,6 +360,42 @@ func ListAllCleanupItems(ctx context.Context) ([]CleanupItem, error) {
 	return items, firstErr
 }
 
+// ListAllItems returns all Entire items (not just orphaned) for full cleanup.
+// This includes all shadow branches and all session states regardless of
+// whether they have checkpoints or active shadow branches.
+func ListAllItems(ctx context.Context) ([]CleanupItem, error) {
+	var items []CleanupItem
+
+	// All shadow branches
+	strat := NewManualCommitStrategy()
+	stratItems, err := strat.ListOrphanedItems(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing shadow branches: %w", err)
+	}
+	items = append(items, stratItems...)
+
+	// All session states (not just orphaned)
+	store, err := session.NewStateStore(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create state store: %w", err)
+	}
+
+	states, err := store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list session states: %w", err)
+	}
+
+	for _, state := range states {
+		items = append(items, CleanupItem{
+			Type:   CleanupTypeSessionState,
+			ID:     state.SessionID,
+			Reason: "clean all",
+		})
+	}
+
+	return items, nil
+}
+
 // DeleteAllCleanupItems deletes all specified cleanup items.
 // Logs each deletion for audit purposes.
 func DeleteAllCleanupItems(ctx context.Context, items []CleanupItem) (*CleanupResult, error) {

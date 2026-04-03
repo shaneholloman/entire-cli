@@ -34,10 +34,9 @@ By default, cleans session state and shadow branches for the current HEAD:
   - Session state files (.git/entire-sessions/<session-id>.json)
   - Shadow branch (entire/<commit-hash>-<worktree-hash>)
 
-Use --all to clean all orphaned Entire data across the repository:
-  - Orphaned shadow branches
-  - Orphaned session state files
-  - Orphaned checkpoint entries on entire/checkpoints/v1
+Use --all to clean all Entire session data across the repository:
+  - All session state files (.git/entire-sessions/)
+  - All shadow branches
   - Temporary files (.entire/tmp/)
 The entire/checkpoints/v1 branch itself is preserved.
 
@@ -79,7 +78,7 @@ Use --dry-run to preview what would be deleted without prompting.`,
 	}
 
 	cmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Skip confirmation prompt and override active session guard")
-	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Clean all orphaned data across the repository")
+	cmd.Flags().BoolVarP(&allFlag, "all", "a", false, "Clean all session data across the repository")
 	cmd.Flags().BoolVarP(&dryRunFlag, "dry-run", "d", false, "Preview what would be deleted without deleting")
 	cmd.Flags().StringVar(&sessionFlag, "session", "", "Clean a specific session by ID")
 
@@ -257,12 +256,12 @@ func runCleanSession(ctx context.Context, cmd *cobra.Command, strat *strategy.Ma
 	return nil
 }
 
-// runCleanAll cleans all orphaned data across the repository (old `entire clean` behavior).
+// runCleanAll cleans all session data across the repository.
 func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) error {
-	// List all cleanup items
-	items, err := strategy.ListAllCleanupItems(ctx)
+	// List all items (sessions, shadow branches) — not just orphaned ones
+	items, err := strategy.ListAllItems(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list orphaned items: %w", err)
+		return fmt.Errorf("failed to list items: %w", err)
 	}
 
 	// List temp files
@@ -282,7 +281,7 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 	errW := cmd.ErrOrStderr()
 	// Handle no items case
 	if len(items) == 0 && len(tempFiles) == 0 {
-		fmt.Fprintln(w, "No orphaned items to clean up.")
+		fmt.Fprintln(w, "No items to clean up.")
 		return nil
 	}
 
