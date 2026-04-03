@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -164,14 +163,7 @@ func formatSettingsStatusShort(ctx context.Context, s *EntireSettings, sty statu
 
 	// Show enabled agents
 	if s.Enabled {
-		installedNames := GetAgentsWithHooksInstalled(ctx)
-		if len(installedNames) > 0 {
-			displayNames := make([]string, 0, len(installedNames))
-			for _, name := range installedNames {
-				if ag, agErr := agent.Get(name); agErr == nil {
-					displayNames = append(displayNames, string(ag.Type()))
-				}
-			}
+		if displayNames := InstalledAgentDisplayNames(ctx); len(displayNames) > 0 {
 			b.WriteString("\n")
 			b.WriteString(sty.render(sty.dim, "  Hooks installed: "))
 			styledNames := make([]string, len(displayNames))

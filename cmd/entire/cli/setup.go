@@ -697,14 +697,7 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 
 // printEnabledStatus prints agents and a hint about `entire configure`.
 func printEnabledStatus(ctx context.Context, w io.Writer) {
-	installedNames := GetAgentsWithHooksInstalled(ctx)
-	if len(installedNames) > 0 {
-		displayNames := make([]string, 0, len(installedNames))
-		for _, name := range installedNames {
-			if ag, agErr := agent.Get(name); agErr == nil {
-				displayNames = append(displayNames, string(ag.Type()))
-			}
-		}
+	if displayNames := InstalledAgentDisplayNames(ctx); len(displayNames) > 0 {
 		fmt.Fprintf(w, "Agents: %s\n", strings.Join(displayNames, ", "))
 	}
 	fmt.Fprintln(w, "\nTo add more agents, run `entire configure`.")
