@@ -321,7 +321,7 @@ func filterToUncommittedFiles(ctx context.Context, files []string, repoRoot stri
 	for _, relPath := range files {
 		headFile, err := headTree.File(relPath)
 		if err != nil {
-			// File not in HEAD — it's uncommitted (or path normalization bug)
+			// File not in HEAD — it's uncommitted
 			logging.Debug(logCtx, "file not in HEAD tree, keeping",
 				slog.String("file", relPath),
 				slog.String("error", err.Error()))
