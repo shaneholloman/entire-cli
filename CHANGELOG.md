@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.5.3] - 2026-04-02
+## [0.5.3] - 2026-04-03
 
 ### Added
 
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Resume failing when checkpoints aren't fetched locally yet ([#796](https://github.com/entireio/cli/pull/796))
 - OpenCode transcript export resilient to stdout truncation ([#832](https://github.com/entireio/cli/pull/832))
+- Fail-closed content detection in `prepare-commit-msg` to prevent dangling checkpoint trailers from stale sessions ([#826](https://github.com/entireio/cli/pull/826))
 
 ### Housekeeping
 
