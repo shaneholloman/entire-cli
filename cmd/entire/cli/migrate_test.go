@@ -1,0 +1,253 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// initMigrateTestRepo creates a repo with an initial commit.
+func initMigrateTestRepo(t *testing.T) *git.Repository {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("init"), 0o644))
+	_, err = wt.Add("README.md")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
+	})
+	require.NoError(t, err)
+	return repo
+}
+
+// writeV1Checkpoint writes a checkpoint to the v1 branch for testing.
+func writeV1Checkpoint(t *testing.T, store *checkpoint.GitStore, cpID id.CheckpointID, sessionID string, transcript []byte, prompts []string) {
+	t.Helper()
+	err := store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    sessionID,
+		Strategy:     "manual-commit",
+		Transcript:   transcript,
+		Prompts:      prompts,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+}
+
+func TestMigrateCheckpointsV2_Basic(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	writeV1Checkpoint(t, v1Store, cpID, "session-001",
+		[]byte("{\"type\":\"assistant\",\"message\":\"hello\"}\n"),
+		[]string{"test prompt"},
+	)
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.migrated)
+	assert.Equal(t, 0, result.skipped)
+	assert.Equal(t, 0, result.failed)
+
+	// Verify checkpoint exists in v2
+	summary, err := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary, "checkpoint should exist in v2 after migration")
+	assert.Equal(t, cpID, summary.CheckpointID)
+}
+
+func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+
+	cpID := id.MustCheckpointID("c3d4e5f6a1b2")
+	writeV1Checkpoint(t, v1Store, cpID, "session-idem",
+		[]byte("{\"type\":\"assistant\",\"message\":\"idempotent test\"}\n"),
+		[]string{"idem prompt"},
+	)
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	// First run: should migrate
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+	assert.Equal(t, 0, result1.skipped)
+
+	// Second run: should skip
+	stdout.Reset()
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.migrated)
+	assert.Equal(t, 1, result2.skipped)
+	assert.Contains(t, stdout.String(), "skipped (already in v2)")
+}
+
+func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+
+	cpID := id.MustCheckpointID("d4e5f6a1b2c3")
+
+	// Write first session
+	writeV1Checkpoint(t, v1Store, cpID, "session-multi-1",
+		[]byte("{\"type\":\"assistant\",\"message\":\"session 1\"}\n"),
+		[]string{"prompt 1"},
+	)
+
+	// Write second session to same checkpoint
+	writeV1Checkpoint(t, v1Store, cpID, "session-multi-2",
+		[]byte("{\"type\":\"assistant\",\"message\":\"session 2\"}\n"),
+		[]string{"prompt 2"},
+	)
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.migrated)
+
+	// Verify both sessions are in v2
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+	assert.GreaterOrEqual(t, len(summary.Sessions), 2, "should have at least 2 sessions")
+}
+
+func TestMigrateCheckpointsV2_NoV1Branch(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	// No v1 data written — ListCommitted returns empty
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.migrated)
+	assert.Contains(t, stdout.String(), "Nothing to migrate")
+}
+
+func TestMigrateCmd_InvalidFlag(t *testing.T) {
+	t.Parallel()
+	cmd := newMigrateCmd()
+	cmd.SetArgs([]string{"--checkpoints", "v3"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported checkpoints version")
+}
+
+func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+
+	cpID := id.MustCheckpointID("e5f6a1b2c3d4")
+	// Write checkpoint with no agent type — compaction will be skipped
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-noagent",
+		Strategy:     "manual-commit",
+		Transcript:   []byte("{\"type\":\"assistant\",\"message\":\"no agent\"}\n"),
+		Prompts:      []string{"compact fail prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated)
+	assert.Contains(t, stdout.String(), "compact transcript skipped")
+}
+
+func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+
+	cpID := id.MustCheckpointID("b2c3d4e5f6a1")
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-task-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte("{\"type\":\"assistant\",\"message\":\"task work\"}\n"),
+		Prompts:      []string{"task prompt"},
+		IsTask:       true,
+		ToolUseID:    "toolu_01ABC",
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	var stdout bytes.Buffer
+
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated)
+
+	// Verify task checkpoint exists in v2
+	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, readErr)
+	require.NotNil(t, summary)
+}
+
+func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+
+	cpID1 := id.MustCheckpointID("f6a1b2c3d4e5")
+	cpID2 := id.MustCheckpointID("a1b2c3d4e5f7")
+
+	writeV1Checkpoint(t, v1Store, cpID1, "session-p1",
+		[]byte("{\"type\":\"assistant\",\"message\":\"first\"}\n"),
+		[]string{"prompt 1"},
+	)
+	writeV1Checkpoint(t, v1Store, cpID2, "session-p2",
+		[]byte("{\"type\":\"assistant\",\"message\":\"second\"}\n"),
+		[]string{"prompt 2"},
+	)
+
+	// First run: migrates both
+	var discard bytes.Buffer
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &discard)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result1.migrated)
+
+	// Second run: skips both
+	var stdout bytes.Buffer
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.migrated)
+	assert.Equal(t, 2, result2.skipped)
+}
