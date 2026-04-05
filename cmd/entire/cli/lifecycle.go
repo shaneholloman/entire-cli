@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	agenttypes "github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -89,7 +89,11 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	_, countSessionsSpan := perf.Start(ctx, "count_active_sessions")
 	strat := GetStrategy(ctx)
 	if count, err := strat.CountOtherActiveSessionsWithCheckpoints(ctx, event.SessionID); err == nil && count > 0 {
-		message += fmt.Sprintf("\n  %d other active conversation(s) in this workspace will also be included.\n  Use 'entire status' for more information.", count)
+		if ag.Name() == agent.AgentNameCodex {
+			message += fmt.Sprintf(" %d other active conversation(s) in this workspace will also be included. Use 'entire status' for more information.", count)
+		} else {
+			message += fmt.Sprintf("\n  %d other active conversation(s) in this workspace will also be included.\n  Use 'entire status' for more information.", count)
+		}
 	}
 	countSessionsSpan.End()
 
@@ -136,10 +140,10 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	return nil
 }
 
-func sessionStartMessage(agentName agenttypes.AgentName, emptyRepo bool) string {
+func sessionStartMessage(agentName types.AgentName, emptyRepo bool) string {
 	if agentName == agent.AgentNameCodex {
 		if emptyRepo {
-			return "Powered by Entire: No commits yet - checkpoints will activate after your first commit."
+			return "Powered by Entire: No commits yet — checkpoints will activate after your first commit."
 		}
 		return "Powered by Entire: This conversation will be linked to your next commit."
 	}
