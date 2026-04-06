@@ -46,10 +46,11 @@ func newMigrateCmd() *cobra.Command {
 			}
 
 			logging.SetLogLevelGetter(GetLogLevel)
-			if err := logging.Init(ctx, ""); err == nil {
+			if initErr := logging.Init(ctx, ""); initErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: could not initialize logging: %v\n", initErr)
+			} else {
 				defer logging.Close()
 			}
-
 			return runMigrateCheckpointsV2(ctx, cmd)
 		},
 	}
@@ -121,7 +122,7 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 				fmt.Fprintf(out, "%s skipped (already in v2)\n", prefix)
 				result.skipped++
 			} else if errors.Is(migrateErr, errTranscriptNotGeneratable) {
-				fmt.Fprintf(out, "%s in v2, but transcript.jsonl could not be generated (unsupported agent format)\n", prefix)
+				fmt.Fprintf(out, "%s in v2, but %s\n", prefix, migrateErr.Error())
 				result.skipped++
 			} else {
 				fmt.Fprintf(out, "%s failed\n", prefix)
@@ -222,16 +223,34 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 
 	backfilled := 0
 	skippedCount := 0
+	var lastAgent string
 
 	for _, sessionIdx := range needsBackfill {
 		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
 		if readErr != nil {
+			logging.Warn(ctx, "transcript.jsonl backfill: could not read v1 session",
+				slog.String("checkpoint_id", string(info.CheckpointID)),
+				slog.Int("session_index", sessionIdx),
+				slog.String("error", readErr.Error()),
+			)
 			skippedCount++
 			continue
 		}
 
+		if content.Metadata.Agent != "" {
+			lastAgent = string(content.Metadata.Agent)
+		}
+
 		compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata)
 		if compacted == nil {
+			// tryCompactTranscript already logs for no-agent and compact-error cases;
+			// log the empty-transcript case here.
+			if len(content.Transcript) == 0 {
+				logging.Warn(ctx, "transcript.jsonl backfill: empty transcript in v1",
+					slog.String("checkpoint_id", string(info.CheckpointID)),
+					slog.Int("session_index", sessionIdx),
+				)
+			}
 			skippedCount++
 			continue
 		}
@@ -242,6 +261,11 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 			CompactTranscript: compacted,
 		})
 		if updateErr != nil {
+			logging.Warn(ctx, "transcript.jsonl backfill: failed to write to v2",
+				slog.String("checkpoint_id", string(info.CheckpointID)),
+				slog.Int("session_index", sessionIdx),
+				slog.String("error", updateErr.Error()),
+			)
 			skippedCount++
 			continue
 		}
@@ -250,7 +274,10 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 	}
 
 	if backfilled == 0 {
-		return errTranscriptNotGeneratable
+		if lastAgent != "" {
+			return fmt.Errorf("%w: agent %q", errTranscriptNotGeneratable, lastAgent)
+		}
+		return fmt.Errorf("%w: no agent type in metadata", errTranscriptNotGeneratable)
 	}
 
 	fmt.Fprintf(out, "%s added transcript.jsonl for %d session(s)\n", prefix, backfilled)
@@ -309,6 +336,14 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 			slog.String("checkpoint_id", string(m.CheckpointID)),
 			slog.String("agent", string(m.Agent)),
 			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	if len(compacted) == 0 {
+		logging.Warn(ctx, "transcript.jsonl generation produced no output",
+			slog.String("checkpoint_id", string(m.CheckpointID)),
+			slog.String("agent", string(m.Agent)),
+			slog.Int("input_bytes", len(transcript)),
 		)
 		return nil
 	}
