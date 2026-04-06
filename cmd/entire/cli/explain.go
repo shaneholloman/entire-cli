@@ -354,19 +354,49 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 }
 
 func listCommittedForExplain(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, preferCheckpointsV2 bool) ([]checkpoint.CommittedInfo, error) {
-	if preferCheckpointsV2 {
-		committed, err := v2Store.ListCommitted(ctx)
-		if err == nil && len(committed) > 0 {
-			return committed, nil
-		}
-		if err != nil {
-			logging.Debug(ctx, "v2 ListCommitted failed, falling back to v1",
-				slog.String("error", err.Error()),
-			)
-		}
+	if !preferCheckpointsV2 {
+		return v1Store.ListCommitted(ctx)
 	}
 
-	return v1Store.ListCommitted(ctx)
+	v2Committed, v2Err := v2Store.ListCommitted(ctx)
+	if v2Err != nil {
+		logging.Debug(ctx, "v2 ListCommitted failed, falling back to v1",
+			slog.String("error", v2Err.Error()),
+		)
+		return v1Store.ListCommitted(ctx)
+	}
+
+	v1Committed, v1Err := v1Store.ListCommitted(ctx)
+	if v1Err != nil {
+		if len(v2Committed) > 0 {
+			logging.Debug(ctx, "v1 ListCommitted failed, using v2-only checkpoint list",
+				slog.String("error", v1Err.Error()),
+			)
+			return v2Committed, nil
+		}
+		return nil, v1Err
+	}
+
+	merged := make([]checkpoint.CommittedInfo, 0, len(v2Committed)+len(v1Committed))
+	seen := make(map[id.CheckpointID]struct{}, len(v2Committed)+len(v1Committed))
+
+	for _, cp := range v2Committed {
+		merged = append(merged, cp)
+		seen[cp.CheckpointID] = struct{}{}
+	}
+
+	for _, cp := range v1Committed {
+		if _, exists := seen[cp.CheckpointID]; exists {
+			continue
+		}
+		merged = append(merged, cp)
+	}
+
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].CreatedAt.After(merged[j].CreatedAt)
+	})
+
+	return merged, nil
 }
 
 func readLatestSessionContentForExplain(ctx context.Context, reader checkpoint.CommittedReader, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*checkpoint.SessionContent, error) {
