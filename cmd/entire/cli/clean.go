@@ -363,7 +363,7 @@ func runCleanAllWithItems(ctx context.Context, cmd *cobra.Command, force, dryRun
 	// Force mode - delete items
 	result, err := strategy.DeleteAllCleanupItems(ctx, items)
 	if err != nil {
-		return fmt.Errorf("failed to delete orphaned items: %w", err)
+		return fmt.Errorf("failed to delete items: %w", err)
 	}
 
 	// Delete temp files
