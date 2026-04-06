@@ -274,45 +274,34 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 		}
 	}
 
-	// If user deselected all agents, remove them all and show guidance
-	if len(selectedAgentNames) == 0 {
-		if len(installedNames) == 0 {
-			fmt.Fprintln(w, "No changes made.")
-			return nil
-		}
-		var errs []error
-		for _, name := range installedNames {
-			ag, err := agent.Get(name)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("failed to load agent %s: %w", name, err))
-				continue
-			}
-			hookAgent, ok := agent.AsHookSupport(ag)
-			if !ok {
-				continue
-			}
-			if err := hookAgent.UninstallHooks(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("failed to remove %s hooks: %w", ag.Type(), err))
-			}
-		}
-		if len(errs) > 0 {
-			return errors.Join(errs...)
-		}
-		fmt.Fprintln(w, "All agents have been removed.")
-		fmt.Fprintln(w, "To add agents again, run: entire configure --agent <name>")
+	// Nothing selected and nothing installed — no-op.
+	if len(selectedAgentNames) == 0 && len(installedNames) == 0 {
+		fmt.Fprintln(w, "No changes made.")
 		return nil
 	}
 
-	return applyAgentChanges(ctx, w, selectedAgentNames, installedNames, installedSet, opts)
+	err := applyAgentChanges(ctx, w, selectedAgentNames, installedNames, opts)
+	if err == nil && len(selectedAgentNames) == 0 {
+		fmt.Fprintln(w, "To add agents again, run: entire configure --agent <name>")
+	}
+	return err
 }
 
 // applyAgentChanges computes added/removed agent sets from the selection and
 // installs or uninstalls hooks accordingly.
-func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []string, installedNames []types.AgentName, installedSet map[types.AgentName]struct{}, opts EnableOptions) error {
+func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []string, installedNames []types.AgentName, opts EnableOptions) error {
+	installedSet := make(map[types.AgentName]struct{}, len(installedNames))
+	for _, name := range installedNames {
+		installedSet[name] = struct{}{}
+	}
+
 	selectedSet := make(map[string]struct{}, len(selectedAgentNames))
 	for _, name := range selectedAgentNames {
 		selectedSet[name] = struct{}{}
 	}
+
+	// Collect errors so partial successes are visible to the user.
+	var errs []error
 
 	var addedAgents []agent.Agent
 	for _, name := range selectedAgentNames {
@@ -321,7 +310,8 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 		}
 		ag, err := agent.Get(types.AgentName(name))
 		if err != nil {
-			return fmt.Errorf("failed to get agent %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("failed to get agent %s: %w", name, err))
+			continue
 		}
 		addedAgents = append(addedAgents, ag)
 	}
@@ -333,19 +323,16 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 		}
 		ag, err := agent.Get(name)
 		if err != nil {
-			return fmt.Errorf("failed to load deselected agent %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("failed to load deselected agent %s: %w", name, err))
+			continue
 		}
 		removedAgents = append(removedAgents, ag)
 	}
 
-	if len(addedAgents) == 0 && len(removedAgents) == 0 {
+	if len(addedAgents) == 0 && len(removedAgents) == 0 && len(errs) == 0 {
 		fmt.Fprintln(w, "No changes made.")
 		return nil
 	}
-
-	// Install hooks for added agents and uninstall hooks for removed agents.
-	// Collect errors so partial successes are visible to the user.
-	var errs []error
 	var installedAgents []agent.Agent
 	for _, ag := range addedAgents {
 		if _, err := setupAgentHooks(ctx, ag, opts.LocalDev, opts.ForceHooks); err != nil {
@@ -402,11 +389,15 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 		fmt.Fprintf(w, "✓ Added agents: %s\n", strings.Join(names, ", "))
 	}
 	if len(uninstalledAgents) > 0 {
-		names := make([]string, 0, len(uninstalledAgents))
-		for _, ag := range uninstalledAgents {
-			names = append(names, string(ag.Type()))
+		if len(installedAgents) == 0 && len(addedAgents) == 0 && len(removedAgents) == len(installedNames) {
+			fmt.Fprintln(w, "All agents have been removed.")
+		} else {
+			names := make([]string, 0, len(uninstalledAgents))
+			for _, ag := range uninstalledAgents {
+				names = append(names, string(ag.Type()))
+			}
+			fmt.Fprintf(w, "✓ Removed agents: %s\n", strings.Join(names, ", "))
 		}
-		fmt.Fprintf(w, "✓ Removed agents: %s\n", strings.Join(names, ", "))
 	}
 
 	return errors.Join(errs...)
