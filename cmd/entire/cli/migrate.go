@@ -93,7 +93,10 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command) error {
 	return nil
 }
 
-var errAlreadyMigrated = errors.New("already migrated")
+var (
+	errAlreadyMigrated          = errors.New("already migrated")
+	errTranscriptNotGeneratable = errors.New("transcript.jsonl could not be generated")
+)
 
 func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, out io.Writer) (*migrateResult, error) {
 	v1List, err := v1Store.ListCommitted(ctx)
@@ -116,9 +119,9 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		if migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, out, prefix); migrateErr != nil {
 			if errors.Is(migrateErr, errAlreadyMigrated) {
 				fmt.Fprintf(out, "%s skipped (already in v2)\n", prefix)
-				logging.Debug(ctx, "checkpoint already in v2, skipping",
-					slog.String("checkpoint_id", string(info.CheckpointID)),
-				)
+				result.skipped++
+			} else if errors.Is(migrateErr, errTranscriptNotGeneratable) {
+				fmt.Fprintf(out, "%s in v2, but transcript.jsonl could not be generated (unsupported agent format)\n", prefix)
 				result.skipped++
 			} else {
 				fmt.Fprintf(out, "%s failed\n", prefix)
@@ -138,13 +141,14 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 }
 
 func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, out io.Writer, prefix string) error {
-	// Idempotency: skip if already in v2
 	existing, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
 		return fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
+
+	// Already in v2 — check if any sessions are missing transcript.jsonl and backfill
 	if existing != nil {
-		return errAlreadyMigrated
+		return backfillCompactTranscripts(ctx, v1Store, v2Store, info, existing, out, prefix)
 	}
 
 	summary, err := v1Store.ReadCommitted(ctx, info.CheckpointID)
@@ -192,10 +196,64 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	if compactFailed {
-		fmt.Fprintf(out, "%s done (compact transcript skipped)\n", prefix)
+		fmt.Fprintf(out, "%s done (compact transcript not generated)\n", prefix)
 	} else {
 		fmt.Fprintf(out, "%s done\n", prefix)
 	}
+
+	return nil
+}
+
+// backfillCompactTranscripts checks sessions in an already-migrated v2 checkpoint
+// for missing transcript.jsonl and attempts to generate + write them from v1 data.
+// Returns errAlreadyMigrated if all sessions already have compact transcripts.
+func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary, out io.Writer, prefix string) error {
+	// Find sessions missing transcript.jsonl
+	var needsBackfill []int
+	for i, session := range v2Summary.Sessions {
+		if session.Transcript == "" {
+			needsBackfill = append(needsBackfill, i)
+		}
+	}
+
+	if len(needsBackfill) == 0 {
+		return errAlreadyMigrated
+	}
+
+	backfilled := 0
+	skippedCount := 0
+
+	for _, sessionIdx := range needsBackfill {
+		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
+		if readErr != nil {
+			skippedCount++
+			continue
+		}
+
+		compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata)
+		if compacted == nil {
+			skippedCount++
+			continue
+		}
+
+		updateErr := v2Store.UpdateCommitted(ctx, checkpoint.UpdateCommittedOptions{
+			CheckpointID:      info.CheckpointID,
+			SessionID:         content.Metadata.SessionID,
+			CompactTranscript: compacted,
+		})
+		if updateErr != nil {
+			skippedCount++
+			continue
+		}
+
+		backfilled++
+	}
+
+	if backfilled == 0 {
+		return errTranscriptNotGeneratable
+	}
+
+	fmt.Fprintf(out, "%s added transcript.jsonl for %d session(s)\n", prefix, backfilled)
 
 	return nil
 }
@@ -231,7 +289,13 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 }
 
 func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.CommittedMetadata) []byte {
-	if len(transcript) == 0 || m.Agent == "" {
+	if len(transcript) == 0 {
+		return nil
+	}
+	if m.Agent == "" {
+		logging.Warn(ctx, "compact transcript skipped: no agent type in checkpoint metadata",
+			slog.String("checkpoint_id", string(m.CheckpointID)),
+		)
 		return nil
 	}
 
@@ -242,6 +306,7 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 	})
 	if err != nil {
 		logging.Warn(ctx, "compact transcript generation failed during migration",
+			slog.String("checkpoint_id", string(m.CheckpointID)),
 			slog.String("agent", string(m.Agent)),
 			slog.String("error", err.Error()),
 		)

@@ -98,13 +98,12 @@ func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
 	assert.Equal(t, 1, result1.migrated)
 	assert.Equal(t, 0, result1.skipped)
 
-	// Second run: should skip
+	// Second run: should skip (no agent type means backfill also can't produce compact transcript)
 	stdout.Reset()
 	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 1, result2.skipped)
-	assert.Contains(t, stdout.String(), "skipped (already in v2)")
 }
 
 func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
@@ -188,7 +187,7 @@ func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated)
-	assert.Contains(t, stdout.String(), "compact transcript skipped")
+	assert.Contains(t, stdout.String(), "compact transcript not generated")
 }
 
 func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
@@ -261,6 +260,62 @@ func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 2, result2.skipped)
+}
+
+func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+
+	cpID := id.MustCheckpointID("aabb11223344")
+
+	// Write v1 checkpoint with agent type (so compaction can succeed)
+	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-backfill",
+		Strategy:     "manual-commit",
+		Transcript:   []byte("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n"),
+		Prompts:      []string{"hello"},
+		Agent:        "Claude Code",
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	// Write to v2 WITHOUT compact transcript (simulating earlier migration)
+	err = v2Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-backfill",
+		Strategy:     "manual-commit",
+		Transcript:   []byte("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n"),
+		Prompts:      []string{"hello"},
+		Agent:        "Claude Code",
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+		// CompactTranscript intentionally nil
+	})
+	require.NoError(t, err)
+
+	// Verify no transcript.jsonl on /main yet
+	summary, err := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Empty(t, summary.Sessions[0].Transcript, "should have no compact transcript before backfill")
+
+	// Run migration — should backfill the compact transcript
+	var stdout bytes.Buffer
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
+	require.NoError(t, migrateErr)
+	assert.Equal(t, 1, result.migrated, "backfill should count as migrated")
+	assert.Equal(t, 0, result.skipped)
+	assert.Contains(t, stdout.String(), "added transcript.jsonl")
+
+	// Verify transcript.jsonl now exists
+	summary2, err := v2Store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary2)
+	assert.NotEmpty(t, summary2.Sessions[0].Transcript, "should have compact transcript after backfill")
 }
 
 func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {
