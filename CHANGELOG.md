@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Deprecated `entire reset` command in favor of `entire rewind` ([#720](https://github.com/entireio/cli/pull/720))
+- Deprecated `entire reset` command in favor of `entire clean` ([#720](https://github.com/entireio/cli/pull/720))
 
 ### Fixed
 
