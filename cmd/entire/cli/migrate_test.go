@@ -5,11 +5,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -218,6 +221,14 @@ func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
 	summary, readErr := v2Store.ReadCommitted(context.Background(), cpID)
 	require.NoError(t, readErr)
 	require.NotNil(t, summary)
+
+	// Verify task metadata tree was copied into v2 /full/current.
+	_, rootTreeHash, refErr := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, refErr)
+	rootTree, treeErr := repo.TreeObject(rootTreeHash)
+	require.NoError(t, treeErr)
+	_, taskFileErr := rootTree.File(cpID.Path() + "/0/tasks/toolu_01ABC/checkpoint.json")
+	require.NoError(t, taskFileErr, "expected migrated task checkpoint metadata in /full/current")
 }
 
 func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
@@ -250,4 +261,28 @@ func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 2, result2.skipped)
+}
+
+func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cpID := id.MustCheckpointID("123456abcdef")
+	rawPrompts := strings.Join([]string{
+		"first line\nwith newline",
+		"second prompt",
+	}, checkpoint.PromptSeparator)
+
+	opts := buildMigrateWriteOpts(&checkpoint.SessionContent{
+		Metadata: checkpoint.CommittedMetadata{
+			SessionID: "session-prompts-001",
+			Strategy:  "manual-commit",
+		},
+		Prompts: rawPrompts,
+	}, checkpoint.CommittedInfo{
+		CheckpointID: cpID,
+	})
+
+	require.Len(t, opts.Prompts, 2)
+	assert.Equal(t, "first line\nwith newline", opts.Prompts[0])
+	assert.Equal(t, "second prompt", opts.Prompts[1])
 }

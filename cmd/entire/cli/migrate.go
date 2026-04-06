@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -157,11 +156,15 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	compactFailed := false
+	shouldCopyTaskMetadata := false
 
 	for sessionIdx := range len(summary.Sessions) {
 		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
 		if readErr != nil {
 			return fmt.Errorf("failed to read v1 session %d: %w", sessionIdx, readErr)
+		}
+		if content.Metadata.IsTask {
+			shouldCopyTaskMetadata = true
 		}
 
 		opts := buildMigrateWriteOpts(content, info)
@@ -179,7 +182,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	// Copy task metadata trees from v1 to v2 /full/current
-	if info.IsTask && info.ToolUseID != "" {
+	if shouldCopyTaskMetadata {
 		if taskErr := copyTaskMetadataToV2(ctx, repo, v1Store, v2Store, info.CheckpointID, summary); taskErr != nil {
 			logging.Warn(ctx, "failed to copy task metadata to v2",
 				slog.String("checkpoint_id", string(info.CheckpointID)),
@@ -200,14 +203,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.CommittedInfo) checkpoint.WriteCommittedOptions {
 	m := content.Metadata
 
-	var prompts []string
-	if content.Prompts != "" {
-		prompts = strings.Split(content.Prompts, "\n")
-		// Remove trailing empty string from trailing newline
-		if len(prompts) > 0 && prompts[len(prompts)-1] == "" {
-			prompts = prompts[:len(prompts)-1]
-		}
-	}
+	prompts := checkpoint.SplitPromptContent(content.Prompts)
 
 	return checkpoint.WriteCommittedOptions{
 		CheckpointID:                info.CheckpointID,
@@ -261,6 +257,17 @@ func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoi
 	v1Tree, err := resolveV1CheckpointTree(repo, cpID)
 	if err != nil {
 		return err
+	}
+
+	// Legacy v1 layout stores task metadata at checkpoint root: <cp>/tasks/<tool-use-id>/...
+	// Prefer attaching this tree to the latest session in v2.
+	if rootTasksTree, rootTasksErr := v1Tree.Tree("tasks"); rootTasksErr == nil {
+		if len(summary.Sessions) > 0 {
+			latestSessionIdx := len(summary.Sessions) - 1
+			if spliceErr := spliceTasksTreeToV2(repo, v2Store, cpID, latestSessionIdx, rootTasksTree.Hash); spliceErr != nil {
+				return fmt.Errorf("latest session task tree splice failed: %w", spliceErr)
+			}
+		}
 	}
 
 	for sessionIdx := range len(summary.Sessions) {
