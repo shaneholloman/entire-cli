@@ -96,6 +96,7 @@ type condenseOpts struct {
 	repoDir          string              // Repository worktree path for git CLI commands
 	parentCommitHash string              // HEAD's first parent hash for per-commit non-agent file detection
 	headCommitHash   string              // HEAD commit hash (passed through for attribution)
+	allAgentFiles    map[string]struct{} // Union of all sessions' FilesTouched for cross-session exclusion (nil = single-session)
 }
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
@@ -176,10 +177,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 
 		if len(sessionData.FilesTouched) == 0 && !hadFilesBeforeFiltering {
-			sessionData.FilesTouched = make([]string, 0, len(committedFiles))
-			for f := range committedFiles {
-				sessionData.FilesTouched = append(sessionData.FilesTouched, f)
-			}
+			sessionData.FilesTouched = committedFilesExcludingMetadata(committedFiles)
 		}
 	}
 
@@ -205,6 +203,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		attributionBaseCommit: attrBase,
 		parentCommitHash:      o.parentCommitHash,
 		headCommitHash:        o.headCommitHash,
+		allAgentFiles:         o.allAgentFiles,
 	})
 
 	// Get current branch name
@@ -236,6 +235,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		TokenUsage:                  sessionData.TokenUsage,
 		SessionMetrics:              buildSessionMetrics(state),
 		InitialAttribution:          attribution,
+		PromptAttributionsJSON:      marshalPromptAttributions(state.PromptAttributions),
 		Summary:                     summary,
 	}
 
@@ -312,6 +312,19 @@ func generateSummary(ctx context.Context, sessionData *ExtractedSessionData, sta
 
 // buildSessionMetrics creates a SessionMetrics from session state if any metrics are available.
 // Returns nil if no hook-provided metrics exist (e.g., for agents that don't report them).
+// marshalPromptAttributions encodes PromptAttributions to JSON for diagnostic persistence.
+// Returns nil if there are no attributions to persist.
+func marshalPromptAttributions(pas []PromptAttribution) json.RawMessage {
+	if len(pas) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(pas)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 func buildSessionMetrics(state *SessionState) *cpkg.SessionMetrics {
 	if state.SessionDurationMs == 0 && state.SessionTurnCount == 0 && state.ContextTokens == 0 && state.ContextWindowSize == 0 {
 		return nil
@@ -360,13 +373,14 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 
 // attributionOpts provides pre-resolved git objects to avoid redundant reads.
 type attributionOpts struct {
-	headTree              *object.Tree // HEAD commit tree (already resolved by PostCommit)
-	shadowTree            *object.Tree // Shadow branch tree (already resolved by PostCommit)
-	parentTree            *object.Tree // Parent commit tree (nil for initial commits, for consistent non-agent line counting)
-	repoDir               string       // Repository worktree path for git CLI commands
-	parentCommitHash      string       // HEAD's first parent hash (preferred diff base for non-agent files)
-	attributionBaseCommit string       // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
-	headCommitHash        string       // HEAD commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	headTree              *object.Tree        // HEAD commit tree (already resolved by PostCommit)
+	shadowTree            *object.Tree        // Shadow branch tree (already resolved by PostCommit)
+	parentTree            *object.Tree        // Parent commit tree (nil for initial commits, for consistent non-agent line counting)
+	repoDir               string              // Repository worktree path for git CLI commands
+	parentCommitHash      string              // HEAD's first parent hash (preferred diff base for non-agent files)
+	attributionBaseCommit string              // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	headCommitHash        string              // HEAD commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	allAgentFiles         map[string]struct{} // Union of all sessions' FilesTouched (nil = single-session)
 }
 
 func calculateSessionAttributions(ctx context.Context, repo *git.Repository, shadowRef *plumbing.Reference, sessionData *ExtractedSessionData, state *SessionState, opts ...attributionOpts) *cpkg.InitialAttribution {
@@ -454,9 +468,19 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 			slog.String("attribution_base", attrBase))
 	}
 
+	// Include PendingPromptAttribution if it was never moved to PromptAttributions.
+	// This happens when an agent commits mid-turn without calling SaveStep (e.g., Codex).
+	// PendingPromptAttribution is set during UserPromptSubmit but only moved to
+	// PromptAttributions during SaveStep. Without this, mid-turn commits have no PA
+	// data and pre-session worktree dirt cannot be identified for baseline exclusion.
+	promptAttrs := state.PromptAttributions
+	if state.PendingPromptAttribution != nil {
+		promptAttrs = append(promptAttrs, *state.PendingPromptAttribution)
+	}
+
 	// Log accumulated prompt attributions for debugging
 	var totalUserAdded, totalUserRemoved int
-	for i, pa := range state.PromptAttributions {
+	for i, pa := range promptAttrs {
 		totalUserAdded += pa.UserLinesAdded
 		totalUserRemoved += pa.UserLinesRemoved
 		logging.Debug(logCtx, "prompt attribution data",
@@ -474,11 +498,12 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 		HeadTree:              headTree,
 		ParentTree:            o.parentTree,
 		FilesTouched:          sessionData.FilesTouched,
-		PromptAttributions:    state.PromptAttributions,
+		PromptAttributions:    promptAttrs,
 		RepoDir:               o.repoDir,
 		ParentCommitHash:      o.parentCommitHash,
 		AttributionBaseCommit: attrBase,
 		HeadCommitHash:        o.headCommitHash,
+		AllAgentFiles:         o.allAgentFiles,
 	})
 
 	if attribution != nil {
@@ -495,6 +520,20 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 	}
 
 	return attribution
+}
+
+// committedFilesExcludingMetadata returns committed files with CLI metadata paths filtered out.
+// `.entire/` files are created by `entire enable`, not by the agent, and should not be
+// attributed as agent work when used as a fallback for sessions with no FilesTouched.
+func committedFilesExcludingMetadata(committedFiles map[string]struct{}) []string {
+	result := make([]string, 0, len(committedFiles))
+	for f := range committedFiles {
+		if strings.HasPrefix(f, ".entire/") || strings.HasPrefix(f, paths.EntireMetadataDir+"/") {
+			continue
+		}
+		result = append(result, f)
+	}
+	return result
 }
 
 // extractSessionData extracts session data from the shadow branch.
