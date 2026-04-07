@@ -26,9 +26,10 @@ func newMigrateCmd() *cobra.Command {
 	var checkpointsFlag string
 
 	cmd := &cobra.Command{
-		Use:   "migrate",
-		Short: "Migrate Entire data to newer formats",
-		Long:  `Migrate Entire data to newer formats. Currently supports migrating v1 checkpoints to v2.`,
+		Use:    "migrate",
+		Short:  "Migrate Entire data to newer formats",
+		Long:   `Migrate Entire data to newer formats. Currently supports migrating v1 checkpoints to v2.`,
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if checkpointsFlag == "" {
 				return cmd.Help()
