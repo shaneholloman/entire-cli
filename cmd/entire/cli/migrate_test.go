@@ -3,7 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -412,7 +412,7 @@ func removeV2SessionTranscriptFiles(t *testing.T, repo *git.Repository, v2Store 
 	newRootHash, updateErr := checkpoint.UpdateSubtree(
 		repo,
 		rootTreeHash,
-		[]string{string(cpID[:2]), string(cpID[2:]), fmt.Sprintf("%d", sessionIdx)},
+		[]string{string(cpID[:2]), string(cpID[2:]), strconv.Itoa(sessionIdx)},
 		nil,
 		checkpoint.UpdateSubtreeOptions{
 			MergeMode: checkpoint.MergeKeepExisting,

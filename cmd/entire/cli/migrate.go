@@ -273,7 +273,7 @@ func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Stor
 func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) (bool, error) {
 	_, rootTreeHash, err := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
 	if err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // Missing /full/current ref means required artifacts are absent.
 	}
 
 	rootTree, err := repo.TreeObject(rootTreeHash)
@@ -284,7 +284,7 @@ func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2
 	sessionPath := fmt.Sprintf("%s/%d", cpID.Path(), sessionIdx)
 	sessionTree, err := rootTree.Tree(sessionPath)
 	if err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // Missing session path means artifacts are absent, not a hard error.
 	}
 
 	hasTranscript := false
@@ -299,7 +299,7 @@ func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2
 	}
 
 	if _, err := sessionTree.File(paths.ContentHashFileName); err != nil {
-		return false, nil
+		return false, nil //nolint:nilerr // Missing content hash indicates incomplete /full/current artifacts.
 	}
 
 	return true, nil
