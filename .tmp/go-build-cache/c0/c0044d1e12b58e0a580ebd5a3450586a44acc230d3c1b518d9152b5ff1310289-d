@@ -1,5 +1,0 @@
-./paths.go
-./transcript.go
-./worktree.go
-./paths_test.go
-./worktree_test.go

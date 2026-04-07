@@ -1,8 +1,0 @@
-./constants.go
-./csv.go
-./finding.go
-./json.go
-./junit.go
-./report.go
-./sarif.go
-./template.go

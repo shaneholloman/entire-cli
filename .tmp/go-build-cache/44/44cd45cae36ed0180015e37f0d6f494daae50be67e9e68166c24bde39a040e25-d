@@ -1,8 +1,0 @@
-./decoder.go
-./doc.go
-./encoder.go
-./fuzz_helpers.go
-./idxfile.go
-./lazy_index.go
-./shared_file.go
-./writer.go

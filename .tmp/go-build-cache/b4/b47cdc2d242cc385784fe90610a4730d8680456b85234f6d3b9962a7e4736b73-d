@@ -1,9 +1,0 @@
-./gemini.go
-./hooks.go
-./lifecycle.go
-./transcript.go
-./types.go
-./gemini_test.go
-./hooks_test.go
-./lifecycle_test.go
-./transcript_test.go
