@@ -4098,3 +4098,40 @@ func TestCondenseSession_V2Disabled_NoV2Refs(t *testing.T) {
 	_, err = repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
 	require.Error(t, err, "v2 /full/current ref should not exist when v2 is disabled")
 }
+
+func TestCommittedFilesExcludingMetadata(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]struct{}{
+		"docs/blue.md":          {},
+		"docs/red.md":           {},
+		".entire/settings.json": {},
+		".entire/.gitignore":    {},
+		".claude/settings.json": {},
+	}
+
+	result := committedFilesExcludingMetadata(input)
+
+	// .entire/ files should be excluded, everything else kept
+	resultSet := make(map[string]struct{}, len(result))
+	for _, f := range result {
+		resultSet[f] = struct{}{}
+	}
+
+	require.Contains(t, resultSet, "docs/blue.md")
+	require.Contains(t, resultSet, "docs/red.md")
+	require.Contains(t, resultSet, ".claude/settings.json")
+	require.NotContains(t, resultSet, ".entire/settings.json", ".entire/ should be excluded")
+	require.NotContains(t, resultSet, ".entire/.gitignore", ".entire/ should be excluded")
+	require.Len(t, result, 3)
+}
+
+func TestCommittedFilesExcludingMetadata_AllMetadata(t *testing.T) {
+	t.Parallel()
+
+	result := committedFilesExcludingMetadata(map[string]struct{}{
+		".entire/settings.json": {},
+		".entire/.gitignore":    {},
+	})
+	require.Empty(t, result, "all metadata files should be excluded")
+}

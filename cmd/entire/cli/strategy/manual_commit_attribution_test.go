@@ -1541,3 +1541,65 @@ func TestCalculateAttributionWithAccumulated_ParentTreeForNonAgentLines(t *testi
 	// Without parentTree, falls back to baseTree: counts 8 lines (all since session start)
 	require.Equal(t, 8, resultNoPT.HumanAdded, "without parentTree, all 8 lines counted (inflated)")
 }
+
+// TestCalculateAttributionWithAccumulated_MultiSessionCrossExclusion verifies that
+// files touched by OTHER agent sessions in the same commit are not counted as human work.
+//
+// Scenario: two sessions create files, then both are committed together.
+//   - Session 0 created blue.md (3 lines)
+//   - Session 1 created red.md (3 lines)
+//
+// When calculating Session 0's attribution, red.md should be excluded via AllAgentFiles
+// (the union of all sessions' FilesTouched), not counted as human_added.
+func TestCalculateAttributionWithAccumulated_MultiSessionCrossExclusion(t *testing.T) {
+	t.Parallel()
+
+	baseTree := buildTestTree(t, nil)
+
+	// Shadow: Session 0 created blue.md
+	shadowTree := buildTestTree(t, map[string]string{
+		"blue.md": "line1\nline2\nline3\n",
+	})
+
+	// Head: commit contains both blue.md and red.md (from two sessions)
+	headTree := buildTestTree(t, map[string]string{
+		"blue.md": "line1\nline2\nline3\n",
+		"red.md":  "line1\nline2\nline3\n",
+	})
+
+	// Session 0 only touched blue.md
+	filesTouched := []string{"blue.md"}
+
+	promptAttributions := []PromptAttribution{
+		{CheckpointNumber: 1, UserAddedPerFile: map[string]int{}},
+	}
+
+	// AllAgentFiles = union of ALL sessions' FilesTouched
+	allAgentFiles := map[string]struct{}{
+		"blue.md": {},
+		"red.md":  {}, // From Session 1
+	}
+
+	// WITH AllAgentFiles: red.md excluded from human count
+	result := CalculateAttributionWithAccumulated(context.Background(), AttributionParams{
+		BaseTree: baseTree, ShadowTree: shadowTree, HeadTree: headTree,
+		FilesTouched: filesTouched, PromptAttributions: promptAttributions,
+		AllAgentFiles: allAgentFiles,
+	})
+
+	require.NotNil(t, result)
+	require.Equal(t, 3, result.AgentLines, "agent should get 3 lines for blue.md")
+	require.Equal(t, 0, result.HumanAdded, "red.md should NOT count as human (other agent session)")
+	require.Equal(t, 3, result.TotalCommitted, "total should be agent-only for this session's scope")
+	require.InDelta(t, 100.0, result.AgentPercentage, 0.1, "should be 100%% agent")
+
+	// WITHOUT AllAgentFiles: red.md incorrectly counted as human (the bug)
+	resultNoExcl := CalculateAttributionWithAccumulated(context.Background(), AttributionParams{
+		BaseTree: baseTree, ShadowTree: shadowTree, HeadTree: headTree,
+		FilesTouched: filesTouched, PromptAttributions: promptAttributions,
+	})
+
+	require.NotNil(t, resultNoExcl)
+	require.Equal(t, 3, resultNoExcl.HumanAdded, "without AllAgentFiles, red.md counted as human (inflated)")
+	require.Equal(t, 6, resultNoExcl.TotalCommitted, "inflated total includes red.md as human")
+}
