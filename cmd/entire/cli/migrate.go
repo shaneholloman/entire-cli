@@ -118,13 +118,14 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		prefix := fmt.Sprintf("  [%d/%d] Migrating checkpoint %s...", i+1, total, info.CheckpointID)
 
 		if migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, out, prefix); migrateErr != nil {
-			if errors.Is(migrateErr, errAlreadyMigrated) {
+			switch {
+			case errors.Is(migrateErr, errAlreadyMigrated):
 				fmt.Fprintf(out, "%s skipped (already in v2)\n", prefix)
 				result.skipped++
-			} else if errors.Is(migrateErr, errTranscriptNotGeneratable) {
+			case errors.Is(migrateErr, errTranscriptNotGeneratable):
 				fmt.Fprintf(out, "%s in v2, but %s\n", prefix, migrateErr.Error())
 				result.skipped++
-			} else {
+			default:
 				fmt.Fprintf(out, "%s failed\n", prefix)
 				logging.Error(ctx, "checkpoint migration failed",
 					slog.String("checkpoint_id", string(info.CheckpointID)),
