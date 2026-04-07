@@ -17,7 +17,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/spf13/cobra"
 )
@@ -427,16 +426,18 @@ func spliceTasksTreeToV2(repo *git.Repository, v2Store *checkpoint.V2GitStore, c
 	if err != nil {
 		return fmt.Errorf("failed to get v2 ref state: %w", err)
 	}
+	incomingTasksTree, err := repo.TreeObject(tasksTreeHash)
+	if err != nil {
+		return fmt.Errorf("failed to read tasks tree: %w", err)
+	}
 
 	shardPrefix := string(cpID[:2])
 	shardSuffix := string(cpID[2:])
 	sessionDir := strconv.Itoa(sessionIdx)
 
 	newRoot, err := checkpoint.UpdateSubtree(repo, rootTreeHash,
-		[]string{shardPrefix, shardSuffix, sessionDir},
-		[]object.TreeEntry{
-			{Name: "tasks", Mode: filemode.Dir, Hash: tasksTreeHash},
-		},
+		[]string{shardPrefix, shardSuffix, sessionDir, "tasks"},
+		incomingTasksTree.Entries,
 		checkpoint.UpdateSubtreeOptions{MergeMode: checkpoint.MergeKeepExisting},
 	)
 	if err != nil {

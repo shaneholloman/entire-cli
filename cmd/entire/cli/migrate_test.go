@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/stretchr/testify/assert"
@@ -53,6 +54,20 @@ func writeV1Checkpoint(t *testing.T, store *checkpoint.GitStore, cpID id.Checkpo
 
 func newMigrateStores(repo *git.Repository) (*checkpoint.GitStore, *checkpoint.V2GitStore) {
 	return checkpoint.NewGitStore(repo), checkpoint.NewV2GitStore(repo, migrateRemoteName)
+}
+
+func buildTasksTreeHash(t *testing.T, repo *git.Repository, toolUseID string) plumbing.Hash {
+	t.Helper()
+
+	blobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(`{"tool_use_id":"`+toolUseID+`"}`))
+	require.NoError(t, err)
+
+	treeHash, err := checkpoint.BuildTreeFromEntries(repo, map[string]object.TreeEntry{
+		toolUseID + "/checkpoint.json": {Mode: filemode.Regular, Hash: blobHash},
+	})
+	require.NoError(t, err)
+
+	return treeHash
 }
 
 func TestMigrateCheckpointsV2_Basic(t *testing.T) {
@@ -336,4 +351,39 @@ func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {
 	require.Len(t, opts.Prompts, 2)
 	assert.Equal(t, "first line\nwith newline", opts.Prompts[0])
 	assert.Equal(t, "second prompt", opts.Prompts[1])
+}
+
+func TestSpliceTasksTreeToV2_MergesTaskDirectories(t *testing.T) {
+	t.Parallel()
+
+	repo := initMigrateTestRepo(t)
+	_, v2Store := newMigrateStores(repo)
+	cpID := id.MustCheckpointID("123abc456def")
+
+	err := v2Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Agent:        "Cursor",
+		Transcript:   []byte(`{"type":"assistant","message":"seed"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	rootTasksHash := buildTasksTreeHash(t, repo, "toolu_root")
+	sessionTasksHash := buildTasksTreeHash(t, repo, "toolu_session")
+
+	require.NoError(t, spliceTasksTreeToV2(repo, v2Store, cpID, 0, rootTasksHash))
+	require.NoError(t, spliceTasksTreeToV2(repo, v2Store, cpID, 0, sessionTasksHash))
+
+	_, rootTreeHash, refErr := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, refErr)
+	rootTree, treeErr := repo.TreeObject(rootTreeHash)
+	require.NoError(t, treeErr)
+
+	_, err = rootTree.File(cpID.Path() + "/0/tasks/toolu_root/checkpoint.json")
+	require.NoError(t, err, "root task metadata should be preserved")
+	_, err = rootTree.File(cpID.Path() + "/0/tasks/toolu_session/checkpoint.json")
+	require.NoError(t, err, "session task metadata should be preserved")
 }
