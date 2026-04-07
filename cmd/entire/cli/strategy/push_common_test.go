@@ -1,10 +1,12 @@
 package strategy
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -822,4 +824,197 @@ func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 
 	_, err = repo.Reference(plumbing.ReferenceName("refs/entire-fetch-tmp/"+branchName), true)
 	assert.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "temporary fetched ref should be cleaned up")
+}
+
+// TestIsSettingsTrackedByGit verifies detection of .entire/settings.json tracking status.
+// Not parallel: uses t.Chdir().
+func TestIsSettingsTrackedByGit(t *testing.T) {
+	t.Run("untracked", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Create .entire/settings.json but don't track it
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+
+		t.Chdir(tmpDir)
+		assert.False(t, isSettingsTrackedByGit(context.Background()))
+	})
+
+	t.Run("tracked", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Create and track .entire/settings.json
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "add settings")
+
+		t.Chdir(tmpDir)
+		assert.True(t, isSettingsTrackedByGit(context.Background()))
+	})
+
+	t.Run("works from subdirectory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Create and track .entire/settings.json
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "add settings")
+
+		// Run from a subdirectory
+		subDir := filepath.Join(tmpDir, "subdir")
+		require.NoError(t, os.MkdirAll(subDir, 0o755))
+		t.Chdir(subDir)
+		assert.True(t, isSettingsTrackedByGit(context.Background()), "should detect tracked file from subdirectory")
+	})
+}
+
+// TestPrintSettingsCommitHint verifies the hint only prints for URL targets
+// with untracked settings, and only once per process via sync.Once.
+// Not parallel: uses t.Chdir() and resets package-level settingsHintOnce.
+func TestPrintSettingsCommitHint(t *testing.T) {
+	t.Run("no hint for non-URL target", func(t *testing.T) {
+		// Reset the sync.Once for this test
+		settingsHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+		t.Chdir(tmpDir)
+
+		// Capture stderr
+		old := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		os.Stderr = w
+
+		printSettingsCommitHint(context.Background(), "origin")
+
+		w.Close()
+		var buf bytes.Buffer
+		if _, readErr := buf.ReadFrom(r); readErr != nil {
+			t.Fatalf("read pipe: %v", readErr)
+		}
+		os.Stderr = old
+
+		assert.Empty(t, buf.String(), "should not print hint for non-URL target")
+	})
+
+	t.Run("hint for URL target with untracked settings", func(t *testing.T) {
+		settingsHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Create .entire/settings.json but don't track it
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+		t.Chdir(tmpDir)
+
+		old := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		os.Stderr = w
+
+		printSettingsCommitHint(context.Background(), "git@github.com:org/repo.git")
+
+		w.Close()
+		var buf bytes.Buffer
+		if _, readErr := buf.ReadFrom(r); readErr != nil {
+			t.Fatalf("read pipe: %v", readErr)
+		}
+		os.Stderr = old
+
+		assert.Contains(t, buf.String(), "Commit and push .entire/settings.json")
+	})
+
+	t.Run("no hint when settings is tracked", func(t *testing.T) {
+		settingsHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		// Create and track .entire/settings.json
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "add settings")
+		t.Chdir(tmpDir)
+
+		old := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		os.Stderr = w
+
+		printSettingsCommitHint(context.Background(), "git@github.com:org/repo.git")
+
+		w.Close()
+		var buf bytes.Buffer
+		if _, readErr := buf.ReadFrom(r); readErr != nil {
+			t.Fatalf("read pipe: %v", readErr)
+		}
+		os.Stderr = old
+
+		assert.Empty(t, buf.String(), "should not print hint when settings.json is tracked")
+	})
+
+	t.Run("prints only once per process", func(t *testing.T) {
+		settingsHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{}`), 0o644))
+		t.Chdir(tmpDir)
+
+		old := os.Stderr
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		os.Stderr = w
+
+		// Call twice — should only print once
+		printSettingsCommitHint(context.Background(), "git@github.com:org/repo.git")
+		printSettingsCommitHint(context.Background(), "git@github.com:org/repo.git")
+
+		w.Close()
+		var buf bytes.Buffer
+		if _, readErr := buf.ReadFrom(r); readErr != nil {
+			t.Fatalf("read pipe: %v", readErr)
+		}
+		os.Stderr = old
+
+		count := bytes.Count(buf.Bytes(), []byte("Commit and push"))
+		assert.Equal(t, 1, count, "hint should print exactly once, got %d", count)
+	})
 }

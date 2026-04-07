@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v6"
@@ -116,22 +117,29 @@ func printCheckpointRemoteHint(target string) {
 	fmt.Fprintln(os.Stderr, "[entire] Checkpoints are saved locally but not synced. Ensure you have access to the checkpoint remote.")
 }
 
-// printSettingsCommitHint prints a one-time hint after a successful checkpoint remote push
+// settingsHintOnce ensures the settings commit hint prints at most once per process.
+var settingsHintOnce sync.Once
+
+// printSettingsCommitHint prints a hint after a successful checkpoint remote push
 // when .entire/settings.json is not tracked by git. entire.io needs the committed settings
-// to discover the external checkpoint repo.
+// to discover the external checkpoint repo. Uses sync.Once to avoid duplicates when
+// multiple branches/refs are pushed in a single pre-push invocation.
 func printSettingsCommitHint(ctx context.Context, target string) {
 	if !isURL(target) {
 		return
 	}
-	if isSettingsTrackedByGit(ctx) {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "[entire] Note: Commit and push .entire/settings.json for entire.io to discover your remote checkpoint.")
+	settingsHintOnce.Do(func() {
+		if isSettingsTrackedByGit(ctx) {
+			return
+		}
+		fmt.Fprintln(os.Stderr, "[entire] Note: Commit and push .entire/settings.json for entire.io to discover your remote checkpoint.")
+	})
 }
 
 // isSettingsTrackedByGit returns true if .entire/settings.json is tracked by git.
+// Uses repo-root-relative pathspec (:/) to work correctly from any subdirectory.
 func isSettingsTrackedByGit(ctx context.Context) bool {
-	cmd := exec.CommandContext(ctx, "git", "ls-files", ".entire/settings.json")
+	cmd := exec.CommandContext(ctx, "git", "ls-files", ":/.entire/settings.json")
 	output, err := cmd.Output()
 	if err != nil {
 		return false
