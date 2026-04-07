@@ -275,9 +275,22 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		return fmt.Errorf("failed to read checkpoint content: %w", err)
 	}
 
+	// Handle summary generation — uses raw transcript (before compact override).
+	if generate {
+		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
+			return err
+		}
+		// Reload the content to get the updated summary
+		content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+		if err != nil {
+			return fmt.Errorf("failed to reload checkpoint: %w", err)
+		}
+	}
+
 	// For v2 checkpoints, prefer compact transcript.jsonl from /main for
 	// human-readable output (default and --short/verbose modes). Keep --full
-	// on raw full.jsonl semantics.
+	// on raw full.jsonl semantics. Placed after --generate so summarization
+	// always receives the raw transcript.
 	if !full {
 		if v2Reader, ok := resolvedReader.(*checkpoint.V2GitStore); ok && len(summary.Sessions) > 0 {
 			latestIndex := len(summary.Sessions) - 1
@@ -292,18 +305,6 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 					slog.String("error", compactErr.Error()),
 				)
 			}
-		}
-	}
-
-	// Handle summary generation — writes to both v1 and v2 stores.
-	if generate {
-		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
-			return err
-		}
-		// Reload the content to get the updated summary
-		content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
-		if err != nil {
-			return fmt.Errorf("failed to reload checkpoint: %w", err)
 		}
 	}
 
@@ -414,12 +415,12 @@ func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, v1Store *che
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	// Persist to v1
+	// Persist to v1 (required).
 	if err := v1Store.UpdateSummary(ctx, checkpointID, summary); err != nil {
 		return fmt.Errorf("failed to save summary: %w", err)
 	}
 
-	// Persist to v2 when available (best-effort — v1 is the primary)
+	// Persist to v2 (experimental, best-effort).
 	if v2Store != nil {
 		if v2Err := v2Store.UpdateSummary(ctx, checkpointID, summary); v2Err != nil {
 			logging.Debug(ctx, "v2 UpdateSummary failed (non-fatal)",

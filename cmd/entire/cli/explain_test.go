@@ -1118,6 +1118,118 @@ func TestRunExplainCheckpoint_V2PreferredGenerateWritesBothStores(t *testing.T) 
 	}
 }
 
+func TestRunExplainCheckpoint_V2OnlyGenerateFailsBecauseV1Required(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("test"), 0o644))
+	_, err = wt.Add("test.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
+		0o644,
+	))
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("f1f2f3f4f5f6")
+	ctx := context.Background()
+
+	transcript := []byte(`{"type":"user","message":{"content":[{"type":"text","text":"v2-only generate"}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":"done"}}` + "\n")
+
+	// Write to v2 only — no v1 checkpoint exists.
+	require.NoError(t, v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-v2-only",
+		Strategy:     "manual-commit",
+		Transcript:   transcript,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	// generate=true, force=true — should fail because v1 is required for persistence
+	// and the checkpoint only exists in v2.
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(ctx, &buf, &errBuf, "f1f2f3", false, false, false, false, true, true, false)
+	if err != nil {
+		require.Contains(t, err.Error(), "failed to save summary",
+			"v2-only checkpoint should fail --generate because v1 store is required")
+	}
+}
+
+func TestRunExplainCheckpoint_V2CompactTranscriptNotUsedForGenerate(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("test"), 0o644))
+	_, err = wt.Add("test.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
+		0o644,
+	))
+
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("c0c1c2c3c4c5")
+	ctx := context.Background()
+
+	rawTranscript := []byte(`{"type":"user","message":{"content":[{"type":"text","text":"raw prompt for summarizer"}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":"raw reply"}}` + "\n")
+	compactTranscript := []byte(`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","content":[{"text":"compact prompt"}]}` + "\n")
+
+	// Dual-write with compact transcript.
+	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-compact",
+		Strategy:     "manual-commit",
+		Transcript:   rawTranscript,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+	require.NoError(t, v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-compact",
+		Strategy:          "manual-commit",
+		Transcript:        rawTranscript,
+		CompactTranscript: compactTranscript,
+		AuthorName:        "Test",
+		AuthorEmail:       "test@example.com",
+	}))
+
+	// generate=true — should NOT fail with "no transcript content" which would
+	// indicate the compact transcript was incorrectly fed to the summarizer.
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(ctx, &buf, &errBuf, "c0c1c2", false, false, false, false, true, true, false)
+	if err != nil && strings.Contains(err.Error(), "no transcript content for this checkpoint") {
+		t.Fatalf("compact transcript should not be used for --generate; raw transcript should be used instead: %v", err)
+	}
+}
+
 func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 	t.Parallel()
 
