@@ -907,11 +907,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 	if settings.IsCheckpointsV2Enabled(ctx) {
 		repo, repoErr := openRepository(ctx)
 		if repoErr == nil {
-			fetchRemote := strategy.ResolveCheckpointURL(ctx, "origin")
-			if fetchRemote == "" {
-				fetchRemote = "origin"
-			}
-			v2Store := checkpoint.NewV2GitStore(repo, fetchRemote)
+			v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
 			var v2Err error
 			logContent, _, v2Err = v2Store.GetSessionLog(ctx, checkpointID)
 			if v2Err != nil {

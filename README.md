@@ -15,7 +15,7 @@ With Entire, you can:
 - **Understand why code changed, not just what** — Transcripts, prompts, files touched, token usage, tool calls, and more are captured alongside every commit.
 - **Rewind and resume from any checkpoint** — Go back to any previous agent session and pick up exactly where you or a coworker left off.
 - **Full context preserved and searchable** — A versioned record of every AI interaction tied to your git history, with nothing lost.
-- **Zero context switching** — Git-native, two-step setup, works with Claude Code, Gemini, and more.
+- **Zero context switching** — Git-native, two-step setup, works with Claude Code, Codex, Gemini, and more.
 
 ## Table of Contents
 
@@ -38,7 +38,7 @@ With Entire, you can:
 
 - Git
 - macOS, Linux or Windows
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [OpenCode](https://opencode.ai/docs/cli/), [Cursor](https://www.cursor.com/), [Factory AI Droid](https://www.factory.ai/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot) installed and authenticated
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://help.openai.com/en/articles/11096431), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [OpenCode](https://opencode.ai/docs/cli/), [Cursor](https://www.cursor.com/), [Factory AI Droid](https://www.factory.ai/), or [GitHub Copilot CLI](https://docs.github.com/en/copilot) installed and authenticated
 
 ## Quick Start
 
@@ -72,13 +72,13 @@ entire status
 entire enable
 ```
 
-This installs agent and git hooks to work with your AI agent (Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI). You'll be prompted to select which agents to enable. To enable a specific agent non-interactively, use `entire enable --agent <name>` (e.g., `entire enable --agent cursor`).
+This installs agent and git hooks to work with your AI agent (Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI). You'll be prompted to select which agents to enable. To enable a specific agent non-interactively, use `entire enable --agent <name>` (e.g., `entire enable --agent cursor`).
 
 The hooks capture session data as you work. Checkpoints are created when you or the agent make a git commit. Your code commits stay clean, Entire never creates commits on your active branch. All session metadata is stored on a separate `entire/checkpoints/v1` branch.
 
 ### 2. Work with Your AI Agent
 
-Just use Claude Code, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI normally. Entire runs in the background, tracking your session:
+Just use Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Factory AI Droid, or Copilot CLI normally. Entire runs in the background, tracking your session:
 
 ```
 entire status  # Check current session status anytime
@@ -215,7 +215,7 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 
 | Flag                                        | Description                                                                                                       |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `--agent <name>`                            | AI agent to install hooks for: `claude-code`, `gemini`, `opencode`, `cursor`, `factoryai-droid`, or `copilot-cli` |
+| `--agent <name>`                            | AI agent to install hooks for: `claude-code`, `codex`, `gemini`, `opencode`, `cursor`, `factoryai-droid`, or `copilot-cli` |
 | `--force`, `-f`                             | Force reinstall hooks (removes existing Entire hooks first)                                                       |
 | `--local`                                   | Write settings to `settings.local.json` instead of `settings.json`                                                |
 | `--project`                                 | Write settings to `settings.json` even if it already exists                                                       |
@@ -276,6 +276,7 @@ Each agent stores its hook configuration in its own directory. When you run `ent
 | Agent            | Hook Location                 | Format            |
 | ---------------- | ----------------------------- | ----------------- |
 | Claude Code      | `.claude/settings.json`       | JSON hooks config |
+| Codex            | `.codex/hooks.json`           | JSON hooks config |
 | Gemini CLI       | `.gemini/settings.json`       | JSON hooks config |
 | OpenCode         | `.opencode/plugins/entire.ts` | TypeScript plugin |
 | Cursor           | `.cursor/hooks.json`          | JSON hooks config |
@@ -350,6 +351,23 @@ entire enable --agent gemini
 All commands (`rewind`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
 
 If you run into any issues with Gemini CLI integration, please [open an issue](https://github.com/entireio/cli/issues).
+
+### Codex
+
+Codex support is currently in preview. Entire can work with [Codex](https://help.openai.com/en/articles/11096431) as an alternative to Claude Code, or alongside it — you can have multiple agents' hooks enabled at the same time.
+
+To enable:
+
+```bash
+entire enable --agent codex
+```
+
+This command will also create or update `.codex/config.toml` with `codex_hooks = true` to enable Codex hooks. If you configure Codex manually, make sure this flag is set in your `.codex/config.toml`.
+Or select Codex from the interactive agent picker when running `entire enable`.
+
+All commands (`rewind`, `resume`, `status`, `doctor`, etc.) work the same regardless of which agent is configured.
+
+If you run into any issues with Codex integration, please [open an issue](https://github.com/entireio/cli/issues).
 
 ### OpenCode
 

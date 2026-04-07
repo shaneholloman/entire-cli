@@ -171,15 +171,6 @@ func ResolveCheckpointURL(ctx context.Context, pushRemoteName string) string {
 	return url
 }
 
-// resolveV2FetchRemote returns the remote to use for v2 fetch operations.
-// Returns the checkpoint remote URL if configured, otherwise "origin".
-func resolveV2FetchRemote(ctx context.Context) string {
-	if url := ResolveCheckpointURL(ctx, "origin"); url != "" {
-		return url
-	}
-	return "origin"
-}
-
 // ResolveRemoteRepo returns the host, owner, and repo name for the given git remote.
 // It parses the remote URL (SSH or HTTPS) and extracts the components.
 // For example, git@github.com:org/my-repo.git returns ("github.com", "org", "my-repo").

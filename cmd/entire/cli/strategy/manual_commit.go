@@ -79,7 +79,7 @@ func (s *ManualCommitStrategy) getV2CheckpointStore(ctx context.Context) (*check
 			s.v2CheckpointStoreErr = fmt.Errorf("failed to open repository: %w", err)
 			return
 		}
-		s.v2CheckpointStore = checkpoint.NewV2GitStore(repo, resolveV2FetchRemote(ctx))
+		s.v2CheckpointStore = checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
 	})
 	return s.v2CheckpointStore, s.v2CheckpointStoreErr
 }

@@ -7,8 +7,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 )
@@ -18,6 +20,8 @@ const (
 	EntireDir         = ".entire"
 	EntireTmpDir      = ".entire/tmp"
 	EntireMetadataDir = ".entire/metadata"
+
+	osWindows = "windows"
 )
 
 // Metadata file names
@@ -157,6 +161,16 @@ func IsSubpath(parent, child string) bool {
 // ToRelativePath converts an absolute path to relative.
 // Returns empty string if the path is outside the working directory.
 func ToRelativePath(absPath, cwd string) string {
+	absPath = normalizeMSYSPath(absPath)
+	cwd = normalizeMSYSPath(cwd)
+
+	// On Windows, MSYS/Git Bash sometimes omits the drive letter, producing
+	// paths like /Users/... that filepath.IsAbs doesn't recognize. Prepend
+	// the drive letter from cwd so filepath.Rel can match them.
+	if runtime.GOOS == osWindows && len(absPath) > 0 && absPath[0] == '/' && len(cwd) >= 2 && cwd[1] == ':' {
+		absPath = cwd[:2] + absPath
+	}
+
 	if !filepath.IsAbs(absPath) {
 		return absPath
 	}
@@ -166,6 +180,22 @@ func ToRelativePath(absPath, cwd string) string {
 	}
 
 	return relPath
+}
+
+// normalizeMSYSPath converts MSYS/Git Bash-style paths (e.g., /c/Users/...)
+// to Windows-style paths (e.g., C:/Users/...) so that filepath.IsAbs and
+// filepath.Rel work correctly. On non-Windows platforms this is a no-op.
+// Claude Code on Windows outputs MSYS paths in its transcript, but Go's
+// filepath package only recognizes Windows-style absolute paths.
+func normalizeMSYSPath(p string) string {
+	if runtime.GOOS != osWindows {
+		return p
+	}
+	// MSYS paths look like /c/Users/... where the second char is a drive letter
+	if len(p) >= 3 && p[0] == '/' && unicode.IsLetter(rune(p[1])) && p[2] == '/' {
+		return string(unicode.ToUpper(rune(p[1]))) + ":" + p[2:]
+	}
+	return p
 }
 
 // nonAlphanumericRegex matches any non-alphanumeric character

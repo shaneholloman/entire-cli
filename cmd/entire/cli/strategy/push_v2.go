@@ -398,7 +398,7 @@ func pushV2Refs(ctx context.Context, target string) {
 	if err != nil {
 		return
 	}
-	store := checkpoint.NewV2GitStore(repo, resolveV2FetchRemote(ctx))
+	store := checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
 	archived, err := store.ListArchivedGenerations()
 	if err != nil || len(archived) == 0 {
 		return
