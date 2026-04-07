@@ -27,7 +27,7 @@ func isCopilotFormat(content []byte) bool {
 		switch probe.Type {
 		case "session.start", "user.message", "assistant.message", "tool.execution_complete":
 			return true
-		case transcript.TypeUser, transcript.TypeAssistant, "human", "message":
+		case transcript.TypeUser, transcript.TypeAssistant, "human", transcriptTypeMessage:
 			return false
 		}
 	}
