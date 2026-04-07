@@ -27,4 +27,3 @@ func TestSplitPromptContent_EmptyContent(t *testing.T) {
 
 	assert.Nil(t, SplitPromptContent(""))
 }
-
