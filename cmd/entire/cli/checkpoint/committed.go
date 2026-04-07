@@ -854,6 +854,44 @@ func (s *GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoint
 	return &summary, nil
 }
 
+// ReadSessionMetadata reads only the metadata.json for a specific session within a checkpoint.
+// This is a lightweight read that avoids fetching transcript/prompt blobs.
+// sessionIndex is 0-based.
+func (s *GitStore) ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*CommittedMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	ft, err := s.getFetchingTree(ctx)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	checkpointPath := checkpointID.Path()
+	sessionPath := fmt.Sprintf("%s/%d", checkpointPath, sessionIndex)
+	sessionTree, err := ft.Tree(sessionPath)
+	if err != nil {
+		return nil, fmt.Errorf("session %d not found: %w", sessionIndex, err)
+	}
+
+	metadataFile, err := sessionTree.File(paths.MetadataFileName)
+	if err != nil {
+		return nil, fmt.Errorf("metadata.json not found for session %d: %w", sessionIndex, err)
+	}
+
+	content, err := metadataFile.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read session metadata: %w", err)
+	}
+
+	var metadata CommittedMetadata
+	if err := json.Unmarshal([]byte(content), &metadata); err != nil {
+		return nil, fmt.Errorf("failed to parse session metadata: %w", err)
+	}
+
+	return &metadata, nil
+}
+
 // ReadSessionContent reads the actual content for a specific session within a checkpoint.
 // sessionIndex is 0-based (0 for first session, 1 for second, etc.).
 // Returns the session's metadata, transcript, prompts, and context.

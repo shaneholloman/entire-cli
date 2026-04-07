@@ -929,7 +929,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	}
 	processSessionsLoop.End()
 
-	if err := s.updateCombinedAttributionForCheckpoint(ctx, repo, checkpointID); err != nil {
+	if err := s.updateCombinedAttributionForCheckpoint(ctx, repo, checkpointID, headTree, parentTree, worktreePath); err != nil {
 		logging.Warn(logCtx, "failed to update combined checkpoint attribution",
 			slog.String("checkpoint_id", checkpointID.String()),
 			slog.String("error", err.Error()))
@@ -965,7 +965,18 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	return nil
 }
 
-func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx context.Context, repo *git.Repository, checkpointID id.CheckpointID) error {
+// updateCombinedAttributionForCheckpoint computes holistic attribution across all sessions.
+// Instead of summing per-session numbers (which inflates totals because each session
+// independently counts the full commit), this diffs parent→HEAD once and classifies
+// lines as agent or human based on the union of all sessions' files_touched.
+func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
+	ctx context.Context,
+	repo *git.Repository,
+	checkpointID id.CheckpointID,
+	headTree, parentTree *object.Tree,
+	repoDir string,
+) error {
+	logCtx := logging.WithComponent(ctx, "attribution")
 	store := checkpoint.NewGitStore(repo)
 
 	summary, err := store.ReadCommitted(ctx, checkpointID)
@@ -976,63 +987,91 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(ctx contex
 		return nil
 	}
 
-	combined := aggregateCheckpointAttribution()
+	// Collect union of files_touched from sessions that had real checkpoints (SaveStep ran).
+	// Sessions with checkpoints_count == 0 (e.g., commit-only sessions) use a fallback that
+	// includes ALL committed files, which would incorrectly classify human-created files as agent work.
+	agentFiles := make(map[string]struct{})
 	for i := range len(summary.Sessions) {
-		content, readErr := store.ReadSessionContent(ctx, checkpointID, i)
-		if readErr != nil || content == nil || content.Metadata.InitialAttribution == nil {
+		metadata, readErr := store.ReadSessionMetadata(ctx, checkpointID, i)
+		if readErr != nil || metadata == nil {
 			continue
 		}
-		combined.add(content.Metadata.InitialAttribution)
+		if metadata.CheckpointsCount == 0 {
+			continue // Skip sessions that used the filesTouched fallback
+		}
+		for _, f := range metadata.FilesTouched {
+			agentFiles[f] = struct{}{}
+		}
 	}
 
-	if !combined.hasData() {
+	if len(agentFiles) == 0 {
 		return nil
 	}
 
-	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined.snapshot()); err != nil {
-		return fmt.Errorf("updating combined attribution: %w", err)
+	// Get all files changed in this commit (parent → HEAD)
+	allChangedFiles, err := getAllChangedFiles(ctx, parentTree, headTree, repoDir, "", "")
+	if err != nil {
+		logging.Warn(logCtx, "combined attribution: failed to enumerate changed files",
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	// Classify each changed file as agent or human and count lines
+	var agentAdded, agentRemoved, humanAdded, humanRemoved int
+	for _, filePath := range allChangedFiles {
+		// Skip CLI/agent config metadata — not human or agent code work
+		if strings.HasPrefix(filePath, ".entire/") || strings.HasPrefix(filePath, paths.EntireMetadataDir+"/") ||
+			strings.HasPrefix(filePath, ".claude/") {
+			continue
+		}
+
+		parentContent := getFileContent(parentTree, filePath)
+		headContent := getFileContent(headTree, filePath)
+		_, added, removed := diffLines(parentContent, headContent)
+
+		if _, isAgent := agentFiles[filePath]; isAgent {
+			agentAdded += added
+			agentRemoved += removed
+		} else {
+			humanAdded += added
+			humanRemoved += removed
+		}
+	}
+
+	totalLinesChanged := agentAdded + agentRemoved + humanAdded + humanRemoved
+	totalCommitted := agentAdded + humanAdded
+
+	var agentPercentage float64
+	if totalLinesChanged > 0 {
+		agentPercentage = float64(agentAdded+agentRemoved) / float64(totalLinesChanged) * 100
+	}
+
+	combined := &checkpoint.InitialAttribution{
+		CalculatedAt:      time.Now().UTC(),
+		AgentLines:        agentAdded,
+		AgentRemoved:      agentRemoved,
+		HumanAdded:        humanAdded,
+		HumanRemoved:      humanRemoved,
+		TotalCommitted:    totalCommitted,
+		TotalLinesChanged: totalLinesChanged,
+		AgentPercentage:   agentPercentage,
+		MetricVersion:     2,
+	}
+
+	logging.Info(logCtx, "combined attribution calculated",
+		slog.String("checkpoint_id", checkpointID.String()),
+		slog.Int("sessions", len(summary.Sessions)),
+		slog.Int("agent_files", len(agentFiles)),
+		slog.Int("agent_lines", agentAdded),
+		slog.Int("human_added", humanAdded),
+		slog.Float64("agent_percentage", agentPercentage),
+	)
+
+	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined); err != nil {
+		return fmt.Errorf("persisting combined attribution: %w", err)
 	}
 
 	return nil
-}
-
-type checkpointAttributionAggregate struct {
-	agentLines     int
-	humanAdded     int
-	humanModified  int
-	humanRemoved   int
-	totalCommitted int
-}
-
-func aggregateCheckpointAttribution() *checkpointAttributionAggregate {
-	return &checkpointAttributionAggregate{}
-}
-
-func (a *checkpointAttributionAggregate) add(attr *checkpoint.InitialAttribution) {
-	a.agentLines += attr.AgentLines
-	a.humanAdded += attr.HumanAdded
-	a.humanModified += attr.HumanModified
-	a.humanRemoved += attr.HumanRemoved
-	a.totalCommitted += attr.TotalCommitted
-}
-
-func (a *checkpointAttributionAggregate) hasData() bool {
-	return a.agentLines != 0 || a.humanAdded != 0 || a.humanModified != 0 || a.humanRemoved != 0 || a.totalCommitted != 0
-}
-
-func (a *checkpointAttributionAggregate) snapshot() *checkpoint.InitialAttribution {
-	attr := &checkpoint.InitialAttribution{
-		CalculatedAt:   time.Now().UTC(),
-		AgentLines:     a.agentLines,
-		HumanAdded:     a.humanAdded,
-		HumanModified:  a.humanModified,
-		HumanRemoved:   a.humanRemoved,
-		TotalCommitted: a.totalCommitted,
-	}
-	if a.totalCommitted > 0 {
-		attr.AgentPercentage = float64(a.agentLines) / float64(a.totalCommitted) * 100
-	}
-	return attr
 }
 
 // postCommitProcessSession handles a single session within the PostCommit loop.
