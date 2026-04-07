@@ -202,3 +202,71 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	assert.Contains(t, transcript, `{"line":"three"}`)
 	assert.Contains(t, transcript, `{"line":"four"}`)
 }
+
+func TestV2ReadSessionCompactTranscript_ReturnsCompactData(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("b0b1b2b3b4b5")
+	ctx := context.Background()
+
+	compact := []byte(`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","content":[{"text":"hello compact"}]}` + "\n")
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-compact",
+		Strategy:          "manual-commit",
+		Transcript:        []byte(`{"raw":true}` + "\n"),
+		CompactTranscript: compact,
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	})
+	require.NoError(t, err)
+
+	content, err := store.ReadSessionCompactTranscript(ctx, cpID, 0)
+	require.NoError(t, err)
+	require.Equal(t, compact, content)
+}
+
+func TestV2ReadSessionCompactTranscript_MissingCompactTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("c0c1c2c3c4c5")
+	ctx := context.Background()
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-no-compact",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"raw":true}` + "\n"),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	_, err = store.ReadSessionCompactTranscript(ctx, cpID, 0)
+	require.ErrorIs(t, err, ErrNoTranscript)
+}
+
+func TestV2ReadSessionCompactTranscript_MissingCheckpointOrSession(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	_, err := store.ReadSessionCompactTranscript(ctx, id.MustCheckpointID("d0d1d2d3d4d5"), 0)
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
+
+	cpID := id.MustCheckpointID("e0e1e2e3e4e5")
+	require.NoError(t, store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-0",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"raw":true}` + "\n"),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+
+	_, err = store.ReadSessionCompactTranscript(ctx, cpID, 99)
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
+}

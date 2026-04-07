@@ -989,6 +989,75 @@ func TestRunExplainCheckpoint_V2OnlyRawTranscript(t *testing.T) {
 	}
 }
 
+func TestRunExplainCheckpoint_V2UsesCompactTranscriptForIntent(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := wt.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings: %v", err)
+	}
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("999999999999")
+	ctx := context.Background()
+
+	compactTranscript := []byte(
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"compact prompt text"}]}` + "\n" +
+			`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"m1","content":[{"type":"text","text":"assistant reply"}]}` + "\n",
+	)
+
+	if err := v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID:              cpID,
+		SessionID:                 "session-v2",
+		Strategy:                  "manual-commit",
+		Transcript:                []byte(`{"type":"user","message":{"content":[{"type":"text","text":"raw prompt text"}]}}` + "\n"),
+		CompactTranscript:         compactTranscript,
+		AuthorName:                "Test",
+		AuthorEmail:               "test@example.com",
+		CheckpointTranscriptStart: 0,
+	}); err != nil {
+		t.Fatalf("failed to write v2 checkpoint: %v", err)
+	}
+
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(context.Background(), &buf, &errBuf, "999999", false, false, false, false, false, false, false)
+	if err != nil {
+		t.Fatalf("expected success for v2 checkpoint, got error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Intent: compact prompt text") {
+		t.Fatalf("expected compact transcript to drive intent extraction, got: %s", output)
+	}
+}
+
 func TestFormatCheckpointOutput_Short(t *testing.T) {
 	summary := &checkpoint.CheckpointSummary{
 		CheckpointID:     id.MustCheckpointID("abc123def456"),

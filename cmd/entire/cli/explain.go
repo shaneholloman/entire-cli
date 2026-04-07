@@ -26,6 +26,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
+	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -272,6 +273,26 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	content, err := readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint content: %w", err)
+	}
+
+	// For v2 checkpoints, prefer compact transcript.jsonl from /main for
+	// human-readable output (default and --short/verbose modes). Keep --full
+	// on raw full.jsonl semantics.
+	if !full {
+		if v2Reader, ok := resolvedReader.(*checkpoint.V2GitStore); ok && len(summary.Sessions) > 0 {
+			latestIndex := len(summary.Sessions) - 1
+			compactTranscript, compactErr := v2Reader.ReadSessionCompactTranscript(ctx, fullCheckpointID, latestIndex)
+			if compactErr == nil && len(compactTranscript) > 0 {
+				content.Transcript = compactTranscript
+				content.Metadata.CheckpointTranscriptStart = 0
+				content.Metadata.TranscriptLinesAtStart = 0
+			} else if compactErr != nil && !errors.Is(compactErr, checkpoint.ErrNoTranscript) && !errors.Is(compactErr, checkpoint.ErrCheckpointNotFound) {
+				logging.Debug(ctx, "failed to read compact transcript, using raw transcript",
+					slog.String("checkpoint_id", fullCheckpointID.String()),
+					slog.String("error", compactErr.Error()),
+				)
+			}
+		}
 	}
 
 	// Handle summary generation
@@ -624,7 +645,10 @@ func extractPromptsFromTranscript(transcriptBytes []byte, agentType types.AgentT
 	}
 
 	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
-	if err != nil {
+	if err != nil || len(condensed) == 0 {
+		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
+	}
+	if err != nil || len(condensed) == 0 {
 		return nil
 	}
 
@@ -773,6 +797,9 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 
 	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
 	if err != nil || len(condensed) == 0 {
+		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
+	}
+	if err != nil || len(condensed) == 0 {
 		if fallback != "" {
 			return fallback + "\n"
 		}
@@ -781,6 +808,31 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 
 	input := summarize.Input{Transcript: condensed}
 	return summarize.FormatCondensedTranscript(input)
+}
+
+func buildCondensedCompactTranscriptEntries(transcriptBytes []byte) ([]summarize.Entry, error) {
+	compactEntries, err := transcriptcompact.BuildCondensedEntries(transcriptBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]summarize.Entry, 0, len(compactEntries))
+	for _, entry := range compactEntries {
+		switch entry.Type {
+		case "user":
+			entries = append(entries, summarize.Entry{Type: summarize.EntryTypeUser, Content: entry.Content})
+		case "assistant":
+			entries = append(entries, summarize.Entry{Type: summarize.EntryTypeAssistant, Content: entry.Content})
+		case "tool":
+			entries = append(entries, summarize.Entry{Type: summarize.EntryTypeTool, ToolName: entry.ToolName, ToolDetail: entry.ToolDetail})
+		}
+	}
+
+	if len(entries) == 0 {
+		return nil, errors.New("no parseable compact transcript entries")
+	}
+
+	return entries, nil
 }
 
 // formatSummaryDetails formats the detailed sections of an AI summary.

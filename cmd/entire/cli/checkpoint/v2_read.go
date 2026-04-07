@@ -129,6 +129,51 @@ func (s *V2GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error)
 	return checkpoints, nil
 }
 
+// ReadSessionCompactTranscript reads transcript.jsonl for a session from the v2
+// /main ref. Returns ErrNoTranscript when compact transcript is missing.
+func (s *V2GitStore) ReadSessionCompactTranscript(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	_, rootTreeHash, err := s.GetRefState(refName)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	rootTree, err := s.repo.TreeObject(rootTreeHash)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	cpTree, err := rootTree.Tree(checkpointID.Path())
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	sessionDir := strconv.Itoa(sessionIndex)
+	sessionTree, err := cpTree.Tree(sessionDir)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	compactFile, err := sessionTree.File(paths.CompactTranscriptFileName)
+	if err != nil {
+		return nil, ErrNoTranscript
+	}
+
+	content, err := compactFile.Contents()
+	if err != nil {
+		return nil, ErrNoTranscript
+	}
+	if content == "" {
+		return nil, ErrNoTranscript
+	}
+
+	return []byte(content), nil
+}
+
 // ReadSessionContent reads a session's metadata and prompts from the v2 /main ref,
 // and the raw transcript (full.jsonl) from /full/* refs (current + archived generations).
 // This is the v2 equivalent of GitStore.ReadSessionContent — it reads the raw agent
