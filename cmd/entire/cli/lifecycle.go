@@ -622,7 +622,22 @@ func handleLifecycleSessionEnd(ctx context.Context, ag agent.Agent, event *agent
 	if err := markSessionEnded(ctx, event, event.SessionID); err != nil {
 		logging.Warn(logCtx, "failed to mark session ended",
 			slog.String("error", err.Error()))
+		// Don't attempt eager condense if we couldn't even mark the session ended —
+		// the session state may be in an inconsistent state.
+		return nil
 	}
+
+	// Eagerly condense session data so PostCommit doesn't have to process it.
+	// This prevents zombie ENDED sessions from accumulating and causing O(N)
+	// overhead on every future commit (GitHub issue #591).
+	// Fail-open: if this fails, PostCommit will still process it on the next commit.
+	strat := GetStrategy(ctx)
+	if err := strat.CondenseAndMarkFullyCondensed(ctx, event.SessionID); err != nil {
+		logging.Warn(logCtx, "eager condense on session stop failed",
+			slog.String("session_id", event.SessionID),
+			slog.String("error", err.Error()))
+	}
+
 	return nil
 }
 

@@ -1,0 +1,4 @@
+./benchutil.go
+./bench_test.go
+./benchutil_test.go
+./parse_tree_bench_test.go

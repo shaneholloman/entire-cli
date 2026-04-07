@@ -1,0 +1,11 @@
+./agent.go
+./claude.go
+./codex.go
+./copilot-cli.go
+./cursor_cli.go
+./droid.go
+./gemini.go
+./opencode.go
+./roger_roger.go
+./tmux.go
+./vogon.go

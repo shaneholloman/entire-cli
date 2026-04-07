@@ -1,0 +1,6 @@
+./capabilities.go
+./discovery.go
+./external.go
+./types.go
+./discovery_test.go
+./external_test.go

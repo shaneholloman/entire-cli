@@ -1,0 +1,10 @@
+./cli_commands.go
+./hooks.go
+./lifecycle.go
+./opencode.go
+./plugin.go
+./transcript.go
+./types.go
+./hooks_test.go
+./lifecycle_test.go
+./transcript_test.go

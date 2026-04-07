@@ -1,0 +1,4 @@
+./capabilities.go
+./discovery.go
+./external.go
+./types.go

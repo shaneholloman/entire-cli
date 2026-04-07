@@ -453,6 +453,82 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return nil
 }
 
+// FetchV2MainTreeOnly fetches the tip of the v2 /main ref from origin with
+// --depth=1 --filter=blob:none, downloading only the latest commit and its
+// tree objects (no blobs, no history).
+// Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
+func FetchV2MainTreeOnly(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "--depth=1", "--filter=blob:none", "origin", refSpec)
+	if output, err := fetchCmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("v2 treeless fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to treeless-fetch v2 /main from origin: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	return nil
+}
+
+// FetchV2MainRef fetches the v2 /main ref from origin (full fetch, including blobs).
+// Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
+func FetchV2MainRef(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "origin", refSpec)
+	if output, err := fetchCmd.CombinedOutput(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errors.New("v2 fetch timed out after 2 minutes")
+		}
+		return fmt.Errorf("failed to fetch v2 /main from origin: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+
+	return nil
+}
+
+// FetchV2MetadataFromCheckpointRemote fetches the v2 /main ref from the
+// configured checkpoint_remote URL.
+// Returns an error if the fetch fails or no checkpoint_remote is configured.
+func FetchV2MetadataFromCheckpointRemote(ctx context.Context) error {
+	checkpointURL, hasCheckpointRemote, resolveErr := strategy.ResolveCheckpointRemoteURL(ctx)
+	if !hasCheckpointRemote {
+		return errors.New("no checkpoint_remote configured")
+	}
+	if resolveErr != nil {
+		return fmt.Errorf("checkpoint_remote configured but could not resolve URL: %w", resolveErr)
+	}
+
+	if err := strategy.FetchV2MainFromURL(ctx, checkpointURL); err != nil {
+		return fmt.Errorf("failed to fetch v2 /main from checkpoint remote: %w", err)
+	}
+	return nil
+}
+
+// FetchMetadataFromCheckpointRemote fetches the entire/checkpoints/v1 branch from the
+// configured checkpoint_remote URL and updates the local branch.
+// Returns an error if the fetch fails or no checkpoint_remote is configured.
+func FetchMetadataFromCheckpointRemote(ctx context.Context) error {
+	checkpointURL, hasCheckpointRemote, resolveErr := strategy.ResolveCheckpointRemoteURL(ctx)
+	if !hasCheckpointRemote {
+		return errors.New("no checkpoint_remote configured")
+	}
+	if resolveErr != nil {
+		return fmt.Errorf("checkpoint_remote configured but could not resolve URL: %w", resolveErr)
+	}
+
+	if err := strategy.FetchMetadataBranch(ctx, checkpointURL); err != nil {
+		return fmt.Errorf("failed to fetch from checkpoint remote: %w", err)
+	}
+	return nil
+}
+
 // FetchBlobsByHash fetches specific blob objects from the remote by their SHA-1 hashes.
 // Uses "git fetch origin <hash>" which goes through normal credential helpers,
 // unlike fetch-pack which bypasses them. Requires the server to support

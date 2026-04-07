@@ -618,15 +618,22 @@ type postCommitActionHandler struct {
 	// Cached git objects — resolved once per PostCommit invocation to avoid
 	// redundant reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// CondenseSession, and calculateSessionAttributions.
-	headTree         *object.Tree        // HEAD commit tree (shared across all sessions)
-	parentTree       *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
-	parentCommitHash string              // HEAD's first parent hash (empty for initial commits)
-	shadowRef        *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
-	shadowTree       *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
-	allAgentFiles    map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
+	headTree      *object.Tree        // HEAD commit tree (shared across all sessions)
+	parentTree    *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
+	shadowRef     *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
+	shadowTree    *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
+	allAgentFiles map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	condensed bool
+}
+
+// parentCommitHash returns the first parent's hash as a string, or empty for initial commits.
+func (h *postCommitActionHandler) parentCommitHash() string {
+	if h.commit.NumParents() > 0 && len(h.commit.ParentHashes) > 0 {
+		return h.commit.ParentHashes[0].String()
+	}
+	return ""
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
@@ -647,7 +654,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			headTree:         h.headTree,
 			parentTree:       h.parentTree,
 			repoDir:          h.repoDir,
-			parentCommitHash: h.parentCommitHash,
+			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
 		})
@@ -676,7 +683,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			headTree:         h.headTree,
 			parentTree:       h.parentTree,
 			repoDir:          h.repoDir,
-			parentCommitHash: h.parentCommitHash,
+			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
 		})
@@ -886,9 +893,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		headTree = t
 	}
 	var parentTree *object.Tree
-	var parentCommitHash string
 	if commit.NumParents() > 0 && len(commit.ParentHashes) > 0 {
-		parentCommitHash = commit.ParentHashes[0].String()
 		if parent, err := commit.Parent(0); err == nil {
 			if t, err := parent.Tree(); err == nil {
 				parentTree = t
@@ -918,7 +923,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		}
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
-			head, commit, newHead, worktreePath, headTree, parentTree, parentCommitHash,
+			head, commit, newHead, worktreePath, headTree, parentTree,
 			committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch, allAgentFiles)
 		iterSpan.End()
 	}
@@ -1044,7 +1049,6 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	newHead string,
 	repoDir string,
 	headTree, parentTree *object.Tree,
-	parentCommitHash string,
 	committedFileSet map[string]struct{},
 	shadowBranchesToDelete map[string]struct{},
 	uncondensedActiveOnBranch map[string]bool,
@@ -1137,7 +1141,6 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		filesTouchedBefore:     filesTouchedBefore,
 		headTree:               headTree,
 		parentTree:             parentTree,
-		parentCommitHash:       parentCommitHash,
 		shadowRef:              shadowRef,
 		shadowTree:             shadowTree,
 		allAgentFiles:          allAgentFiles,
@@ -1185,16 +1188,17 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		// Clear filesystem prompt.txt only when ALL files are committed.
 		// If carry-forward files remain, the prompt must persist so the next
 		// condensation (triggered by the next commit) can read it.
-		if len(remainingFiles) == 0 {
+		if len(state.FilesTouched) == 0 {
 			clearFilesystemPrompt(ctx, state.SessionID)
 		}
 	}
 	carryForwardSpan.End()
 
-	// Mark ENDED sessions as fully condensed when no carry-forward remains.
-	// PostCommit will skip these sessions entirely on future commits.
-	// They persist only for LastCheckpointID (amend trailer restoration).
-	if handler.condensed && state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 {
+	// Mark ENDED sessions as fully condensed when there's nothing left to do.
+	// Either we just condensed (no carry-forward remains) or there was never any
+	// new content. PostCommit will skip these on future commits; they persist only
+	// for LastCheckpointID (amend trailer restoration).
+	if state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 && (handler.condensed || !hasNew) {
 		state.FullyCondensed = true
 	}
 
@@ -1383,12 +1387,10 @@ func (s *ManualCommitStrategy) filterSessionsWithNewContent(ctx context.Context,
 		}
 		hasNew, err := s.sessionHasNewContent(ctx, repo, state, contentCheckOpts{stagedFiles: stagedFiles})
 		if err != nil {
-			logging.Debug(logCtx, "filterSessionsWithNewContent: error checking session, including it (fail-open)",
+			logging.Debug(logCtx, "filterSessionsWithNewContent: error checking session, skipping it",
 				slog.String("session_id", state.SessionID),
 				slog.String("error", err.Error()),
 			)
-			// On error, include the session (fail open for hooks)
-			result = append(result, state)
 			continue
 		}
 		if !hasNew {
@@ -1816,9 +1818,13 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 		for _, f := range modifiedFiles {
 			if rel := paths.ToRelativePath(f, basePath); rel != "" {
 				normalized = append(normalized, filepath.ToSlash(rel))
-			} else {
+			} else if len(f) > 0 && !filepath.IsAbs(f) && f[0] != '/' {
+				// Already relative — keep as-is
 				normalized = append(normalized, filepath.ToSlash(f))
 			}
+			// else: absolute path outside repo — skip. These can't match
+			// committed file paths (which are repo-relative) and would
+			// create phantom carry-forward branches.
 		}
 		modifiedFiles = normalized
 	}
@@ -2447,6 +2453,26 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			Transcript:   fullTranscript,
 			Prompts:      prompts,
 			Agent:        state.AgentType,
+		}
+
+		// Generate compact transcript for v2 /main
+		if v2Store != nil && len(fullTranscript) > 0 {
+			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
+			startLine := 0
+			if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
+				startLine = content.Metadata.GetTranscriptStart()
+			} else {
+				errMsg := "unknown"
+				if readErr != nil {
+					errMsg = readErr.Error()
+				}
+				logging.Debug(logCtx, "finalize: failed to read checkpoint metadata, using full transcript for compact output",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("session_id", state.SessionID),
+					slog.String("error", errMsg),
+				)
+			}
+			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, fullTranscript, startLine)
 		}
 
 		updateErr := store.UpdateCommitted(ctx, updateOpts)

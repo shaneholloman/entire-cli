@@ -1008,6 +1008,92 @@ func TestFormatSettingsStatusShort_Disabled(t *testing.T) {
 	}
 }
 
+func TestRunStatus_ShowsEnabledAgents(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, false); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Agents ·") {
+		t.Errorf("Expected 'Agents ·' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "Claude Code") {
+		t.Errorf("Expected 'Claude Code' in output, got: %s", output)
+	}
+}
+
+func TestRunStatus_EnabledNoAgentsHidesHooksLine(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	// No agent hooks installed
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, false); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "Agents ·") {
+		t.Errorf("Should not show hooks line when no agents installed, got: %s", output)
+	}
+}
+
+func TestRunStatus_DetailedShowsEnabledAgents(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, true); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Agents ·") {
+		t.Errorf("Expected 'Agents ·' in detailed output, got: %s", output)
+	}
+	if !strings.Contains(output, "Claude Code") {
+		t.Errorf("Expected 'Claude Code' in detailed output, got: %s", output)
+	}
+}
+
+func TestRunStatus_DetailedDisabledDoesNotShowAgents(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, true); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "Agents ·") {
+		t.Errorf("Disabled detailed status should not show agents, got: %s", output)
+	}
+}
+
+func TestRunStatus_DisabledDoesNotShowAgents(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
+
+	var stdout bytes.Buffer
+	if err := runStatus(context.Background(), &stdout, false); err != nil {
+		t.Fatalf("runStatus() error = %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "Agents ·") {
+		t.Errorf("Disabled status should not show agents, got: %s", output)
+	}
+}
+
 func TestFormatSettingsStatus_Project(t *testing.T) {
 	t.Parallel()
 

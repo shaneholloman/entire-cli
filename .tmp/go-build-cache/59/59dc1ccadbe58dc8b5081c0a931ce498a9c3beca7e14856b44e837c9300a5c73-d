@@ -1,0 +1,4 @@
+./pii.go
+./redact.go
+./pii_test.go
+./redact_test.go

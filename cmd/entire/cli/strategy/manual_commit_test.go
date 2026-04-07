@@ -24,6 +24,9 @@ import (
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
 
+// testTranscriptPromptResponse is a minimal transcript used across strategy tests.
+const testTranscriptPromptResponse = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
+
 func TestShadowStrategy_ValidateRepository(t *testing.T) {
 	dir := t.TempDir()
 	_, err := git.PlainInit(dir, false)
@@ -824,6 +827,42 @@ func TestShadowStrategy_PrepareCommitMsg_SkipSources(t *testing.T) {
 	}
 }
 
+func TestShadowStrategy_PrepareCommitMsg_SkipsSessionWhenContentCheckFails(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+
+	err = s.InitializeSession(context.Background(), "test-session-corrupt-shadow", agent.AgentTypeClaudeCode, "", "", "")
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), "test-session-corrupt-shadow")
+	require.NoError(t, err)
+	require.NotNil(t, state)
+
+	shadowBranch := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
+	corruptRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(shadowBranch), plumbing.ZeroHash)
+	require.NoError(t, repo.Storer.SetReference(corruptRef))
+
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	originalMsg := "Test commit\n"
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
+	_, found := trailers.ParseCheckpoint(string(content))
+	require.False(t, found, "corrupt session state should not add a dangling checkpoint trailer")
+	require.Equal(t, originalMsg, string(content))
+}
+
 func TestAddCheckpointTrailer_NoComment(t *testing.T) {
 	// Test that addCheckpointTrailer adds trailer without any comment lines
 	message := "Test commit message\n" //nolint:goconst // already present in codebase
@@ -1501,7 +1540,7 @@ func TestShadowStrategy_CondenseSession_EphemeralBranchTrailer(t *testing.T) {
 		t.Fatalf("failed to create metadata dir: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(testTranscript), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(testTranscriptPromptResponse), 0o644); err != nil {
 		t.Fatalf("failed to write transcript: %v", err)
 	}
 
@@ -3909,7 +3948,8 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	metadataDirAbs := filepath.Join(dir, metadataDir)
 	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
 
-	transcript := `{"type":"human","message":{"content":"hello"}}
+	secret := "q9Xv2Lm8Rt1Yp4Kd7Wz0Hs6Nc3Bf5Jg"
+	transcript := `{"type":"human","message":{"content":"hello secret: ` + secret + `"}}
 {"type":"assistant","message":{"content":"hi there"}}
 `
 	require.NoError(t, os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript), 0o644))
@@ -3930,6 +3970,7 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	require.NoError(t, err)
 	state.TranscriptPath = filepath.Join(metadataDirAbs, paths.TranscriptFileName)
 	state.BaseCommit = commitHash.String()[:7]
+	state.AgentType = agent.AgentTypeClaudeCode
 
 	checkpointID := id.MustCheckpointID("dd11ee22ff33")
 	result, err := s.CondenseSession(context.Background(), repo, checkpointID, state, nil)
@@ -3951,7 +3992,7 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	require.NoError(t, err, "v2 /full/current ref should exist")
 	require.NotEqual(t, plumbing.ZeroHash, v2FullRef.Hash())
 
-	// Verify /main has metadata but no transcript
+	// Verify /main has metadata and redacted compact transcript
 	v2MainCommit, err := repo.CommitObject(v2MainRef.Hash())
 	require.NoError(t, err)
 	v2MainTree, err := v2MainCommit.Tree()
@@ -3964,6 +4005,14 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	// Root metadata.json should exist
 	_, err = mainCpTree.File(paths.MetadataFileName)
 	require.NoError(t, err, "root metadata.json should exist on /main")
+
+	mainSessionTree, err := mainCpTree.Tree("0")
+	require.NoError(t, err)
+	compactFile, err := mainSessionTree.File(paths.CompactTranscriptFileName)
+	require.NoError(t, err, "transcript.jsonl should exist on /main")
+	compactContent, err := compactFile.Contents()
+	require.NoError(t, err)
+	require.NotContains(t, compactContent, secret, "compact transcript on /main must be redacted")
 
 	// Verify /full/current has transcript
 	v2FullCommit, err := repo.CommitObject(v2FullRef.Hash())

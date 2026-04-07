@@ -1,0 +1,9 @@
+./error.go
+./hash.go
+./hasher.go
+./memory.go
+./object.go
+./objectid.go
+./reference.go
+./revision.go
+./tag.go

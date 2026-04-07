@@ -1,0 +1,9 @@
+./copilotcli.go
+./hooks.go
+./lifecycle.go
+./transcript.go
+./types.go
+./copilotcli_test.go
+./hooks_test.go
+./lifecycle_test.go
+./transcript_test.go

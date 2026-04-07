@@ -1,0 +1,7 @@
+# test log
+open testdata/opencode_full.jsonl
+open testdata/opencode_expected.jsonl
+open testdata/claude_full2.jsonl
+open testdata/claude_full.jsonl
+open testdata/claude_expected.jsonl
+open testdata/claude_expected2.jsonl

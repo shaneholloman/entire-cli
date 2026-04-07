@@ -1,0 +1,4 @@
+./client.go
+./store.go
+./client_test.go
+./store_test.go

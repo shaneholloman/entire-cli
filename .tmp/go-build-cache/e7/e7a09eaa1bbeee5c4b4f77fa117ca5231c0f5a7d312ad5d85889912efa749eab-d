@@ -1,0 +1,3 @@
+./detached.go
+./detached_unix.go
+./detached_test.go

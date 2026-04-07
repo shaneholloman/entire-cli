@@ -1,0 +1,15 @@
+./common.go
+./fetch.go
+./loader.go
+./mocks.go
+./negotiate.go
+./pack.go
+./push.go
+./receive_pack.go
+./registry.go
+./serve.go
+./serverinfo.go
+./service.go
+./transport.go
+./upload_pack.go
+./version.go

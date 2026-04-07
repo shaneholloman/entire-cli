@@ -1,0 +1,4 @@
+./store.go
+./trail.go
+./store_test.go
+./trail_test.go

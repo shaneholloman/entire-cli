@@ -1,0 +1,9 @@
+./codex.go
+./hooks.go
+./lifecycle.go
+./transcript.go
+./types.go
+./codex_test.go
+./hooks_test.go
+./lifecycle_test.go
+./transcript_test.go
