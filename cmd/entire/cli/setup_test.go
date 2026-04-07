@@ -1342,6 +1342,165 @@ func TestUninstallDeselectedAgentHooks_MultipleInstalled_DeselectOne(t *testing.
 	}
 }
 
+func TestManageAgents_DeselectRemovesAgent(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+
+	// Install Claude Code hooks
+	writeClaudeHooksFixture(t)
+
+	if !checkClaudeCodeHooksInstalled() {
+		t.Fatal("Expected Claude Code hooks to be installed before test")
+	}
+
+	// Deselect claude-code, select gemini instead
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameGemini)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	output := buf.String()
+
+	// Claude Code hooks should be removed
+	if checkClaudeCodeHooksInstalled() {
+		t.Error("Expected Claude Code hooks to be uninstalled after deselection")
+	}
+
+	if !strings.Contains(output, "Removed agents") {
+		t.Errorf("Expected output to mention removed agents, got: %s", output)
+	}
+}
+
+func TestManageAgents_DeselectAll_RemovesAllAndShowsGuidance(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	if !checkClaudeCodeHooksInstalled() {
+		t.Fatal("Expected Claude Code hooks to be installed before test")
+	}
+
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "All agents have been removed.") {
+		t.Errorf("Expected 'All agents have been removed.' message, got: %s", output)
+	}
+	if !strings.Contains(output, "entire configure --agent") {
+		t.Errorf("Expected guidance on how to re-add agents, got: %s", output)
+	}
+
+	if checkClaudeCodeHooksInstalled() {
+		t.Error("Expected Claude Code hooks to be uninstalled after deselecting all")
+	}
+}
+
+func TestManageAgents_NoChanges(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	// Keep the same selection
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "No changes made.") {
+		t.Errorf("Expected 'No changes made.' output, got: %s", buf.String())
+	}
+}
+
+func TestManageAgents_AddAndRemove(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+
+	// Install Claude Code hooks
+	writeClaudeHooksFixture(t)
+
+	// Deselect claude-code, add gemini
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameGemini)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Added agents") {
+		t.Errorf("Expected 'Added agents' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "Removed agents") {
+		t.Errorf("Expected 'Removed agents' in output, got: %s", output)
+	}
+
+	// Verify hooks on disk: Claude removed, Gemini added
+	if checkClaudeCodeHooksInstalled() {
+		t.Error("Expected Claude Code hooks to be uninstalled after deselection")
+	}
+	if !checkGeminiCLIHooksInstalled() {
+		t.Error("Expected Gemini CLI hooks to be installed after selection")
+	}
+}
+
+func TestConfigureCmd_RemoveFlag_StillWorks(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	if !checkClaudeCodeHooksInstalled() {
+		t.Fatal("Expected Claude Code hooks to be installed before test")
+	}
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--remove", "claude-code"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --remove claude-code error = %v", err)
+	}
+
+	if checkClaudeCodeHooksInstalled() {
+		t.Error("Expected Claude Code hooks to be removed after --remove")
+	}
+
+	if !strings.Contains(stdout.String(), "Removed") {
+		t.Errorf("Expected removal message, got: %s", stdout.String())
+	}
+}
+
 func TestDetectOrSelectAgent_ReRun_NewlyDetectedAgentAvailableNotPreSelected(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)

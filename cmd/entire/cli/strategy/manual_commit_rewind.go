@@ -640,7 +640,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 	var summary *cpkg.CheckpointSummary
 
 	if settings.IsCheckpointsV2Enabled(ctx) {
-		v2Store, v2Err := s.getV2CheckpointStore()
+		v2Store, v2Err := s.getV2CheckpointStore(ctx)
 		if v2Err == nil {
 			v2Summary, readErr := v2Store.ReadCommitted(ctx, point.CheckpointID)
 			if readErr != nil {

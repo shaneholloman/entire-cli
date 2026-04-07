@@ -71,14 +71,15 @@ func (s *ManualCommitStrategy) getCheckpointStore() (*checkpoint.GitStore, error
 }
 
 // getV2CheckpointStore returns the v2 checkpoint store, initializing it lazily.
-func (s *ManualCommitStrategy) getV2CheckpointStore() (*checkpoint.V2GitStore, error) {
+// The context from the first call is used for initialization (settings loading, repo opening).
+func (s *ManualCommitStrategy) getV2CheckpointStore(ctx context.Context) (*checkpoint.V2GitStore, error) {
 	s.v2CheckpointStoreOnce.Do(func() {
-		repo, err := OpenRepository(context.Background())
+		repo, err := OpenRepository(ctx)
 		if err != nil {
 			s.v2CheckpointStoreErr = fmt.Errorf("failed to open repository: %w", err)
 			return
 		}
-		s.v2CheckpointStore = checkpoint.NewV2GitStore(repo)
+		s.v2CheckpointStore = checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
 	})
 	return s.v2CheckpointStore, s.v2CheckpointStoreErr
 }

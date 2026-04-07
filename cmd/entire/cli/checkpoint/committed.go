@@ -975,65 +975,37 @@ func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
 	var checkpoints []CommittedInfo
 
 	// Scan sharded structure: <2-char-prefix>/<remaining-id>/metadata.json
-	for _, bucketEntry := range tree.Entries {
-		if bucketEntry.Mode != filemode.Dir {
-			continue
-		}
-		// Bucket should be 2 hex chars
-		if len(bucketEntry.Name) != 2 {
-			continue
+	_ = WalkCheckpointShards(s.repo, tree, func(checkpointID id.CheckpointID, cpTreeHash plumbing.Hash) error { //nolint:errcheck // callback never returns errors
+		checkpointTree, cpTreeErr := s.repo.TreeObject(cpTreeHash)
+		if cpTreeErr != nil {
+			return nil //nolint:nilerr // skip unreadable entries, continue walking
 		}
 
-		bucketTree, treeErr := s.repo.TreeObject(bucketEntry.Hash)
-		if treeErr != nil {
-			continue
+		info := CommittedInfo{
+			CheckpointID: checkpointID,
 		}
 
-		// Each entry in the bucket is the remaining part of the checkpoint ID
-		for _, checkpointEntry := range bucketTree.Entries {
-			if checkpointEntry.Mode != filemode.Dir {
-				continue
-			}
+		// Get details from root metadata file (CheckpointSummary format)
+		if metadataFile, fileErr := checkpointTree.File(paths.MetadataFileName); fileErr == nil {
+			if content, contentErr := metadataFile.Contents(); contentErr == nil {
+				var summary CheckpointSummary
+				if err := json.Unmarshal([]byte(content), &summary); err == nil {
+					info.CheckpointsCount = summary.CheckpointsCount
+					info.FilesTouched = summary.FilesTouched
+					info.SessionCount = len(summary.Sessions)
 
-			checkpointTree, cpTreeErr := s.repo.TreeObject(checkpointEntry.Hash)
-			if cpTreeErr != nil {
-				continue
-			}
-
-			// Reconstruct checkpoint ID: <bucket><remaining>
-			checkpointIDStr := bucketEntry.Name + checkpointEntry.Name
-			checkpointID, cpIDErr := id.NewCheckpointID(checkpointIDStr)
-			if cpIDErr != nil {
-				// Skip invalid checkpoint IDs (shouldn't happen with our own data)
-				continue
-			}
-
-			info := CommittedInfo{
-				CheckpointID: checkpointID,
-			}
-
-			// Get details from root metadata file (CheckpointSummary format)
-			if metadataFile, fileErr := checkpointTree.File(paths.MetadataFileName); fileErr == nil {
-				if content, contentErr := metadataFile.Contents(); contentErr == nil {
-					var summary CheckpointSummary
-					if err := json.Unmarshal([]byte(content), &summary); err == nil {
-						info.CheckpointsCount = summary.CheckpointsCount
-						info.FilesTouched = summary.FilesTouched
-						info.SessionCount = len(summary.Sessions)
-
-						// Read session metadata from latest session to get Agent, SessionID, CreatedAt
-						if len(summary.Sessions) > 0 {
-							latestIndex := len(summary.Sessions) - 1
-							latestDir := strconv.Itoa(latestIndex)
-							if sessionTree, treeErr := checkpointTree.Tree(latestDir); treeErr == nil {
-								if sessionMetadataFile, smErr := sessionTree.File(paths.MetadataFileName); smErr == nil {
-									if sessionContent, scErr := sessionMetadataFile.Contents(); scErr == nil {
-										var sessionMetadata CommittedMetadata
-										if json.Unmarshal([]byte(sessionContent), &sessionMetadata) == nil {
-											info.Agent = sessionMetadata.Agent
-											info.SessionID = sessionMetadata.SessionID
-											info.CreatedAt = sessionMetadata.CreatedAt
-										}
+					// Read session metadata from latest session to get Agent, SessionID, CreatedAt
+					if len(summary.Sessions) > 0 {
+						latestIndex := len(summary.Sessions) - 1
+						latestDir := strconv.Itoa(latestIndex)
+						if sessionTree, treeErr := checkpointTree.Tree(latestDir); treeErr == nil {
+							if sessionMetadataFile, smErr := sessionTree.File(paths.MetadataFileName); smErr == nil {
+								if sessionContent, scErr := sessionMetadataFile.Contents(); scErr == nil {
+									var sessionMetadata CommittedMetadata
+									if json.Unmarshal([]byte(sessionContent), &sessionMetadata) == nil {
+										info.Agent = sessionMetadata.Agent
+										info.SessionID = sessionMetadata.SessionID
+										info.CreatedAt = sessionMetadata.CreatedAt
 									}
 								}
 							}
@@ -1041,10 +1013,11 @@ func (s *GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
 					}
 				}
 			}
-
-			checkpoints = append(checkpoints, info)
 		}
-	}
+
+		checkpoints = append(checkpoints, info)
+		return nil
+	})
 
 	// Sort by time (most recent first)
 	sort.Slice(checkpoints, func(i, j int) bool {

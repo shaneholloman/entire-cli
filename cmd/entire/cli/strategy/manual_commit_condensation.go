@@ -1127,7 +1127,7 @@ func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts c
 		return
 	}
 
-	v2Store := cpkg.NewV2GitStore(repo)
+	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
 		logging.Warn(ctx, "v2 dual-write failed",
 			slog.String("checkpoint_id", opts.CheckpointID.String()),

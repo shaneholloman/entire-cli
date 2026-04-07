@@ -15,7 +15,7 @@ import (
 func TestGetV2MetadataTree_LocalRef(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("a1a2a3a4a5a6")
 	ctx := context.Background()
 
@@ -64,7 +64,7 @@ func TestGetV2MetadataTree_NoRef_ReturnsError(t *testing.T) {
 func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("b1b2b3b4b5b6")
 	ctx := context.Background()
 
@@ -98,7 +98,7 @@ func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("c1c2c3c4c5c6")
 	ctx := context.Background()
 

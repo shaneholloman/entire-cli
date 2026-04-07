@@ -330,10 +330,18 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 				stats = append(stats, activeTimeDisplay(st.LastInteractionTime))
 			}
 
-			stats = append(stats, "tokens "+formatTokenCount(totalTokens(st.TokenUsage)))
+			if t := totalTokens(st.TokenUsage); t > 0 {
+				stats = append(stats, "tokens "+formatTokenCount(t))
+			}
 
 			statsLine := strings.Join(stats, sty.render(sty.dim, " · "))
-			fmt.Fprintln(w, sty.render(sty.dim, statsLine))
+			if st.IsStuckActive() {
+				fmt.Fprintf(w, "%s %s %s\n", sty.render(sty.dim, statsLine),
+					sty.render(sty.dim, "·"),
+					sty.render(sty.yellow, "stale")+" (run 'entire doctor')")
+			} else {
+				fmt.Fprintln(w, sty.render(sty.dim, statsLine))
+			}
 			fmt.Fprintln(w)
 		}
 	}

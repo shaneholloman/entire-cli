@@ -79,7 +79,7 @@ func (s *V2GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 // Returns the session index for coordination with /full/current.
 func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommittedOptions) (int, error) {
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	parentHash, rootTreeHash, err := s.getRefState(refName)
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
 	if err != nil {
 		return 0, ErrCheckpointNotFound
 	}
@@ -192,7 +192,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
-	parentHash, rootTreeHash, err := s.getRefState(refName)
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommitted
 		return 0, fmt.Errorf("failed to ensure /main ref: %w", err)
 	}
 
-	parentHash, rootTreeHash, err := s.getRefState(refName)
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
 	if err != nil {
 		return 0, err
 	}
@@ -464,7 +464,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
-	parentHash, rootTreeHash, err := s.getRefState(refName)
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
 	if err != nil {
 		return err
 	}
@@ -501,29 +501,25 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 		return err
 	}
 
-	// Update generation.json at the tree root with the new checkpoint ID and timestamps.
-	// This reads from the pre-splice root tree (to get existing metadata) and writes
-	// into the post-splice tree (which already has the shard directories).
-	gen, err := s.updateGenerationForWrite(rootTreeHash, opts.CheckpointID, time.Now().UTC())
-	if err != nil {
-		return fmt.Errorf("failed to update generation metadata: %w", err)
-	}
-	newTreeHash, err = s.addGenerationToRootTree(newTreeHash, gen)
-	if err != nil {
-		return fmt.Errorf("failed to add generation.json to tree: %w", err)
-	}
-
 	commitMsg := fmt.Sprintf("Checkpoint: %s\n", opts.CheckpointID)
 	if err := s.updateRef(refName, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail); err != nil {
 		return err
 	}
 
 	// Check if rotation is needed after successful write.
-	if len(gen.Checkpoints) >= s.maxCheckpoints() {
+	// Count checkpoints by walking the tree (no generation.json on /full/current).
+	checkpointCount, countErr := s.CountCheckpointsInTree(newTreeHash)
+	if countErr != nil {
+		logging.Warn(ctx, "failed to count checkpoints for rotation check",
+			slog.String("error", countErr.Error()),
+		)
+		return nil
+	}
+	if checkpointCount >= s.maxCheckpoints() {
 		if rotErr := s.rotateGeneration(ctx); rotErr != nil {
 			logging.Warn(ctx, "generation rotation failed",
 				slog.String("error", rotErr.Error()),
-				slog.Int("checkpoint_count", len(gen.Checkpoints)),
+				slog.Int("checkpoint_count", checkpointCount),
 			)
 			// Non-fatal: rotation failure doesn't invalidate the write
 		}

@@ -17,7 +17,7 @@ import (
 func TestV2ReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("a1a2a3a4a5a6")
 	ctx := context.Background()
 
@@ -42,7 +42,7 @@ func TestV2ReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 func TestV2ReadCommitted_ReturnsNilForMissing(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("b1b2b3b4b5b6")
 	ctx := context.Background()
 
@@ -54,7 +54,7 @@ func TestV2ReadCommitted_ReturnsNilForMissing(t *testing.T) {
 func TestV2ReadSessionContent_ReturnsMetadataAndTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("c1c2c3c4c5c6")
 	ctx := context.Background()
 
@@ -80,7 +80,7 @@ func TestV2ReadSessionContent_ReturnsMetadataAndTranscript(t *testing.T) {
 func TestV2ReadSessionContent_TranscriptFromArchivedGeneration(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	store.maxCheckpointsPerGeneration = 1
 	ctx := context.Background()
 
@@ -115,7 +115,7 @@ func TestV2ReadSessionContent_TranscriptFromArchivedGeneration(t *testing.T) {
 func TestV2ReadSessionContent_MissingTranscript_ReturnsError(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("f1f2f3f4f5f6")
 	ctx := context.Background()
 
@@ -140,7 +140,7 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	ctx := context.Background()
 
 	// Write metadata to /main so ReadSessionContent can find the checkpoint
-	v2Store := NewV2GitStore(repo)
+	v2Store := NewV2GitStore(repo, "origin")
 	err := v2Store.WriteCommitted(ctx, WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-chunked",
@@ -159,7 +159,7 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	err = v2Store.ensureRef(refName)
 	require.NoError(t, err)
 
-	_, rootTreeHash, err := v2Store.getRefState(refName)
+	_, rootTreeHash, err := v2Store.GetRefState(refName)
 	require.NoError(t, err)
 
 	sessionPath := cpID.Path() + "/0/"
@@ -186,7 +186,7 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	newTreeHash, err := v2Store.gs.spliceCheckpointSubtree(rootTreeHash, cpID, cpID.Path()+"/", entries)
 	require.NoError(t, err)
 
-	parentHash, _, err := v2Store.getRefState(refName)
+	parentHash, _, err := v2Store.GetRefState(refName)
 	require.NoError(t, err)
 	err = v2Store.updateRef(refName, newTreeHash, parentHash, "chunked test", "Test", "test@test.com")
 	require.NoError(t, err)
