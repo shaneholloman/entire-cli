@@ -862,6 +862,133 @@ func TestRunExplainCheckpoint_NotFound(t *testing.T) {
 	}
 }
 
+func TestRunExplainCheckpoint_V2OnlyCheckpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := wt.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings: %v", err)
+	}
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("777777777777")
+	ctx := context.Background()
+
+	if err := v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-v2",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello from v2"}]}}` + "\n"),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}); err != nil {
+		t.Fatalf("failed to write v2 checkpoint: %v", err)
+	}
+
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(context.Background(), &buf, &errBuf, "777777", false, false, false, false, false, false, false)
+	if err != nil {
+		t.Fatalf("expected success for v2-only checkpoint, got error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Checkpoint: 777777777777") {
+		t.Fatalf("expected checkpoint header in output, got: %s", output)
+	}
+	if !strings.Contains(output, "session-v2") {
+		t.Fatalf("expected v2 session ID in output, got: %s", output)
+	}
+}
+
+func TestRunExplainCheckpoint_V2OnlyRawTranscript(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	if err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+	if _, err := wt.Add("test.txt"); err != nil {
+		t.Fatalf("failed to add test file: %v", err)
+	}
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("failed to commit: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, ".entire", "settings.json"), []byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings: %v", err)
+	}
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("888888888888")
+	ctx := context.Background()
+
+	if err := v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-v2",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"raw from v2"}]}}` + "\n"),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}); err != nil {
+		t.Fatalf("failed to write v2 checkpoint: %v", err)
+	}
+
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(context.Background(), &buf, &errBuf, "888888", false, false, false, true, false, false, false)
+	if err != nil {
+		t.Fatalf("expected success for v2-only raw transcript, got error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "raw from v2") {
+		t.Fatalf("expected v2 raw transcript in output, got: %s", output)
+	}
+}
+
 func TestFormatCheckpointOutput_Short(t *testing.T) {
 	summary := &checkpoint.CheckpointSummary{
 		CheckpointID:     id.MustCheckpointID("abc123def456"),
