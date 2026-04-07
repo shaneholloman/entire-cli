@@ -98,6 +98,10 @@ func Compact(content []byte, opts MetadataFields) ([]byte, error) {
 		truncated = []byte{}
 	}
 
+	if isCopilotFormat(truncated) {
+		return compactCopilot(truncated, opts)
+	}
+
 	if isDroidFormat(truncated) {
 		return compactDroid(truncated, opts)
 	}
