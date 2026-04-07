@@ -3,14 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
@@ -23,17 +23,14 @@ import (
 func initMigrateTestRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	dir := t.TempDir()
-	repo, err := git.PlainInit(dir, false)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "README.md", "init")
+	testutil.GitAdd(t, dir, "README.md")
+	testutil.GitCommit(t, dir, "initial")
+
+	repo, err := git.PlainOpen(dir)
 	require.NoError(t, err)
-	wt, err := repo.Worktree()
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("init"), 0o644))
-	_, err = wt.Add("README.md")
-	require.NoError(t, err)
-	_, err = wt.Commit("initial", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
-	require.NoError(t, err)
+
 	return repo
 }
 
@@ -327,6 +324,111 @@ func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, summary2)
 	assert.NotEmpty(t, summary2.Sessions[0].Transcript, "should have compact transcript after backfill")
+}
+
+func TestMigrateCheckpointsV2_RepairsMissingFullTranscriptBeforeBackfill(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("112233aabbcc")
+	writeV1Checkpoint(t, v1Store, cpID, "session-repair-001",
+		[]byte("{\"type\":\"assistant\",\"message\":\"repair me\"}\n"),
+		[]string{"repair prompt"},
+	)
+
+	// Initial migration to create v2 state.
+	var initialRun bytes.Buffer
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+
+	// Simulate interrupted migration by removing raw transcript files from /full/current.
+	removeV2SessionTranscriptFiles(t, repo, v2Store, cpID, 0)
+
+	// Re-run migration: should repair /full/current and count as migrated (not skipped).
+	var rerun bytes.Buffer
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &rerun)
+	require.NoError(t, rerunErr)
+	assert.Equal(t, 1, result2.migrated)
+	assert.Equal(t, 0, result2.failed)
+	assert.Contains(t, rerun.String(), "repaired partial v2 checkpoint state")
+
+	content, readErr := v2Store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, readErr)
+	assert.NotEmpty(t, content.Transcript, "raw full transcript should be restored in /full/current")
+}
+
+func TestMigrateCheckpointsV2_RepairsCurrentFullEvenWhenArchiveExists(t *testing.T) {
+	t.Parallel()
+	repo := initMigrateTestRepo(t)
+	v1Store, v2Store := newMigrateStores(repo)
+
+	cpID := id.MustCheckpointID("334455ddeeff")
+	writeV1Checkpoint(t, v1Store, cpID, "session-repair-archive-001",
+		[]byte("{\"type\":\"assistant\",\"message\":\"repair from archive fallback\"}\n"),
+		[]string{"repair archive prompt"},
+	)
+
+	// Initial migration to seed v2.
+	var initialRun bytes.Buffer
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result1.migrated)
+
+	// Preserve current generation as an archived ref to simulate fallback availability.
+	currentCommitHash, _, refErr := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, refErr)
+	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(archiveRef, currentCommitHash)))
+
+	// Remove current /full/current transcript artifacts.
+	removeV2SessionTranscriptFiles(t, repo, v2Store, cpID, 0)
+
+	// Sanity-check fallback exists: ReadSessionContent can still read from archive.
+	archivedRead, archivedReadErr := v2Store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, archivedReadErr)
+	assert.NotEmpty(t, archivedRead.Transcript)
+
+	// Re-run migration: should still repair /full/current.
+	var rerun bytes.Buffer
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &rerun)
+	require.NoError(t, rerunErr)
+	assert.Equal(t, 1, result2.migrated)
+	assert.Contains(t, rerun.String(), "repaired partial v2 checkpoint state")
+
+	ok, checkErr := hasCurrentFullSessionArtifacts(repo, v2Store, cpID, 0)
+	require.NoError(t, checkErr)
+	assert.True(t, ok, "expected /full/current artifacts to be restored")
+}
+
+func removeV2SessionTranscriptFiles(t *testing.T, repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) {
+	t.Helper()
+
+	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	parentHash, rootTreeHash, err := v2Store.GetRefState(refName)
+	require.NoError(t, err)
+
+	newRootHash, updateErr := checkpoint.UpdateSubtree(
+		repo,
+		rootTreeHash,
+		[]string{string(cpID[:2]), string(cpID[2:]), fmt.Sprintf("%d", sessionIdx)},
+		nil,
+		checkpoint.UpdateSubtreeOptions{
+			MergeMode: checkpoint.MergeKeepExisting,
+			DeleteNames: []string{
+				paths.TranscriptFileName,
+				paths.TranscriptFileName + ".001",
+				paths.TranscriptFileName + ".002",
+				paths.ContentHashFileName,
+			},
+		},
+	)
+	require.NoError(t, updateErr)
+
+	commitHash, commitErr := checkpoint.CreateCommit(repo, newRootHash, parentHash, "test: remove full transcript\n", "Test", "test@test.com")
+	require.NoError(t, commitErr)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)))
 }
 
 func TestBuildMigrateWriteOpts_PromptSeparatorRoundTrip(t *testing.T) {

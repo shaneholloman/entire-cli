@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -150,9 +151,31 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 		return fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
 
-	// Already in v2 — check if any sessions are missing transcript.jsonl and backfill
+	// Already in v2 — check if any aspect of sessions are missing and backfill
 	if existing != nil {
-		return backfillCompactTranscripts(ctx, v1Store, v2Store, info, existing, out, prefix)
+		repaired, repairErr := repairPartialV2Checkpoint(ctx, repo, v1Store, v2Store, info, existing)
+		if repairErr != nil {
+			return repairErr
+		}
+
+		currentV2, readCurrentErr := v2Store.ReadCommitted(ctx, info.CheckpointID)
+		if readCurrentErr != nil {
+			return fmt.Errorf("failed to re-read v2 checkpoint %s: %w", info.CheckpointID, readCurrentErr)
+		}
+		if currentV2 == nil {
+			return fmt.Errorf("v2 checkpoint %s disappeared during migration", info.CheckpointID)
+		}
+
+		backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, currentV2, out, prefix)
+		if errors.Is(backfillErr, errAlreadyMigrated) && repaired {
+			fmt.Fprintf(out, "%s repaired partial v2 checkpoint state\n", prefix)
+			return nil
+		}
+		if errors.Is(backfillErr, errTranscriptNotGeneratable) && repaired {
+			fmt.Fprintf(out, "%s repaired partial v2 checkpoint state (compact transcript not generated)\n", prefix)
+			return nil
+		}
+		return backfillErr
 	}
 
 	summary, err := v1Store.ReadCommitted(ctx, info.CheckpointID)
@@ -206,6 +229,80 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	return nil
+}
+
+func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, v2Summary *checkpoint.CheckpointSummary) (bool, error) {
+	repaired := false
+
+	// Spot-check already present sessions: ensure required /full/current artifacts exist.
+	existingSessionCount := len(v2Summary.Sessions)
+	for sessionIdx := range existingSessionCount {
+		ok, checkErr := hasCurrentFullSessionArtifacts(repo, v2Store, info.CheckpointID, sessionIdx)
+		if checkErr != nil {
+			return false, fmt.Errorf("failed to check v2 session %d artifacts: %w", sessionIdx, checkErr)
+		}
+		if ok {
+			continue
+		}
+
+		content, readErr := v1Store.ReadSessionContent(ctx, info.CheckpointID, sessionIdx)
+		if readErr != nil {
+			return false, fmt.Errorf("failed to read v1 session %d while repairing v2: %w", sessionIdx, readErr)
+		}
+
+		updateOpts := checkpoint.UpdateCommittedOptions{
+			CheckpointID: info.CheckpointID,
+			SessionID:    content.Metadata.SessionID,
+			Transcript:   content.Transcript,
+			Prompts:      checkpoint.SplitPromptContent(content.Prompts),
+			Agent:        content.Metadata.Agent,
+		}
+		if compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata); compacted != nil {
+			updateOpts.CompactTranscript = compacted
+		}
+
+		if updateErr := v2Store.UpdateCommitted(ctx, updateOpts); updateErr != nil {
+			return false, fmt.Errorf("failed to repair v2 session %d: %w", sessionIdx, updateErr)
+		}
+		repaired = true
+	}
+
+	return repaired, nil
+}
+
+func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, sessionIdx int) (bool, error) {
+	_, rootTreeHash, err := v2Store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	if err != nil {
+		return false, nil
+	}
+
+	rootTree, err := repo.TreeObject(rootTreeHash)
+	if err != nil {
+		return false, fmt.Errorf("failed to read /full/current tree: %w", err)
+	}
+
+	sessionPath := fmt.Sprintf("%s/%d", cpID.Path(), sessionIdx)
+	sessionTree, err := rootTree.Tree(sessionPath)
+	if err != nil {
+		return false, nil
+	}
+
+	hasTranscript := false
+	for _, entry := range sessionTree.Entries {
+		if entry.Name == paths.TranscriptFileName || strings.HasPrefix(entry.Name, paths.TranscriptFileName+".") {
+			hasTranscript = true
+			break
+		}
+	}
+	if !hasTranscript {
+		return false, nil
+	}
+
+	if _, err := sessionTree.File(paths.ContentHashFileName); err != nil {
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // backfillCompactTranscripts checks sessions in an already-migrated v2 checkpoint
