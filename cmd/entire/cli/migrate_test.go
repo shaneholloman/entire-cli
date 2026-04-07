@@ -51,10 +51,14 @@ func writeV1Checkpoint(t *testing.T, store *checkpoint.GitStore, cpID id.Checkpo
 	require.NoError(t, err)
 }
 
+func newMigrateStores(repo *git.Repository) (*checkpoint.GitStore, *checkpoint.V2GitStore) {
+	return checkpoint.NewGitStore(repo), checkpoint.NewV2GitStore(repo, migrateRemoteName)
+}
+
 func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
 	writeV1Checkpoint(t, v1Store, cpID, "session-001",
@@ -62,7 +66,6 @@ func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 		[]string{"test prompt"},
 	)
 
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
 	var stdout bytes.Buffer
 
 	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
@@ -81,7 +84,7 @@ func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("c3d4e5f6a1b2")
 	writeV1Checkpoint(t, v1Store, cpID, "session-idem",
@@ -89,7 +92,6 @@ func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
 		[]string{"idem prompt"},
 	)
 
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
 	var stdout bytes.Buffer
 
 	// First run: should migrate
@@ -109,7 +111,7 @@ func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
 func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("d4e5f6a1b2c3")
 
@@ -125,7 +127,6 @@ func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
 		[]string{"prompt 2"},
 	)
 
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
 	var stdout bytes.Buffer
 
 	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
@@ -142,8 +143,7 @@ func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
 func TestMigrateCheckpointsV2_NoV1Branch(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	v1Store, v2Store := newMigrateStores(repo)
 	var stdout bytes.Buffer
 
 	// No v1 data written — ListCommitted returns empty
@@ -166,7 +166,7 @@ func TestMigrateCmd_InvalidFlag(t *testing.T) {
 func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("e5f6a1b2c3d4")
 	// Write checkpoint with no agent type — compaction will be skipped
@@ -181,7 +181,6 @@ func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
 	var stdout bytes.Buffer
 
 	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
@@ -193,7 +192,7 @@ func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("b2c3d4e5f6a1")
 	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
@@ -209,7 +208,6 @@ func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
 	var stdout bytes.Buffer
 
 	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout)
@@ -233,8 +231,7 @@ func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
 func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID1 := id.MustCheckpointID("f6a1b2c3d4e5")
 	cpID2 := id.MustCheckpointID("a1b2c3d4e5f7")
@@ -265,8 +262,7 @@ func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initMigrateTestRepo(t)
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	v1Store, v2Store := newMigrateStores(repo)
 
 	cpID := id.MustCheckpointID("aabb11223344")
 

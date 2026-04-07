@@ -76,7 +76,7 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command) error {
 	}
 
 	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	v2Store := checkpoint.NewV2GitStore(repo, migrateRemoteName)
 	out := cmd.OutOrStdout()
 
 	result, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, out)
@@ -99,6 +99,8 @@ var (
 	errAlreadyMigrated          = errors.New("already migrated")
 	errTranscriptNotGeneratable = errors.New("transcript.jsonl could not be generated")
 )
+
+const migrateRemoteName = "origin"
 
 func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, out io.Writer) (*migrateResult, error) {
 	v1List, err := v1Store.ListCommitted(ctx)
@@ -190,7 +192,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 
 	// Copy task metadata trees from v1 to v2 /full/current
 	if shouldCopyTaskMetadata {
-		if taskErr := copyTaskMetadataToV2(ctx, repo, v1Store, v2Store, info.CheckpointID, summary); taskErr != nil {
+		if taskErr := copyTaskMetadataToV2(repo, v1Store, v2Store, info.CheckpointID, summary); taskErr != nil {
 			logging.Warn(ctx, "failed to copy task metadata to v2",
 				slog.String("checkpoint_id", string(info.CheckpointID)),
 				slog.String("error", taskErr.Error()),
@@ -224,7 +226,6 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 	}
 
 	backfilled := 0
-	skippedCount := 0
 	var lastAgent string
 
 	for _, sessionIdx := range needsBackfill {
@@ -235,7 +236,6 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 				slog.Int("session_index", sessionIdx),
 				slog.String("error", readErr.Error()),
 			)
-			skippedCount++
 			continue
 		}
 
@@ -253,7 +253,6 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 					slog.Int("session_index", sessionIdx),
 				)
 			}
-			skippedCount++
 			continue
 		}
 
@@ -268,7 +267,6 @@ func backfillCompactTranscripts(ctx context.Context, v1Store *checkpoint.GitStor
 				slog.Int("session_index", sessionIdx),
 				slog.String("error", updateErr.Error()),
 			)
-			skippedCount++
 			continue
 		}
 
@@ -354,7 +352,7 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 
 // copyTaskMetadataToV2 copies task metadata files (subagent transcripts, checkpoint JSONs)
 // from the v1 branch to the v2 /full/current ref via tree surgery.
-func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, summary *checkpoint.CheckpointSummary) error {
+func copyTaskMetadataToV2(repo *git.Repository, _ *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, cpID id.CheckpointID, summary *checkpoint.CheckpointSummary) error {
 	// Resolve the v1 branch tree
 	v1Tree, err := resolveV1CheckpointTree(repo, cpID)
 	if err != nil {
@@ -389,7 +387,6 @@ func copyTaskMetadataToV2(ctx context.Context, repo *git.Repository, _ *checkpoi
 		}
 	}
 
-	_ = ctx // ctx reserved for future logging
 	return nil
 }
 
@@ -399,7 +396,7 @@ func resolveV1CheckpointTree(repo *git.Repository, cpID id.CheckpointID) (*objec
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		// Try remote tracking branch
-		remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+		remoteRefName := plumbing.NewRemoteReferenceName(migrateRemoteName, paths.MetadataBranchName)
 		ref, err = repo.Reference(remoteRefName, true)
 		if err != nil {
 			return nil, fmt.Errorf("v1 branch not found: %w", err)
