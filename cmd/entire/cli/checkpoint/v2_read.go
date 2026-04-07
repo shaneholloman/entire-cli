@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,73 +59,6 @@ func (s *V2GitStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoi
 	}
 
 	return &summary, nil
-}
-
-// ListCommitted lists all committed checkpoints from the v2 /main ref.
-// Scans sharded paths: <id[:2]>/<id[2:]>/ directories containing metadata.json.
-func (s *V2GitStore) ListCommitted(ctx context.Context) ([]CommittedInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err //nolint:wrapcheck // Propagating context cancellation
-	}
-
-	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	_, rootTreeHash, err := s.GetRefState(refName)
-	if err != nil {
-		return []CommittedInfo{}, nil //nolint:nilerr // No /main ref means empty list
-	}
-
-	rootTree, err := s.repo.TreeObject(rootTreeHash)
-	if err != nil {
-		return []CommittedInfo{}, nil //nolint:nilerr // Unreadable tree means no listable entries
-	}
-
-	var checkpoints []CommittedInfo
-
-	_ = WalkCheckpointShards(s.repo, rootTree, func(checkpointID id.CheckpointID, cpTreeHash plumbing.Hash) error { //nolint:errcheck // callback never returns errors
-		checkpointTree, cpTreeErr := s.repo.TreeObject(cpTreeHash)
-		if cpTreeErr != nil {
-			return nil //nolint:nilerr // skip unreadable entries, continue walking
-		}
-
-		info := CommittedInfo{CheckpointID: checkpointID}
-
-		if metadataFile, fileErr := checkpointTree.File(paths.MetadataFileName); fileErr == nil {
-			if content, contentErr := metadataFile.Contents(); contentErr == nil {
-				var summary CheckpointSummary
-				if json.Unmarshal([]byte(content), &summary) == nil {
-					info.CheckpointsCount = summary.CheckpointsCount
-					info.FilesTouched = summary.FilesTouched
-					info.SessionCount = len(summary.Sessions)
-
-					if len(summary.Sessions) > 0 {
-						latestIndex := len(summary.Sessions) - 1
-						latestDir := strconv.Itoa(latestIndex)
-						if sessionTree, treeErr := checkpointTree.Tree(latestDir); treeErr == nil {
-							if sessionMetadataFile, smErr := sessionTree.File(paths.MetadataFileName); smErr == nil {
-								if sessionContent, scErr := sessionMetadataFile.Contents(); scErr == nil {
-									var sessionMetadata CommittedMetadata
-									if json.Unmarshal([]byte(sessionContent), &sessionMetadata) == nil {
-										info.Agent = sessionMetadata.Agent
-										info.SessionID = sessionMetadata.SessionID
-										info.CreatedAt = sessionMetadata.CreatedAt
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		checkpoints = append(checkpoints, info)
-		return nil
-	})
-
-	sort.Slice(checkpoints, func(i, j int) bool {
-		return checkpoints[i].CreatedAt.After(checkpoints[j].CreatedAt)
-	})
-
-	return checkpoints, nil
 }
 
 // ReadSessionContent reads a session's metadata and prompts from the v2 /main ref,

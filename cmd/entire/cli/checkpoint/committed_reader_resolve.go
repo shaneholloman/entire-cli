@@ -18,7 +18,7 @@ type CommittedReader interface {
 // should be used for a specific checkpoint ID.
 //
 // Fallback behavior mirrors resume/rewind patterns:
-//   - Try v2 first when preferCheckpointsV2 is true
+//   - Try v2 first when preferV2 is true
 //   - Fall back to v1 when checkpoint is not found in v2
 //   - Fall back to v1 when v2 returns ErrCheckpointNotFound/ErrNoTranscript
 func ResolveCommittedReaderForCheckpoint(
@@ -26,13 +26,13 @@ func ResolveCommittedReaderForCheckpoint(
 	checkpointID id.CheckpointID,
 	v1Store *GitStore,
 	v2Store *V2GitStore,
-	preferCheckpointsV2 bool,
+	preferV2 bool,
 ) (CommittedReader, *CheckpointSummary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	if preferCheckpointsV2 && v2Store != nil {
+	if preferV2 && v2Store != nil {
 		summary, err := v2Store.ReadCommitted(ctx, checkpointID)
 		if err == nil && summary != nil {
 			return v2Store, summary, nil
@@ -61,20 +61,20 @@ func ResolveCommittedReaderForCheckpoint(
 // checkpoint with v2-first, v1-fallback behavior.
 //
 // Fallback behavior mirrors resume/rewind patterns:
-//   - Try v2 first when preferCheckpointsV2 is true
+//   - Try v2 first when preferV2 is true
 //   - Fall back to v1 when checkpoint/transcript is missing in v2
 func ResolveRawSessionLogForCheckpoint(
 	ctx context.Context,
 	checkpointID id.CheckpointID,
 	v1Store *GitStore,
 	v2Store *V2GitStore,
-	preferCheckpointsV2 bool,
+	preferV2 bool,
 ) ([]byte, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	if preferCheckpointsV2 && v2Store != nil {
+	if preferV2 && v2Store != nil {
 		content, sessionID, err := v2Store.GetSessionLog(ctx, checkpointID)
 		if err == nil && len(content) > 0 {
 			return content, sessionID, nil

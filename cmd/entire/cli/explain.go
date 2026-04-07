@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -21,7 +20,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -216,12 +214,10 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
-	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
+	store := checkpoint.NewGitStore(repo)
 
 	// First, try to find in committed checkpoints by checkpoint ID prefix
-	committed, err := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2)
+	committed, err := store.ListCommitted(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list checkpoints: %w", err)
 	}
@@ -241,7 +237,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		if generate {
 			return fmt.Errorf("cannot generate summary for temporary checkpoint %s (only committed checkpoints supported)", checkpointIDPrefix)
 		}
-		output, found := explainTemporaryCheckpoint(ctx, w, repo, v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
+		output, found := explainTemporaryCheckpoint(ctx, w, repo, store, checkpointIDPrefix, verbose, full, rawTranscript)
 		if found {
 			outputExplainContent(w, output, noPager)
 			return nil
@@ -262,31 +258,28 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		return fmt.Errorf("ambiguous checkpoint prefix %q matches %d checkpoints: %s", checkpointIDPrefix, len(matches), strings.Join(examples, ", "))
 	}
 
-	// Resolve store and load checkpoint summary with v2 -> v1 fallback.
-	resolvedReader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
+	// Load checkpoint summary
+	summary, err := store.ReadCommitted(ctx, fullCheckpointID)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
+	if summary == nil {
+		return fmt.Errorf("checkpoint not found: %s", fullCheckpointID)
+	}
 
 	// Load latest session content (needed for transcript and metadata)
-	content, err := readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+	content, err := store.ReadLatestSessionContent(ctx, fullCheckpointID)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint content: %w", err)
 	}
 
 	// Handle summary generation
 	if generate {
-		genStore, ok := resolvedReader.(*checkpoint.GitStore)
-		if !ok {
-			// During dual-write, checkpoints are expected in both stores. For v2-only
-			// checkpoints, summary generation is not yet supported in explain.
-			return fmt.Errorf("cannot generate summary for checkpoint %s: summary updates are currently supported only for v1 checkpoints", fullCheckpointID)
-		}
-		if err := generateCheckpointSummary(ctx, w, errW, genStore, fullCheckpointID, summary, content, force); err != nil {
+		if err := generateCheckpointSummary(ctx, w, errW, store, fullCheckpointID, summary, content, force); err != nil {
 			return err
 		}
 		// Reload the content to get the updated summary
-		content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+		content, err = store.ReadLatestSessionContent(ctx, fullCheckpointID)
 		if err != nil {
 			return fmt.Errorf("failed to reload checkpoint: %w", err)
 		}
@@ -294,15 +287,11 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 
 	// Handle raw transcript output
 	if rawTranscript {
-		rawLog, _, rawErr := checkpoint.ResolveRawSessionLogForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
-		if rawErr != nil {
-			return fmt.Errorf("failed to read raw transcript: %w", rawErr)
-		}
-		if len(rawLog) == 0 {
+		if len(content.Transcript) == 0 {
 			return fmt.Errorf("checkpoint %s has no transcript", fullCheckpointID)
 		}
 		// Output raw transcript directly (no pager, no formatting)
-		if _, err = w.Write(rawLog); err != nil {
+		if _, err = w.Write(content.Transcript); err != nil {
 			return fmt.Errorf("failed to write transcript: %w", err)
 		}
 		return nil
@@ -321,40 +310,13 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			Email: associatedCommits[0].Email,
 		}
 	} else {
-		if v1Reader, ok := resolvedReader.(*checkpoint.GitStore); ok {
-			author, _ = v1Reader.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
-		}
+		author, _ = store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
 	}
 
 	// Format and output
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full)
 	outputExplainContent(w, output, noPager)
 	return nil
-}
-
-func listCommittedForExplain(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, preferCheckpointsV2 bool) ([]checkpoint.CommittedInfo, error) {
-	if preferCheckpointsV2 {
-		committed, err := v2Store.ListCommitted(ctx)
-		if err == nil && len(committed) > 0 {
-			return committed, nil
-		}
-		if err != nil {
-			logging.Debug(ctx, "v2 ListCommitted failed, falling back to v1",
-				slog.String("error", err.Error()),
-			)
-		}
-	}
-
-	return v1Store.ListCommitted(ctx)
-}
-
-func readLatestSessionContentForExplain(ctx context.Context, reader checkpoint.CommittedReader, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*checkpoint.SessionContent, error) {
-	if summary == nil || len(summary.Sessions) == 0 {
-		return nil, checkpoint.ErrCheckpointNotFound
-	}
-
-	latestIndex := len(summary.Sessions) - 1
-	return reader.ReadSessionContent(ctx, checkpointID, latestIndex)
 }
 
 // generateCheckpointSummary generates an AI summary for a checkpoint and persists it.
