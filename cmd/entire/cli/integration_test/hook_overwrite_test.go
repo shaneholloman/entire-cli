@@ -66,8 +66,10 @@ func TestHookOverwrite_MidTurnWipe_NextPromptRecovers(t *testing.T) {
 		"hooks should be detected as overwritten")
 
 	// Second commit — hooks are gone, use plain go-git commit (no binary invoked).
-	// This simulates what happens in the real world: git runs the husky hook script,
-	// which doesn't call `entire`, so no trailer is added.
+	// This simulates the real-world situation after husky/lefthook has overwritten
+	// our hooks: a commit is made where git would run a third-party hook that does
+	// not call `entire`, so from Entire's perspective no hooks run and no trailer
+	// is added.
 	env.GitAdd("fileB.go")
 	env.GitCommit("Add file B")
 	cpID2 := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
@@ -78,17 +80,16 @@ func TestHookOverwrite_MidTurnWipe_NextPromptRecovers(t *testing.T) {
 	err = env.SimulateStop(sess.ID, sess.TranscriptPath)
 	require.NoError(t, err)
 
-	// === Prompt 2: EnsureSetup should reinstall hooks ===
-	sess2 := env.NewSession()
+	// === Prompt 2: same session, next turn — EnsureSetup should reinstall hooks ===
 
 	env.WriteFile("fileC.go", "package main\n\nfunc C() {}\n")
 
-	sess2.CreateTranscript("Create file C", []FileChange{
+	sess.CreateTranscript("Create file C", []FileChange{
 		{Path: "fileC.go", Content: "package main\n\nfunc C() {}\n"},
 	})
 
 	err = env.SimulateUserPromptSubmitWithPromptAndTranscriptPath(
-		sess2.ID, "Create file C", sess2.TranscriptPath)
+		sess.ID, "Create file C", sess.TranscriptPath)
 	require.NoError(t, err)
 
 	// Verify hooks were reinstalled by EnsureSetup
@@ -102,8 +103,8 @@ func TestHookOverwrite_MidTurnWipe_NextPromptRecovers(t *testing.T) {
 		assert.NoError(t, err, "backup %s.pre-entire should exist after reinstall", hookName)
 	}
 
-	// Third commit — hooks restored, binary invoked again → trailer added
-	env.GitCommitWithShadowHooks("Add file C", "fileC.go")
+	// Third commit — hooks restored, agent commits (no TTY) → trailer added via fast path
+	env.GitCommitWithShadowHooksAsAgent("Add file C", "fileC.go")
 	cpID3 := env.GetCheckpointIDFromCommitMessage(env.GetHeadHash())
 	assert.NotEmpty(t, cpID3,
 		"third commit should have trailer (hooks reinstalled by prompt 2)")
