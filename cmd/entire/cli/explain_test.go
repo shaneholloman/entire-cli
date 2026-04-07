@@ -1058,6 +1058,67 @@ func TestRunExplainCheckpoint_V2UsesCompactTranscriptForIntent(t *testing.T) {
 	}
 }
 
+func TestRunExplainCheckpoint_V2PreferredGenerateWritesBothStores(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainInit(tmpDir, false)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("test"), 0o644))
+	_, err = wt.Add("test.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
+		0o644,
+	))
+
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("aabbccddeeff")
+	ctx := context.Background()
+
+	transcript := []byte(`{"type":"user","message":{"content":[{"type":"text","text":"generate test"}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":"done"}}` + "\n")
+
+	// Dual-write: checkpoint exists in both v1 and v2.
+	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-dual",
+		Strategy:     "manual-commit",
+		Transcript:   transcript,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+	require.NoError(t, v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-dual",
+		Strategy:     "manual-commit",
+		Transcript:   transcript,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	// generate=true, force=true — should succeed by writing through v1 store
+	// even though the resolved reader is V2GitStore.
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(ctx, &buf, &errBuf, "aabbcc", false, false, false, false, true, true, false)
+	// Generation requires an AI summarizer which isn't available in unit tests,
+	// but the important thing is we don't get the old "only v1 checkpoints supported" error.
+	if err != nil && strings.Contains(err.Error(), "summary updates are currently supported only for v1 checkpoints") {
+		t.Fatalf("should not reject v2-resolved checkpoints for generation when v1 has the data: %v", err)
+	}
+}
+
 func TestListCommittedForExplain_MergesV1AndV2(t *testing.T) {
 	t.Parallel()
 

@@ -295,15 +295,9 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		}
 	}
 
-	// Handle summary generation
+	// Handle summary generation — writes to both v1 and v2 stores.
 	if generate {
-		genStore, ok := resolvedReader.(*checkpoint.GitStore)
-		if !ok {
-			// During dual-write, checkpoints are expected in both stores. For v2-only
-			// checkpoints, summary generation is not yet supported in explain.
-			return fmt.Errorf("cannot generate summary for checkpoint %s: summary updates are currently supported only for v1 checkpoints", fullCheckpointID)
-		}
-		if err := generateCheckpointSummary(ctx, w, errW, genStore, fullCheckpointID, summary, content, force); err != nil {
+		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
 			return err
 		}
 		// Reload the content to get the updated summary
@@ -395,7 +389,7 @@ func readLatestSessionContentForExplain(ctx context.Context, reader checkpoint.C
 // generateCheckpointSummary generates an AI summary for a checkpoint and persists it.
 // The summary is generated from the scoped transcript (only this checkpoint's portion),
 // not the entire session transcript.
-func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, store *checkpoint.GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool) error {
+func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool) error {
 	// Check if summary already exists
 	if content.Metadata.Summary != nil && !force {
 		return fmt.Errorf("checkpoint %s already has a summary (use --force to regenerate)", checkpointID)
@@ -420,9 +414,19 @@ func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, store *check
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	// Persist the summary
-	if err := store.UpdateSummary(ctx, checkpointID, summary); err != nil {
+	// Persist to v1
+	if err := v1Store.UpdateSummary(ctx, checkpointID, summary); err != nil {
 		return fmt.Errorf("failed to save summary: %w", err)
+	}
+
+	// Persist to v2 when available (best-effort — v1 is the primary)
+	if v2Store != nil {
+		if v2Err := v2Store.UpdateSummary(ctx, checkpointID, summary); v2Err != nil {
+			logging.Debug(ctx, "v2 UpdateSummary failed (non-fatal)",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", v2Err.Error()),
+			)
+		}
 	}
 
 	fmt.Fprintln(w, "✓ Summary generated and saved")

@@ -270,3 +270,56 @@ func TestV2ReadSessionCompactTranscript_MissingCheckpointOrSession(t *testing.T)
 	_, err = store.ReadSessionCompactTranscript(ctx, cpID, 99)
 	require.ErrorIs(t, err, ErrCheckpointNotFound)
 }
+
+func TestV2UpdateSummary_PersistsSummaryToLatestSession(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("f0f1f2f3f4f5")
+	ctx := context.Background()
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-summary-test",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n"),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	// No summary initially
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	content, err := store.ReadSessionContent(ctx, cpID, 0)
+	require.NoError(t, err)
+	require.Nil(t, content.Metadata.Summary)
+
+	// Update with a summary
+	err = store.UpdateSummary(ctx, cpID, &Summary{
+		Intent:  "Test v2 intent",
+		Outcome: "Test v2 outcome",
+	})
+	require.NoError(t, err)
+
+	// Verify summary persisted
+	content, err = store.ReadSessionContent(ctx, cpID, 0)
+	require.NoError(t, err)
+	require.NotNil(t, content.Metadata.Summary)
+	assert.Equal(t, "Test v2 intent", content.Metadata.Summary.Intent)
+	assert.Equal(t, "Test v2 outcome", content.Metadata.Summary.Outcome)
+
+	// Verify other metadata preserved
+	assert.Equal(t, "session-summary-test", content.Metadata.SessionID)
+	_ = summary // used above
+}
+
+func TestV2UpdateSummary_NotFound(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	err := store.UpdateSummary(ctx, id.MustCheckpointID("000000000000"), &Summary{Intent: "x"})
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
+}
