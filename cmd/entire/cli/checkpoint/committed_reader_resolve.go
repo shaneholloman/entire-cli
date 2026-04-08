@@ -3,8 +3,10 @@ package checkpoint
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // CommittedReader provides read access to committed checkpoint data.
@@ -17,13 +19,12 @@ type CommittedReader interface {
 // ResolveCommittedReaderForCheckpoint resolves which committed checkpoint reader
 // should be used for a specific checkpoint ID.
 //
-// Fallback behavior mirrors resume/rewind patterns:
+// Fallback behavior:
 //   - Try v2 first when preferCheckpointsV2 is true
-//   - Fall back to v1 when v2 returns nil summary, ErrCheckpointNotFound, or ErrNoTranscript
-//   - Propagate other v2 errors without fallback
-//
-
-func ResolveCommittedReaderForCheckpoint( //nolint:ireturn // Caller needs polymorphic v1/v2 reader.
+//   - Fall back to v1 for any v2 failure except context cancellation
+//   - During the v2 migration period, a valid v1 copy should never be blocked
+//     by a corrupt or unreadable v2 copy
+func ResolveCommittedReaderForCheckpoint(
 	ctx context.Context,
 	checkpointID id.CheckpointID,
 	v1Store *GitStore,
@@ -39,8 +40,14 @@ func ResolveCommittedReaderForCheckpoint( //nolint:ireturn // Caller needs polym
 		if err == nil && summary != nil {
 			return v2Store, summary, nil
 		}
+		if err != nil && ctx.Err() != nil {
+			return nil, nil, ctx.Err() //nolint:wrapcheck // Propagating context cancellation
+		}
 		if err != nil && !errors.Is(err, ErrCheckpointNotFound) && !errors.Is(err, ErrNoTranscript) {
-			return nil, nil, err
+			logging.Debug(ctx, "v2 ReadCommitted failed, falling back to v1",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
 
@@ -62,9 +69,9 @@ func ResolveCommittedReaderForCheckpoint( //nolint:ireturn // Caller needs polym
 // ResolveRawSessionLogForCheckpoint resolves the raw transcript log bytes for a
 // checkpoint with v2-first, v1-fallback behavior.
 //
-// Fallback behavior mirrors resume/rewind patterns:
+// Fallback behavior:
 //   - Try v2 first when preferCheckpointsV2 is true
-//   - Fall back to v1 when checkpoint/transcript is missing in v2
+//   - Fall back to v1 for any v2 failure except context cancellation
 func ResolveRawSessionLogForCheckpoint(
 	ctx context.Context,
 	checkpointID id.CheckpointID,
@@ -81,8 +88,14 @@ func ResolveRawSessionLogForCheckpoint(
 		if err == nil && len(content) > 0 {
 			return content, sessionID, nil
 		}
+		if err != nil && ctx.Err() != nil {
+			return nil, "", ctx.Err() //nolint:wrapcheck // Propagating context cancellation
+		}
 		if err != nil && !errors.Is(err, ErrCheckpointNotFound) && !errors.Is(err, ErrNoTranscript) {
-			return nil, "", err
+			logging.Debug(ctx, "v2 GetSessionLog failed, falling back to v1",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
 		}
 	}
 

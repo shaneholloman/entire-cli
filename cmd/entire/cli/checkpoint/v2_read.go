@@ -181,6 +181,57 @@ func (s *V2GitStore) ReadSessionCompactTranscript(ctx context.Context, checkpoin
 	return []byte(content), nil
 }
 
+// ReadSessionMetadataAndPrompts reads a session's metadata and prompts from the
+// v2 /main ref without requiring the raw transcript from /full/* refs.
+// Used by explain when the raw transcript is unavailable but compact transcript
+// (transcript.jsonl) on /main can substitute for display.
+// Returns ErrCheckpointNotFound if the checkpoint or session doesn't exist on /main.
+func (s *V2GitStore) ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	_, rootTreeHash, err := s.GetRefState(refName)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	rootTree, err := s.repo.TreeObject(rootTreeHash)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	cpTree, err := rootTree.Tree(checkpointID.Path())
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	sessionDir := strconv.Itoa(sessionIndex)
+	sessionTree, err := cpTree.Tree(sessionDir)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	result := &SessionContent{}
+
+	if metadataFile, fileErr := sessionTree.File(paths.MetadataFileName); fileErr == nil {
+		if content, contentErr := metadataFile.Contents(); contentErr == nil {
+			if jsonErr := json.Unmarshal([]byte(content), &result.Metadata); jsonErr != nil {
+				return nil, fmt.Errorf("failed to parse session metadata: %w", jsonErr)
+			}
+		}
+	}
+
+	if file, fileErr := sessionTree.File(paths.PromptFileName); fileErr == nil {
+		if content, contentErr := file.Contents(); contentErr == nil {
+			result.Prompts = content
+		}
+	}
+
+	return result, nil
+}
+
 // ReadSessionContent reads a session's metadata and prompts from the v2 /main ref,
 // and the raw transcript (full.jsonl) from /full/* refs (current + archived generations).
 // This is the v2 equivalent of GitStore.ReadSessionContent — it reads the raw agent

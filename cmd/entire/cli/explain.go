@@ -269,42 +269,40 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
 
-	// Load latest session content (needed for transcript and metadata)
-	content, err := readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
-	if err != nil {
-		return fmt.Errorf("failed to read checkpoint content: %w", err)
+	// For v2 checkpoints in default display modes (not --full, --generate, or
+	// --raw-transcript), read only from /main — metadata, prompts, and the
+	// compact transcript.jsonl. The raw transcript on /full/* is never needed
+	// for human-readable output and may be unavailable (rotated, not fetched).
+	needsRawTranscript := full || generate || rawTranscript
+	v2Reader, isCheckpointsV2 := resolvedReader.(*checkpoint.V2GitStore)
+
+	var content *checkpoint.SessionContent
+	if isCheckpointsV2 && !needsRawTranscript {
+		content, err = readV2ContentFromMain(ctx, v2Reader, fullCheckpointID, summary)
+		if err != nil {
+			return fmt.Errorf("failed to read checkpoint content: %w", err)
+		}
+	} else {
+		content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+		if err != nil {
+			return fmt.Errorf("failed to read checkpoint content: %w", err)
+		}
 	}
 
-	// Handle summary generation — uses raw transcript (before compact override).
+	// Handle summary generation — uses raw transcript.
 	if generate {
 		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
 			return err
 		}
-		// Reload the content to get the updated summary
-		content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+		// Reload to get the updated summary. After generation we only need
+		// /main data for display, so use the /main-only path for v2.
+		if isCheckpointsV2 {
+			content, err = readV2ContentFromMain(ctx, v2Reader, fullCheckpointID, summary)
+		} else {
+			content, err = readLatestSessionContentForExplain(ctx, resolvedReader, fullCheckpointID, summary)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to reload checkpoint: %w", err)
-		}
-	}
-
-	// For v2 checkpoints, prefer compact transcript.jsonl from /main for
-	// human-readable output (default and --short/verbose modes). Keep --full
-	// on raw full.jsonl semantics. Placed after --generate so summarization
-	// always receives the raw transcript.
-	if !full {
-		if v2Reader, ok := resolvedReader.(*checkpoint.V2GitStore); ok && len(summary.Sessions) > 0 {
-			latestIndex := len(summary.Sessions) - 1
-			compactTranscript, compactErr := v2Reader.ReadSessionCompactTranscript(ctx, fullCheckpointID, latestIndex)
-			if compactErr == nil && len(compactTranscript) > 0 {
-				content.Transcript = compactTranscript
-				content.Metadata.CheckpointTranscriptStart = 0
-				content.Metadata.TranscriptLinesAtStart = 0 //nolint:staticcheck // Set for backward compat with older CLI readers
-			} else if compactErr != nil && !errors.Is(compactErr, checkpoint.ErrNoTranscript) && !errors.Is(compactErr, checkpoint.ErrCheckpointNotFound) {
-				logging.Debug(ctx, "failed to read compact transcript, using raw transcript",
-					slog.String("checkpoint_id", fullCheckpointID.String()),
-					slog.String("error", compactErr.Error()),
-				)
-			}
 		}
 	}
 
@@ -399,6 +397,32 @@ func readLatestSessionContentForExplain(ctx context.Context, reader checkpoint.C
 	if err != nil {
 		return nil, fmt.Errorf("reading session %d content: %w", latestIndex, err)
 	}
+	return content, nil
+}
+
+// readV2ContentFromMain reads session content from the v2 /main ref only —
+// metadata, prompts, and the compact transcript (transcript.jsonl). This is the
+// primary read path for default display modes that don't need the raw transcript
+// stored on /full/* refs.
+func readV2ContentFromMain(ctx context.Context, v2Reader *checkpoint.V2GitStore, checkpointID id.CheckpointID, summary *checkpoint.CheckpointSummary) (*checkpoint.SessionContent, error) {
+	if summary == nil || len(summary.Sessions) == 0 {
+		return nil, checkpoint.ErrCheckpointNotFound
+	}
+
+	latestIndex := len(summary.Sessions) - 1
+
+	content, err := v2Reader.ReadSessionMetadataAndPrompts(ctx, checkpointID, latestIndex)
+	if err != nil {
+		return nil, fmt.Errorf("reading session %d metadata: %w", latestIndex, err)
+	}
+
+	compactTranscript, compactErr := v2Reader.ReadSessionCompactTranscript(ctx, checkpointID, latestIndex)
+	if compactErr == nil && len(compactTranscript) > 0 {
+		content.Transcript = compactTranscript
+		content.Metadata.CheckpointTranscriptStart = 0
+		content.Metadata.TranscriptLinesAtStart = 0 //nolint:staticcheck // Set for backward compat with older CLI readers
+	}
+
 	return content, nil
 }
 

@@ -133,6 +133,49 @@ func TestV2ReadSessionContent_MissingTranscript_ReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoTranscript)
 }
 
+func TestV2ReadSessionMetadataAndPrompts_ReturnsWithoutTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("f1f2f3f4f5f7")
+	ctx := context.Background()
+
+	// Write a checkpoint with prompts but no transcript (WriteCommitted skips
+	// /full/current when Transcript is empty).
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-meta-only",
+		Strategy:     "manual-commit",
+		Prompts:      []string{"test prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	// ReadSessionContent should fail (no transcript).
+	_, err = store.ReadSessionContent(ctx, cpID, 0)
+	require.ErrorIs(t, err, ErrNoTranscript)
+
+	// ReadSessionMetadataAndPrompts should succeed.
+	content, err := store.ReadSessionMetadataAndPrompts(ctx, cpID, 0)
+	require.NoError(t, err)
+	require.NotNil(t, content)
+	assert.Equal(t, "session-meta-only", content.Metadata.SessionID)
+	assert.Contains(t, content.Prompts, "test prompt")
+	assert.Empty(t, content.Transcript)
+}
+
+func TestV2ReadSessionMetadataAndPrompts_MissingCheckpoint(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("f1f2f3f4f5f8")
+	ctx := context.Background()
+
+	_, err := store.ReadSessionMetadataAndPrompts(ctx, cpID, 0)
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
 func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)

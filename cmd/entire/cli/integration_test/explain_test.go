@@ -9,9 +9,13 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestExplain_NoCurrentSession(t *testing.T) {
@@ -258,4 +262,160 @@ func TestExplain_CheckpointV2EnabledPrefersV2WhenDualWriteExists(t *testing.T) {
 	if strings.Contains(output, "v1 overridden prompt") {
 		t.Errorf("unexpected v1-overridden intent found in output: %s", output)
 	}
+}
+
+func TestExplain_CheckpointV2NoFullTranscriptUsesCompact(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+
+	// Enable v2 to get dual-write checkpoints.
+	env.PatchSettings(map[string]any{
+		"strategy_options": map[string]any{"checkpoints_v2": true},
+	})
+
+	session := env.NewSession()
+	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Create compact-only file")
+	require.NoError(t, err)
+
+	content := "compact only content"
+	env.WriteFile("compact-only.txt", content)
+	session.CreateTranscript(
+		"Create compact-only file",
+		[]FileChange{{Path: "compact-only.txt", Content: content}},
+	)
+	err = env.SimulateStop(session.ID, session.TranscriptPath)
+	require.NoError(t, err)
+
+	env.GitCommitWithShadowHooks("Create compact-only file", "compact-only.txt")
+	checkpointID := env.GetLatestCheckpointIDFromHistory()
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	require.NoError(t, err)
+
+	// Delete the v2 /full/current ref so no raw transcript is available from v2.
+	err = repo.Storer.RemoveReference(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	require.NoError(t, err)
+
+	// Overwrite the v1 transcript with a marker so we can detect if explain
+	// falls back to v1 instead of using the v2 compact transcript.
+	v1Store := checkpoint.NewGitStore(repo)
+	cpID := id.MustCheckpointID(checkpointID)
+	v1Content, err := v1Store.ReadSessionContent(context.Background(), cpID, 0)
+	require.NoError(t, err)
+
+	err = v1Store.UpdateCommitted(context.Background(), checkpoint.UpdateCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    v1Content.Metadata.SessionID,
+		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"v1 marker prompt"}]}}` + "\n"),
+		Prompts:      []string{"v1 marker prompt"},
+		Agent:        v1Content.Metadata.Agent,
+	})
+	require.NoError(t, err)
+
+	// Default explain (not --full) should succeed using compact transcript from v2 /main.
+	output, err := env.RunCLIWithError("explain", "--checkpoint", checkpointID[:6])
+	require.NoError(t, err, "expected explain to succeed with compact transcript when /full/* is missing: %s", output)
+
+	require.Contains(t, output, "Checkpoint: "+checkpointID)
+	// Intent should come from the v2 compact transcript, not the v1 marker.
+	require.Contains(t, output, "Intent: Create compact-only file")
+	require.NotContains(t, output, "v1 marker prompt",
+		"explain should use v2 compact transcript, not fall back to v1")
+}
+
+func TestExplain_CheckpointV2MalformedFallsBackToV1(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+
+	// Enable v2 to get dual-write checkpoints.
+	env.PatchSettings(map[string]any{
+		"strategy_options": map[string]any{"checkpoints_v2": true},
+	})
+
+	session := env.NewSession()
+	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Create v1 resilience file")
+	require.NoError(t, err)
+
+	content := "v1 resilience content"
+	env.WriteFile("v1-resilience.txt", content)
+	session.CreateTranscript(
+		"Create v1 resilience file",
+		[]FileChange{{Path: "v1-resilience.txt", Content: content}},
+	)
+	err = env.SimulateStop(session.ID, session.TranscriptPath)
+	require.NoError(t, err)
+
+	env.GitCommitWithShadowHooks("Create v1 resilience file", "v1-resilience.txt")
+	checkpointID := env.GetLatestCheckpointIDFromHistory()
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	require.NoError(t, err)
+
+	// Corrupt the v2 /main ref by replacing it with a tree containing invalid
+	// metadata.json. This causes ReadCommitted to return a JSON parse error
+	// (not ErrCheckpointNotFound), which tests whether the resolver falls back
+	// to v1 for non-sentinel errors.
+	corruptV2MainRef(t, repo, checkpointID)
+
+	// Explain should fall back to the valid v1 checkpoint.
+	output, err := env.RunCLIWithError("explain", "--checkpoint", checkpointID[:6])
+	require.NoError(t, err, "expected explain to fall back to v1 when v2 is malformed: %s", output)
+
+	require.Contains(t, output, "Checkpoint: "+checkpointID)
+	require.Contains(t, output, "Intent: Create v1 resilience file")
+}
+
+// corruptV2MainRef replaces the v2 /main ref's tree with one where the given
+// checkpoint's metadata.json contains invalid JSON. This triggers a parse error
+// in V2GitStore.ReadCommitted (a non-sentinel error).
+func corruptV2MainRef(t *testing.T, repo *git.Repository, checkpointID string) {
+	t.Helper()
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	ref, err := repo.Storer.Reference(refName)
+	require.NoError(t, err, "v2 /main ref should exist")
+
+	// Get the current commit to use as parent.
+	parentHash := ref.Hash()
+
+	// Create a blob with invalid JSON for metadata.json.
+	garbageBlob, err := checkpoint.CreateBlobFromContent(repo, []byte(`{invalid json!!!`))
+	require.NoError(t, err)
+
+	cpID := id.MustCheckpointID(checkpointID)
+	cpPath := cpID.Path() // e.g. "ab/cdef123456"
+	parts := strings.SplitN(cpPath, "/", 2)
+	require.Len(t, parts, 2, "checkpoint path should have shard/remainder format")
+
+	// Build tree bottom-up: metadata.json → checkpoint dir → shard dir → root
+	cpTree := &object.Tree{Entries: []object.TreeEntry{
+		{Name: "metadata.json", Mode: filemode.Regular, Hash: garbageBlob},
+	}}
+	cpTreeObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, cpTree.Encode(cpTreeObj))
+	cpTreeHash, err := repo.Storer.SetEncodedObject(cpTreeObj)
+	require.NoError(t, err)
+
+	shardTree := &object.Tree{Entries: []object.TreeEntry{
+		{Name: parts[1], Mode: filemode.Dir, Hash: cpTreeHash},
+	}}
+	shardTreeObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, shardTree.Encode(shardTreeObj))
+	shardTreeHash, err := repo.Storer.SetEncodedObject(shardTreeObj)
+	require.NoError(t, err)
+
+	rootTree := &object.Tree{Entries: []object.TreeEntry{
+		{Name: parts[0], Mode: filemode.Dir, Hash: shardTreeHash},
+	}}
+	rootTreeObj := repo.Storer.NewEncodedObject()
+	require.NoError(t, rootTree.Encode(rootTreeObj))
+	rootTreeHash, err := repo.Storer.SetEncodedObject(rootTreeObj)
+	require.NoError(t, err)
+
+	commitHash, err := checkpoint.CreateCommit(repo, rootTreeHash, parentHash,
+		"corrupt metadata for test", "Test", "test@test.com")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(refName, commitHash)))
 }
