@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	codexTypeMessage            = "message"
+	transcriptTypeMessage       = "message"
 	codexTypeFunctionCall       = "function_call"
 	codexTypeFunctionCallOutput = "function_call_output"
 )
@@ -98,7 +98,7 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 		}
 
 		switch {
-		case p.Type == codexTypeMessage && p.Role == "user":
+		case p.Type == transcriptTypeMessage && p.Role == "user":
 			text := codexUserText(p.Content)
 			if text == "" {
 				continue
@@ -113,7 +113,7 @@ func compactCodex(content []byte, opts MetadataFields) ([]byte, error) {
 			line.Content = contentJSON
 			appendLine(&result, line)
 
-		case p.Type == codexTypeMessage && p.Role == "assistant":
+		case p.Type == transcriptTypeMessage && p.Role == "assistant":
 			text := codexAssistantText(p.Content)
 			if text == "" {
 				continue
