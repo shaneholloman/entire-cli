@@ -24,7 +24,7 @@ type CommittedReader interface {
 //   - Fall back to v1 for any v2 failure except context cancellation
 //   - During the v2 migration period, a valid v1 copy should never be blocked
 //     by a corrupt or unreadable v2 copy
-func ResolveCommittedReaderForCheckpoint(
+func ResolveCommittedReaderForCheckpoint( //nolint:ireturn // Caller needs polymorphic v1/v2 reader.
 	ctx context.Context,
 	checkpointID id.CheckpointID,
 	v1Store *GitStore,

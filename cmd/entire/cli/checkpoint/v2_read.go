@@ -229,6 +229,13 @@ func (s *V2GitStore) ReadSessionMetadataAndPrompts(ctx context.Context, checkpoi
 		}
 	}
 
+	// Read compact transcript from the same session tree (avoids a second tree walk).
+	if compactFile, fileErr := sessionTree.File(paths.CompactTranscriptFileName); fileErr == nil {
+		if content, contentErr := compactFile.Contents(); contentErr == nil && content != "" {
+			result.Transcript = []byte(content)
+		}
+	}
+
 	return result, nil
 }
 
