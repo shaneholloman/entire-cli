@@ -8,6 +8,7 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -282,6 +283,12 @@ type WriteCommittedOptions struct {
 	// comparing checkpoint tree (agent work) to committed tree (may include human edits)
 	InitialAttribution *InitialAttribution
 
+	// PromptAttributionsJSON is the raw PromptAttributions data, JSON-encoded.
+	// Persisted for diagnostic purposes — shows exactly which prompt recorded
+	// which "user" lines, enabling root cause analysis of attribution bugs.
+	// Uses json.RawMessage to avoid importing session package.
+	PromptAttributionsJSON json.RawMessage
+
 	// Summary is an optional AI-generated summary for this checkpoint.
 	// This field may be nil when:
 	//   - summarization is disabled in settings
@@ -411,6 +418,10 @@ type CommittedMetadata struct {
 
 	// InitialAttribution is line-level attribution calculated at commit time
 	InitialAttribution *InitialAttribution `json:"initial_attribution,omitempty"`
+
+	// PromptAttributions is the raw per-prompt attribution data used to compute InitialAttribution.
+	// Diagnostic field — shows which prompt recorded which "user" lines.
+	PromptAttributions json.RawMessage `json:"prompt_attributions,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.
@@ -452,14 +463,15 @@ type SessionFilePaths struct {
 //
 //nolint:revive // Named CheckpointSummary to avoid conflict with existing Summary struct
 type CheckpointSummary struct {
-	CLIVersion       string             `json:"cli_version,omitempty"`
-	CheckpointID     id.CheckpointID    `json:"checkpoint_id"`
-	Strategy         string             `json:"strategy"`
-	Branch           string             `json:"branch,omitempty"`
-	CheckpointsCount int                `json:"checkpoints_count"`
-	FilesTouched     []string           `json:"files_touched"`
-	Sessions         []SessionFilePaths `json:"sessions"`
-	TokenUsage       *agent.TokenUsage  `json:"token_usage,omitempty"`
+	CLIVersion          string              `json:"cli_version,omitempty"`
+	CheckpointID        id.CheckpointID     `json:"checkpoint_id"`
+	Strategy            string              `json:"strategy"`
+	Branch              string              `json:"branch,omitempty"`
+	CheckpointsCount    int                 `json:"checkpoints_count"`
+	FilesTouched        []string            `json:"files_touched"`
+	Sessions            []SessionFilePaths  `json:"sessions"`
+	TokenUsage          *agent.TokenUsage   `json:"token_usage,omitempty"`
+	CombinedAttribution *InitialAttribution `json:"combined_attribution,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report
