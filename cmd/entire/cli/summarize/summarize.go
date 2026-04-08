@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
@@ -47,14 +48,21 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTo
 		FilesTouched: filesTouched,
 	}
 
-	// Use default generator if none provided
+	const defaultSummaryGenerationTimeout = 30 * time.Second
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, defaultSummaryGenerationTimeout)
+	defer cancel()
+
 	if generator == nil {
 		generator = &ClaudeGenerator{}
 	}
 
 	summary, err := generator.Generate(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate summary: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("summary generation timed out after %s", defaultSummaryGenerationTimeout.Round(time.Second))
+		}
+		return nil, err
 	}
 
 	return summary, nil
