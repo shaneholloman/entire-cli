@@ -88,6 +88,7 @@ func (c *CursorAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
 		Type:       agent.SessionStart,
 		SessionID:  raw.ConversationID,
 		SessionRef: raw.TranscriptPath,
+		Model:      raw.Model,
 		Timestamp:  time.Now(),
 	}, nil
 }
