@@ -239,15 +239,17 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Summary:                     summary,
 	}
 
-	redactedForCompact, compactRedactErr := redact.JSONLBytes(sessionData.Transcript)
-	if compactRedactErr != nil {
-		logging.Warn(ctx, "compact transcript redaction failed, skipping transcript.jsonl on /main",
-			slog.String("session_id", state.SessionID),
-			slog.String("error", compactRedactErr.Error()),
-		)
-		redactedForCompact = nil
+	if settings.IsCheckpointsV2Enabled(ctx) {
+		redactedForCompact, compactRedactErr := redact.JSONLBytes(sessionData.Transcript)
+		if compactRedactErr != nil {
+			logging.Warn(ctx, "compact transcript redaction failed, skipping transcript.jsonl on /main",
+				slog.String("session_id", state.SessionID),
+				slog.String("error", compactRedactErr.Error()),
+			)
+			redactedForCompact = nil
+		}
+		writeOpts.CompactTranscript = compactTranscriptForV2(ctx, ag, redactedForCompact, state.CheckpointTranscriptStart)
 	}
-	writeOpts.CompactTranscript = compactTranscriptForV2(ctx, ag, redactedForCompact, state.CheckpointTranscriptStart)
 
 	// Write checkpoint metadata to v1 branch
 	if err := store.WriteCommitted(ctx, writeOpts); err != nil {
