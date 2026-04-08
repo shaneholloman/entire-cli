@@ -78,13 +78,13 @@ func TestState_NormalizeAfterLoad(t *testing.T) {
 		assert.Equal(t, 0, state.TranscriptLinesAtStart)
 	})
 
-	t.Run("backfills_CompactTranscriptStart_from_CheckpointTranscriptStart", func(t *testing.T) {
+	t.Run("leaves_CompactTranscriptStart_zero_when_missing", func(t *testing.T) {
 		t.Parallel()
 		state := &State{
 			CheckpointTranscriptStart: 120,
 		}
 		state.NormalizeAfterLoad(context.Background())
-		assert.Equal(t, 120, state.CompactTranscriptStart)
+		assert.Equal(t, 0, state.CompactTranscriptStart)
 	})
 
 	t.Run("preserves_existing_CompactTranscriptStart", func(t *testing.T) {
@@ -110,26 +110,26 @@ func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 			name:        "migrates old condensed_transcript_lines",
 			json:        `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
 			wantCTS:     42,
-			wantCompact: 42,
+			wantCompact: 0,
 			wantStep:    5,
 		},
 		{
 			name:        "migrates old transcript_lines_at_start",
 			json:        `{"session_id":"s1","transcript_lines_at_start":75}`,
 			wantCTS:     75,
-			wantCompact: 75,
+			wantCompact: 0,
 		},
 		{
 			name:        "preserves new field over old",
 			json:        `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
 			wantCTS:     50,
-			wantCompact: 50,
+			wantCompact: 0,
 		},
 		{
 			name:        "handles clean new format",
 			json:        `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
 			wantCTS:     25,
-			wantCompact: 25,
+			wantCompact: 0,
 			wantStep:    3,
 		},
 		{

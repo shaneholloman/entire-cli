@@ -250,7 +250,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 			redactedForCompact = nil
 		}
 		writeOpts.CompactTranscript = compactTranscriptForV2(ctx, ag, redactedForCompact, state.CheckpointTranscriptStart)
-		writeOpts.CompactTranscriptStart = state.CompactTranscriptStart
+		writeOpts.CompactTranscriptStart = computeCompactTranscriptStart(ctx, ag, state, redactedForCompact, writeOpts.CompactTranscript)
 	}
 
 	// Write checkpoint metadata to v1 branch
@@ -1134,6 +1134,41 @@ func compactTranscriptForV2(ctx context.Context, ag agent.Agent, transcript []by
 // countCompactLines returns line count for compact transcript JSONL.
 func countCompactLines(compactTranscript []byte) int {
 	return bytes.Count(compactTranscript, []byte{'\n'})
+}
+
+// computeCompactTranscriptStart chooses the compact transcript start line offset
+// for v2 /main metadata.
+//
+// Preferred source is session state CompactTranscriptStart. For legacy sessions
+// that have only full-transcript offsets persisted, this recalculates the compact
+// offset from transcript bytes when possible. On any failure, returns 0 (fail-open).
+func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *SessionState, transcript []byte, scopedCompact []byte) int {
+	if state.CompactTranscriptStart > 0 {
+		return state.CompactTranscriptStart
+	}
+	if state.CheckpointTranscriptStart == 0 || ag == nil || len(transcript) == 0 || len(scopedCompact) == 0 {
+		return 0
+	}
+
+	fullCompacted, err := compact.Compact(transcript, compact.MetadataFields{
+		Agent:      string(ag.Name()),
+		CLIVersion: versioninfo.Version,
+		StartLine:  0,
+	})
+	if err != nil || len(fullCompacted) == 0 {
+		logging.Warn(ctx, "failed to recalculate compact transcript start, using 0",
+			slog.String("session_id", state.SessionID),
+		)
+		return 0
+	}
+
+	fullLines := countCompactLines(fullCompacted)
+	scopedLines := countCompactLines(scopedCompact)
+	offset := fullLines - scopedLines
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 // writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
