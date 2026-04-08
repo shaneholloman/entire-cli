@@ -187,9 +187,7 @@ func TestAttach_AlreadyTracked_NoCheckpoint(t *testing.T) {
 	env.GitCommit("add research notes")
 
 	// Now attach — session state exists but has no checkpoint.
-	// Don't use -f because the amend may fail in the test environment
-	// (pre-commit hooks reference paths that don't exist in the temp repo).
-	output := env.RunCLI("attach", session1.ID, "-a", "claude-code")
+	output := env.RunCLI("attach", session1.ID, "-a", "claude-code", "-f")
 
 	if !strings.Contains(output, "Attached session") {
 		t.Errorf("expected 'Attached session' in output, got:\n%s", output)
