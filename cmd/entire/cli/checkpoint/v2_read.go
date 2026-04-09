@@ -222,7 +222,7 @@ func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
 		return nil
 	}
 
-	args := append([]string{"fetch", s.FetchRemote}, refSpecs...)
+	args := append([]string{"fetch", "--no-tags", s.FetchRemote}, refSpecs...)
 	fetchCmd := exec.CommandContext(ctx, "git", args...)
 	if fetchOutput, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		return fmt.Errorf("fetch failed: %s", fetchOutput)
