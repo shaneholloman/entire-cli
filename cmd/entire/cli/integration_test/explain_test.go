@@ -419,3 +419,92 @@ func corruptV2MainRef(t *testing.T, repo *git.Repository, checkpointID string) {
 	require.NoError(t, repo.Storer.SetReference(
 		plumbing.NewHashReference(refName, commitHash)))
 }
+
+// TestExplain_BranchListingShowsCheckpointsAndPrompts runs the same scenario
+// with v2 disabled and enabled, verifying that `entire explain` (branch listing)
+// finds committed checkpoints and displays their prompts in both modes.
+func TestExplain_BranchListingShowsCheckpointsAndPrompts(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		v2   bool
+	}{
+		{"v1_only", false},
+		{"v2_enabled", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := NewFeatureBranchEnv(t)
+
+			if tc.v2 {
+				env.PatchSettings(map[string]any{
+					"strategy_options": map[string]any{"checkpoints_v2": true},
+				})
+			}
+
+			session := env.NewSession()
+			err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Implement user authentication")
+			require.NoError(t, err)
+
+			env.WriteFile("auth.go", "package auth\nfunc Login() {}\n")
+			session.CreateTranscript(
+				"Implement user authentication",
+				[]FileChange{{Path: "auth.go", Content: "package auth\nfunc Login() {}\n"}},
+			)
+			err = env.SimulateStop(session.ID, session.TranscriptPath)
+			require.NoError(t, err)
+
+			env.GitCommitWithShadowHooks("Implement user authentication", "auth.go")
+
+			// `entire explain` (no flags) should show the branch listing with the checkpoint.
+			output, err := env.RunCLIWithError("explain")
+			require.NoError(t, err, "explain should succeed: %s", output)
+
+			require.Contains(t, output, "Branch:")
+			require.Contains(t, output, "Checkpoints: 1")
+			require.Contains(t, output, "Implement user authentication",
+				"branch listing should show the commit message or prompt")
+		})
+	}
+}
+
+// TestExplain_BranchListingV2OnlyAfterV1Deleted verifies that the branch listing
+// works when only v2 data exists (v1 metadata branch deleted after dual-write).
+func TestExplain_BranchListingV2OnlyAfterV1Deleted(t *testing.T) {
+	t.Parallel()
+	env := NewFeatureBranchEnv(t)
+
+	env.PatchSettings(map[string]any{
+		"strategy_options": map[string]any{"checkpoints_v2": true},
+	})
+
+	session := env.NewSession()
+	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Create v2 resilience file")
+	require.NoError(t, err)
+
+	content := "v2 resilience content"
+	env.WriteFile("resilience.txt", content)
+	session.CreateTranscript(
+		"Create v2 resilience file",
+		[]FileChange{{Path: "resilience.txt", Content: content}},
+	)
+	err = env.SimulateStop(session.ID, session.TranscriptPath)
+	require.NoError(t, err)
+
+	env.GitCommitWithShadowHooks("Create v2 resilience file", "resilience.txt")
+
+	// Delete the v1 metadata branch.
+	repo, err := git.PlainOpen(env.RepoDir)
+	require.NoError(t, err)
+	_ = repo.Storer.RemoveReference(plumbing.NewBranchReferenceName("entire/checkpoints/v1"))
+
+	// Branch listing should still work using v2 data.
+	output, err := env.RunCLIWithError("explain")
+	require.NoError(t, err, "explain should succeed with v2 only: %s", output)
+
+	require.Contains(t, output, "Checkpoints: 1",
+		"checkpoint should be visible from v2 after v1 deletion")
+	require.Contains(t, output, "Create v2 resilience file",
+		"prompt/intent should be readable from v2 after v1 deletion")
+}
