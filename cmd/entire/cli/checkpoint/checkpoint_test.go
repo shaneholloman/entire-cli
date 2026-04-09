@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/stretchr/testify/require"
@@ -1844,11 +1845,9 @@ func TestWriteTemporary_FirstCheckpoint_ExcludesGitIgnoredFiles(t *testing.T) {
 func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredModifiedFiles(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Initialize a git repository
-	repo, err := git.PlainInit(tempDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tempDir)
+	repo, err := git.PlainOpen(tempDir)
+	require.NoError(t, err)
 
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -1871,12 +1870,10 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredModifiedFiles(t *
 	if _, err := worktree.Add("main.go"); err != nil {
 		t.Fatalf("failed to add main.go: %v", err)
 	}
-	initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
-	if err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
+	testutil.GitCommit(t, tempDir, "Initial commit")
+	headRef, err := repo.Head()
+	require.NoError(t, err)
+	initialCommit := headRef.Hash()
 
 	// Create gitignored files on disk (simulating an agent creating/modifying them)
 	if err := os.WriteFile(filepath.Join(tempDir, ".env"), []byte("API_KEY=sk-secret-1234\n"), 0o644); err != nil {
@@ -1977,10 +1974,9 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredModifiedFiles(t *
 func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredNewFiles(t *testing.T) {
 	tempDir := t.TempDir()
 
-	repo, err := git.PlainInit(tempDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tempDir)
+	repo, err := git.PlainOpen(tempDir)
+	require.NoError(t, err)
 
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -2001,12 +1997,10 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredNewFiles(t *testi
 	if _, err := worktree.Add("README.md"); err != nil {
 		t.Fatalf("failed to add README: %v", err)
 	}
-	initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
-	if err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
+	testutil.GitCommit(t, tempDir, "Initial commit")
+	headRef, err := repo.Head()
+	require.NoError(t, err)
+	initialCommit := headRef.Hash()
 
 	// Create the gitignored file and a legitimate new file on disk
 	if err := os.WriteFile(filepath.Join(tempDir, ".env"), []byte("SECRET=abc123\n"), 0o644); err != nil {
@@ -2092,10 +2086,9 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesGitIgnoredNewFiles(t *testi
 func TestWriteTemporary_SubsequentCheckpoint_ExcludesNestedGitIgnoredFiles(t *testing.T) {
 	tempDir := t.TempDir()
 
-	repo, err := git.PlainInit(tempDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tempDir)
+	repo, err := git.PlainOpen(tempDir)
+	require.NoError(t, err)
 
 	worktree, err := repo.Worktree()
 	if err != nil {
@@ -2115,12 +2108,10 @@ func TestWriteTemporary_SubsequentCheckpoint_ExcludesNestedGitIgnoredFiles(t *te
 	if _, err := worktree.Add("index.js"); err != nil {
 		t.Fatalf("failed to add index.js: %v", err)
 	}
-	initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
-	if err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
+	testutil.GitCommit(t, tempDir, "Initial commit")
+	headRef, err := repo.Head()
+	require.NoError(t, err)
+	initialCommit := headRef.Hash()
 
 	// Create node_modules file on disk
 	if err := os.MkdirAll(filepath.Join(tempDir, "node_modules", "pkg"), 0o755); err != nil {

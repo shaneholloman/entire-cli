@@ -1104,13 +1104,17 @@ func filterGitIgnoredFiles(ctx context.Context, repo *git.Repository, files []st
 
 	wt, err := repo.Worktree()
 	if err != nil {
-		return files
+		logging.Warn(logging.WithComponent(ctx, "checkpoint"),
+			"failed to inspect worktree for gitignore filtering, excluding all files from checkpoint",
+			slog.String("error", err.Error()))
+		return nil
 	}
 	repoRoot := wt.Filesystem.Root()
 
 	// Use git check-ignore to identify which files are ignored.
 	// Pass files via stdin (-z for NUL-separated, --stdin) to handle special characters.
-	cmd := exec.CommandContext(ctx, "git", "check-ignore", "-z", "--stdin")
+	// Use --no-index so even tracked files that still match ignore rules are filtered.
+	cmd := exec.CommandContext(ctx, "git", "check-ignore", "--no-index", "-z", "--stdin")
 	cmd.Dir = repoRoot
 	cmd.Stdin = strings.NewReader(strings.Join(files, "\x00") + "\x00")
 
