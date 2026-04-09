@@ -937,8 +937,10 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	if !hasInstalledHooks {
 		switch {
 		case len(detected) == 1:
-			fmt.Fprintf(w, "Detected agent: %s\n\n", detected[0].Type())
-			return detected, nil
+			if isBuiltInAgent(detected[0]) {
+				fmt.Fprintf(w, "Detected agent: %s\n\n", detected[0].Type())
+				return detected, nil
+			}
 
 		case len(detected) > 1:
 			agentTypes := make([]string, 0, len(detected))
@@ -977,7 +979,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 
 	// Build pre-selection set.
 	// On re-run: only pre-select agents with hooks installed (respect prior deselection).
-	// On first run: pre-select all detected agents.
+	// On first run: pre-select detected built-in agents only.
 	preSelectedSet := make(map[types.AgentName]struct{})
 	if hasInstalledHooks {
 		for _, name := range installedAgentNames {
@@ -985,7 +987,9 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 		}
 	} else {
 		for _, ag := range detected {
-			preSelectedSet[ag.Name()] = struct{}{}
+			if isBuiltInAgent(ag) {
+				preSelectedSet[ag.Name()] = struct{}{}
+			}
 		}
 	}
 
@@ -1068,6 +1072,10 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	}
 	fmt.Fprintf(w, "\nSelected agents: %s\n\n", strings.Join(agentTypes, ", "))
 	return selectedAgents, nil
+}
+
+func isBuiltInAgent(ag agent.Agent) bool {
+	return !external.IsExternal(ag)
 }
 
 // canPromptInteractively checks if we can show interactive prompts.

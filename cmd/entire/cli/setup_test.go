@@ -6,13 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -29,6 +33,7 @@ import (
 func setupTestDir(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
+	hideExternalAgentsFromPath(t)
 	t.Chdir(tmpDir)
 	paths.ClearWorktreeRootCache()
 	session.ClearGitCommonDirCache()
@@ -53,6 +58,65 @@ func writeSettings(t *testing.T, content string) {
 	}
 	if err := os.WriteFile(EntireSettingsFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("Failed to write settings file: %v", err)
+	}
+}
+
+func hideExternalAgentsFromPath(t *testing.T) {
+	t.Helper()
+
+	pathEnv := os.Getenv("PATH")
+	if pathEnv == "" {
+		return
+	}
+
+	t.Setenv("PATH", pathWithoutExternalAgents(pathEnv))
+}
+
+func pathWithoutExternalAgents(pathEnv string) string {
+	filtered := make([]string, 0, len(filepath.SplitList(pathEnv)))
+	for _, dir := range filepath.SplitList(pathEnv) {
+		matches, err := filepath.Glob(filepath.Join(dir, "entire-agent-*"))
+		if err != nil || len(matches) > 0 {
+			continue
+		}
+		filtered = append(filtered, dir)
+	}
+
+	return strings.Join(filtered, string(os.PathListSeparator))
+}
+
+func writeExternalAgentBinary(t *testing.T, dir, name string) {
+	t.Helper()
+
+	script := `#!/bin/sh
+case "$1" in
+  info)
+    echo '{"protocol_version":1,"name":"` + name + `","type":"` + name + ` Agent","description":"External test agent","is_preview":false,"protected_dirs":[],"hook_names":["stop"],"capabilities":{"hooks":true}}'
+    ;;
+  detect)
+    if [ "$ENTIRE_TEST_EXTERNAL_PRESENT" = "1" ]; then
+      echo '{"present": true}'
+    else
+      echo '{"present": false}'
+    fi
+    ;;
+  install-hooks)
+    echo '{"hooks_installed": 1}'
+    ;;
+  uninstall-hooks)
+    exit 0
+    ;;
+  are-hooks-installed)
+    echo '{"installed": false}'
+    ;;
+  *)
+    echo '{}'
+    ;;
+esac
+`
+
+	if err := os.WriteFile(filepath.Join(dir, "entire-agent-"+name), []byte(script), 0o755); err != nil {
+		t.Fatalf("Failed to write external agent binary: %v", err)
 	}
 }
 
@@ -932,6 +996,90 @@ func TestDetectOrSelectAgent_GeminiDetected(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "Detected agent:") {
 		t.Errorf("Expected output to contain 'Detected agent:', got: %s", output)
+	}
+}
+
+func TestDetectOrSelectAgent_OnlyExternalDetected_WithTTY_PromptsUser(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir, t.Setenv, and global agent registration
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	externalAgentName := "ext-prompt-pi"
+	externalDir := t.TempDir()
+	writeExternalAgentBinary(t, externalDir, externalAgentName)
+	t.Setenv("ENTIRE_TEST_EXTERNAL_PRESENT", "1")
+	t.Setenv("PATH", externalDir)
+
+	external.DiscoverAndRegisterAlways(context.Background())
+
+	var receivedAvailable []string
+	selectFn := func(available []string) ([]string, error) {
+		receivedAvailable = available
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	agents, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	if err != nil {
+		t.Fatalf("detectOrSelectAgent() error = %v", err)
+	}
+
+	if len(receivedAvailable) == 0 {
+		t.Fatal("Expected interactive prompt when only an external agent is detected")
+	}
+	if !slices.Contains(receivedAvailable, externalAgentName) {
+		t.Fatalf("Expected external agent %q in options, got %v", externalAgentName, receivedAvailable)
+	}
+	if !slices.Contains(receivedAvailable, string(agent.AgentNameClaudeCode)) {
+		t.Fatalf("Expected built-in agent options alongside external agent, got %v", receivedAvailable)
+	}
+	if len(agents) != 1 || agents[0].Name() != agent.AgentNameClaudeCode {
+		t.Fatalf("Expected selected Claude Code agent, got %v", agents)
+	}
+	if strings.Contains(buf.String(), "Detected agent:") {
+		t.Errorf("Expected external-only detection to prompt instead of auto-selecting, got output: %s", buf.String())
+	}
+}
+
+func TestIsBuiltInAgent_ExternalAgent_False(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	setupTestRepo(t)
+
+	externalAgentName := "ext-preselect-pi"
+	externalDir := t.TempDir()
+	writeExternalAgentBinary(t, externalDir, externalAgentName)
+	t.Setenv("ENTIRE_TEST_EXTERNAL_PRESENT", "1")
+	t.Setenv("PATH", externalDir)
+
+	external.DiscoverAndRegisterAlways(context.Background())
+
+	externalAgent, err := agent.Get(types.AgentName(externalAgentName))
+	if err != nil {
+		t.Fatalf("failed to get external agent %q: %v", externalAgentName, err)
+	}
+
+	if isBuiltInAgent(externalAgent) {
+		t.Fatalf("expected external agent %q to not be treated as built-in", externalAgentName)
+	}
+}
+
+func TestIsBuiltInAgent_BuiltInAgent_True(t *testing.T) {
+	t.Parallel()
+
+	claudeAgent, err := agent.Get(agent.AgentNameClaudeCode)
+	if err != nil {
+		t.Fatalf("failed to get claude agent: %v", err)
+	}
+
+	if !isBuiltInAgent(claudeAgent) {
+		t.Fatal("expected built-in agent to be treated as built-in")
 	}
 }
 
