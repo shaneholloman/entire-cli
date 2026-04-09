@@ -428,13 +428,23 @@ func readV2ContentFromMain(ctx context.Context, v2Reader *checkpoint.V2GitStore,
 		return nil, fmt.Errorf("reading session %d metadata: %w", latestIndex, err)
 	}
 
-	// ReadSessionMetadataAndPrompts already reads the compact transcript from
-	// the same session tree. Reset transcript offsets when compact data is present.
+	// ReadSessionMetadataAndPrompts reads the compact transcript from the same
+	// session tree. Reset transcript offsets when compact data is present.
 	if len(content.Transcript) > 0 {
 		content.Metadata.CheckpointTranscriptStart = 0
 		content.Metadata.TranscriptLinesAtStart = 0 //nolint:staticcheck // Set for backward compat with older CLI readers
+		return content, nil
 	}
 
+	// No compact transcript on /main — fall back to the raw transcript on
+	// /full/current for the most accurate display before resorting to prompt.txt.
+	fullContent, fullErr := v2Reader.ReadSessionContent(ctx, checkpointID, latestIndex)
+	if fullErr == nil && len(fullContent.Transcript) > 0 {
+		content.Transcript = fullContent.Transcript
+		return content, nil
+	}
+
+	// Last resort: return metadata + prompts without transcript.
 	return content, nil
 }
 

@@ -1178,6 +1178,61 @@ func TestRunExplainCheckpoint_V2OnlyGenerateSucceedsViaV2Store(t *testing.T) {
 	}
 }
 
+func TestRunExplainCheckpoint_V2FallsBackToFullWhenCompactMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("test"), 0o644))
+	_, err = wt.Add("test.txt")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmpDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
+		0o644,
+	))
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+	cpID := id.MustCheckpointID("e1e2e3e4e5e6")
+	ctx := context.Background()
+
+	rawTranscript := []byte(
+		`{"type":"user","message":{"content":[{"type":"text","text":"raw fallback prompt"}]}}` + "\n" +
+			`{"type":"assistant","message":{"content":"raw reply"}}` + "\n",
+	)
+
+	// Write checkpoint with raw transcript but NO compact transcript.
+	require.NoError(t, v2Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-no-compact",
+		Strategy:     "manual-commit",
+		Transcript:   rawTranscript,
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	// Default explain (not --full) should fall back to /full/current transcript
+	// when compact transcript is missing on /main.
+	var buf, errBuf bytes.Buffer
+	err = runExplainCheckpoint(ctx, &buf, &errBuf, "e1e2e3", false, false, false, false, false, false, false)
+	require.NoError(t, err)
+
+	output := buf.String()
+	require.Contains(t, output, "raw fallback prompt",
+		"should use raw transcript from /full/current when compact is missing")
+}
+
 func TestRunExplainCheckpoint_V2CompactTranscriptNotUsedForGenerate(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
