@@ -908,7 +908,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		headTree = t
 	}
 	var parentTree *object.Tree
-	if commit.NumParents() > 0 && len(commit.ParentHashes) > 0 {
+	if commit.NumParents() > 0 {
 		if parent, err := commit.Parent(0); err == nil {
 			if t, err := parent.Tree(); err == nil {
 				parentTree = t
