@@ -1544,7 +1544,11 @@ func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, prompt
 
 	if promptFn == nil {
 		if !canPromptInteractively() {
-			fmt.Fprintf(w, "Note: Vercel detected. Run `entire configure` interactively to disable deployments for `%s` branches.\n", vercelBranchPattern)
+			fmt.Fprintf(
+				w,
+				"Note: Vercel detected. To disable deployments for `%s` branches, manually update `vercel.json` to ignore those branches.\n",
+				vercelBranchPattern,
+			)
 			return nil
 		}
 		promptFn = promptVercelDeploymentDisable
