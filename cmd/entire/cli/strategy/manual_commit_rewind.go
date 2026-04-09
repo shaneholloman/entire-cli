@@ -745,7 +745,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		if resolver, ok := sessionAgent.(agent.RestoredSessionPathResolver); ok {
 			resolvedFile, resolveErr := resolver.ResolveRestoredSessionFile(sessionAgentDir, sessionID, content.Transcript)
 			if resolveErr != nil {
-				fmt.Fprintf(errW, "  Warning: failed to resolve restored session path for session %d: %v (using fallback path)\n", i, resolveErr)
+				fmt.Fprintf(errW, "  Warning: failed to resolve restored session path for session %d (%s): %v (using fallback path)\n", i, sessionID, resolveErr)
 			} else {
 				sessionFile = resolvedFile
 			}
