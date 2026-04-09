@@ -132,6 +132,7 @@ func (c *CursorAgent) parseSessionEnd(ctx context.Context, stdin io.Reader) (*ag
 		Type:       agent.SessionEnd,
 		SessionID:  raw.ConversationID,
 		SessionRef: c.resolveTranscriptRef(ctx, raw.ConversationID, raw.TranscriptPath),
+		Model:      raw.Model,
 		DurationMs: intFromJSON(raw.DurationMs),
 		Timestamp:  time.Now(),
 	}, nil

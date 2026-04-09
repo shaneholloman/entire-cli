@@ -200,6 +200,23 @@ func TestParseHookEvent_SessionEnd(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_SessionEnd_IncludesModel(t *testing.T) {
+	t.Parallel()
+
+	ag := &CursorAgent{}
+	input := `{"conversation_id": "end-model", "transcript_path": "/tmp/end.jsonl", "model": "gpt-4o"}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameSessionEnd, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	require.NotNil(t, event, "expected event, got nil")
+	if event.Model != "gpt-4o" {
+		t.Errorf("expected model 'gpt-4o', got %q", event.Model)
+	}
+}
+
 func TestParseHookEvent_TurnEnd_CLINoTranscriptPath(t *testing.T) {
 	ag := &CursorAgent{}
 	// Set up a temp dir that simulates the Cursor project dir with a flat transcript
