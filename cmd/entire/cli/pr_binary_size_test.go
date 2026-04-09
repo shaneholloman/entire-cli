@@ -42,6 +42,36 @@ func TestCheckPRBinaries_AddThenDeleteStillFails(t *testing.T) {
 	require.Contains(t, output, "oversized.bin")
 }
 
+func TestCheckPRBinaries_MergeCommitStillFails(t *testing.T) {
+	t.Parallel()
+
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	testutil.WriteFile(t, repoDir, "README.md", "init\n")
+	testutil.GitAdd(t, repoDir, "README.md")
+	testutil.GitCommit(t, repoDir, "init")
+	baseSHA := testutil.GetHeadHash(t, repoDir)
+
+	runGitCommand(t, repoDir, "checkout", "-b", "feature")
+	testutil.WriteFile(t, repoDir, "feature.txt", "feature\n")
+	testutil.GitAdd(t, repoDir, "feature.txt")
+	testutil.GitCommit(t, repoDir, "feature change")
+
+	runGitCommand(t, repoDir, "checkout", "-b", "side", baseSHA)
+	largeBinary := bytes.Repeat([]byte{0}, 1048577)
+	err := os.WriteFile(filepath.Join(repoDir, "oversized.bin"), largeBinary, 0o644)
+	require.NoError(t, err)
+	testutil.GitAdd(t, repoDir, "oversized.bin")
+	testutil.GitCommit(t, repoDir, "add oversized binary")
+
+	runGitCommand(t, repoDir, "checkout", "feature")
+	runGitCommand(t, repoDir, "merge", "--no-ff", "side", "-m", "merge side")
+
+	output, err := runBinaryCheckScript(t, repoDir, baseSHA, testutil.GetHeadHash(t, repoDir))
+	require.Error(t, err)
+	require.Contains(t, output, "oversized.bin")
+}
+
 func runBinaryCheckScript(t *testing.T, repoDir, baseSHA, headSHA string) (string, error) {
 	t.Helper()
 

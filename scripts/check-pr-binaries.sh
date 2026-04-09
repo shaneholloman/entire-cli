@@ -54,7 +54,7 @@ while IFS= read -r commit; do
     fi
 
     violations+=("${path}:${blob_size}")
-  done < <(git diff-tree --root --no-commit-id --diff-filter=AM -r --numstat "${commit}")
+  done < <(git diff-tree -m --root --no-commit-id --diff-filter=AM -r --numstat "${commit}")
 done < <(git rev-list --reverse "${base_sha}..${head_ref}")
 
 if (( ${#violations[@]} == 0 )); then
