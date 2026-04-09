@@ -19,7 +19,7 @@ require (
 	github.com/zalando/go-keyring v0.2.8
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	golang.org/x/mod v0.34.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.41.0
 )
 
