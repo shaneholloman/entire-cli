@@ -733,6 +733,76 @@ func TestBuildCondensedTranscriptFromBytes_Codex(t *testing.T) {
 	}
 }
 
+func TestBuildCondensedTranscriptFromBytes_Codex_CustomToolCall(t *testing.T) {
+	t.Parallel()
+
+	codexTranscript := []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
+{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"create hello.txt"}]}}
+{"timestamp":"t3","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Creating the file now."}]}}
+{"timestamp":"t4","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n*** Add File: hello.txt\n+Hello World\n*** End Patch\n"}}
+{"timestamp":"t5","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":{"type":"text","text":"Success. Updated: A hello.txt"}}}
+{"timestamp":"t6","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
+`)
+
+	entries, err := BuildCondensedTranscriptFromBytes(codexTranscript, agent.AgentTypeCodex)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d: %#v", len(entries), entries)
+	}
+
+	if entries[0].Type != EntryTypeUser || entries[0].Content != "create hello.txt" {
+		t.Fatalf("unexpected first entry: %#v", entries[0])
+	}
+
+	if entries[1].Type != EntryTypeAssistant || entries[1].Content != "Creating the file now." {
+		t.Fatalf("unexpected second entry: %#v", entries[1])
+	}
+
+	if entries[2].Type != EntryTypeTool || entries[2].ToolName != "apply_patch" {
+		t.Fatalf("expected apply_patch tool entry, got: %#v", entries[2])
+	}
+
+	if entries[3].Type != EntryTypeAssistant || entries[3].Content != "Done." {
+		t.Fatalf("unexpected final entry: %#v", entries[3])
+	}
+}
+
+func TestBuildCondensedTranscriptFromBytes_Codex_ExecCommandDetail(t *testing.T) {
+	t.Parallel()
+
+	codexTranscript := []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
+{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Running command."}]}}
+{"timestamp":"t3","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call_1","arguments":"{\"cmd\":\"ls -la\",\"workdir\":\"/repo\"}"}}
+{"timestamp":"t4","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"total 0"}}
+`)
+
+	entries, err := BuildCondensedTranscriptFromBytes(codexTranscript, agent.AgentTypeCodex)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the tool entry
+	var toolEntry *Entry
+	for i := range entries {
+		if entries[i].Type == EntryTypeTool {
+			toolEntry = &entries[i]
+			break
+		}
+	}
+	if toolEntry == nil {
+		t.Fatalf("no tool entry found in entries: %#v", entries)
+	}
+	if toolEntry.ToolName != "exec_command" {
+		t.Fatalf("expected exec_command, got %q", toolEntry.ToolName)
+	}
+	if toolEntry.ToolDetail != "ls -la" {
+		t.Fatalf("expected tool detail 'ls -la', got %q", toolEntry.ToolDetail)
+	}
+}
+
 func TestBuildCondensedTranscriptFromBytes_OpenCodeUserAndAssistant(t *testing.T) {
 	// OpenCode export JSON format
 	ocExportJSON := `{

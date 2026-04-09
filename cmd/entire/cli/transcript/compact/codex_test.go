@@ -53,6 +53,40 @@ func TestCompact_CodexInlineCases(t *testing.T) {
 			},
 		},
 		{
+			name: "assistant with custom_tool_call apply_patch and output",
+			input: []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
+{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Creating the file now."}]}}
+{"timestamp":"t3","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n*** Add File: hello.txt\n+Hello World\n*** End Patch\n"}}
+{"timestamp":"t4","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_1","output":{"type":"text","text":"Success. Updated: A hello.txt"}}}
+`),
+			expected: []string{
+				`{"v":1,"agent":"codex","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Creating the file now."},{"type":"tool_use","id":"call_1","name":"apply_patch","input":{"input":"*** Begin Patch\n*** Add File: hello.txt\n+Hello World\n*** End Patch\n"},"result":{"output":"Success. Updated: A hello.txt","status":"success"}}]}`,
+			},
+		},
+		{
+			name: "standalone custom_tool_call without preceding assistant text",
+			input: []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
+{"timestamp":"t2","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_2","name":"apply_patch","input":"*** Begin Patch\n*** Update File: readme.md\n-old\n+new\n*** End Patch\n"}}
+{"timestamp":"t3","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":{"type":"text","text":"Success. Updated: M readme.md"}}}
+`),
+			expected: []string{
+				`{"v":1,"agent":"codex","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"tool_use","id":"call_2","name":"apply_patch","input":{"input":"*** Begin Patch\n*** Update File: readme.md\n-old\n+new\n*** End Patch\n"},"result":{"output":"Success. Updated: M readme.md","status":"success"}}]}`,
+			},
+		},
+		{
+			name: "mixed function_call and custom_tool_call after same assistant",
+			input: []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
+{"timestamp":"t2","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Running then patching."}]}}
+{"timestamp":"t3","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls\"}","call_id":"call_1"}}
+{"timestamp":"t4","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"file.txt"}}
+{"timestamp":"t5","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_2","name":"apply_patch","input":"patch data"}}
+{"timestamp":"t6","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":{"type":"text","text":"ok"}}}
+`),
+			expected: []string{
+				`{"v":1,"agent":"codex","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Running then patching."},{"type":"tool_use","id":"call_1","name":"exec_command","input":{"cmd":"ls"},"result":{"output":"file.txt","status":"success"}},{"type":"tool_use","id":"call_2","name":"apply_patch","input":{"input":"patch data"},"result":{"output":"ok","status":"success"}}]}`,
+			},
+		},
+		{
 			name: "drops reasoning and event_msg",
 			input: []byte(`{"timestamp":"t1","type":"session_meta","payload":{"id":"s1"}}
 {"timestamp":"t2","type":"event_msg","payload":{"type":"task_started"}}
