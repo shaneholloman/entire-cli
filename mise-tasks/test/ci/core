@@ -5,7 +5,7 @@ set -eu
 
 parallel="${GO_TEST_PARALLEL:-16}"
 
-packages="$(go list ./... | grep -v '^github.com/entireio/cli/cmd/entire/cli/integration_test$')"
+packages="$(go list ./... | grep -v '^github.com/entireio/cli/cmd/entire/cli/integration_test$' || true)"
 
 if [ -z "$packages" ]; then
   echo "error: no non-integration packages found" >&2
