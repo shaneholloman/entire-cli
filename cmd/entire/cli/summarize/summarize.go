@@ -49,7 +49,6 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes []byte, filesTo
 		FilesTouched: filesTouched,
 	}
 
-	// Use default generator if none provided
 	if generator == nil {
 		generator = &ClaudeGenerator{}
 	}

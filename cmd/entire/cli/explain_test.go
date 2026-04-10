@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -97,6 +99,172 @@ func TestExplainCmd_RejectsPositionalArgs(t *testing.T) {
 				t.Errorf("expected hint in error message, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	checkpointSummaryTimeout = 50 * time.Millisecond
+
+	var gotDeadline time.Time
+	generateTranscriptSummary = func(
+		ctx context.Context,
+		_ []byte,
+		_ []string,
+		_ types.AgentType,
+		_ summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return nil, errors.New("expected deadline on summary context")
+		}
+		gotDeadline = deadline
+		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
+	}
+
+	start := time.Now()
+	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	if err != nil {
+		t.Fatalf("generateCheckpointAISummary() error = %v", err)
+	}
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if gotDeadline.IsZero() {
+		t.Fatal("expected deadline to be set")
+	}
+	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
+		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+	}
+}
+
+func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	checkpointSummaryTimeout = 30 * time.Second
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	parentDeadline, _ := parentCtx.Deadline()
+
+	var gotDeadline time.Time
+	generateTranscriptSummary = func(
+		ctx context.Context,
+		_ []byte,
+		_ []string,
+		_ types.AgentType,
+		_ summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		gotDeadline, _ = ctx.Deadline()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if gotDeadline.IsZero() {
+		t.Fatal("expected deadline to be captured")
+	}
+	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
+		t.Fatalf("deadline delta = %s, want near 0", delta)
+	}
+	if strings.Contains(err.Error(), "30s") {
+		t.Fatalf("timeout error should not report default timeout when parent deadline fired: %v", err)
+	}
+}
+
+func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	checkpointSummaryTimeout = 50 * time.Millisecond
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	var gotDeadline time.Time
+	generateTranscriptSummary = func(
+		ctx context.Context,
+		_ []byte,
+		_ []string,
+		_ types.AgentType,
+		_ summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return nil, errors.New("expected deadline on summary context")
+		}
+		gotDeadline = deadline
+		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
+	}
+
+	start := time.Now()
+	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	if err != nil {
+		t.Fatalf("generateCheckpointAISummary() error = %v", err)
+	}
+	if summary == nil {
+		t.Fatal("expected summary")
+	}
+	if gotDeadline.IsZero() {
+		t.Fatal("expected deadline to be set")
+	}
+	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
+		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+	}
+}
+
+func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+
+	generateTranscriptSummary = func(
+		ctx context.Context,
+		_ []byte,
+		_ []string,
+		_ types.AgentType,
+		_ summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		cancel()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected Canceled, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("expected cancellation message, got %v", err)
 	}
 }
 

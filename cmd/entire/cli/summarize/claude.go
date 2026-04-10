@@ -118,6 +118,13 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 
 	err := cmd.Run()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, context.DeadlineExceeded
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, context.Canceled
+		}
+
 		// Check if the command was not found
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
