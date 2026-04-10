@@ -416,6 +416,7 @@ func (br *BenchRepo) SeedMetadataBranch(b *testing.B, checkpointCount int) {
 			MessageCount:    20,
 			AvgMessageBytes: 300,
 		})
+		// Benchmark transcript fixtures are controlled synthetic data.
 		redactedTranscript := redact.AlreadyRedacted(transcript)
 
 		files := make([]string, 0, 5)

@@ -254,9 +254,11 @@ func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Stor
 		updateOpts := checkpoint.UpdateCommittedOptions{
 			CheckpointID: info.CheckpointID,
 			SessionID:    content.Metadata.SessionID,
-			Transcript:   redact.AlreadyRedacted(content.Transcript),
-			Prompts:      checkpoint.SplitPromptContent(content.Prompts),
-			Agent:        content.Metadata.Agent,
+			// content.Transcript was read from v1 checkpoint storage and is
+			// already redacted at write time.
+			Transcript: redact.AlreadyRedacted(content.Transcript),
+			Prompts:    checkpoint.SplitPromptContent(content.Prompts),
+			Agent:      content.Metadata.Agent,
 		}
 		if compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata); compacted != nil {
 			updateOpts.CompactTranscript = compacted
@@ -388,10 +390,12 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 	prompts := checkpoint.SplitPromptContent(content.Prompts)
 
 	return checkpoint.WriteCommittedOptions{
-		CheckpointID:                info.CheckpointID,
-		SessionID:                   m.SessionID,
-		Strategy:                    m.Strategy,
-		Branch:                      m.Branch,
+		CheckpointID: info.CheckpointID,
+		SessionID:    m.SessionID,
+		Strategy:     m.Strategy,
+		Branch:       m.Branch,
+		// content.Transcript comes from persisted checkpoint storage and is
+		// already redacted.
 		Transcript:                  redact.AlreadyRedacted(content.Transcript),
 		Prompts:                     prompts,
 		FilesTouched:                m.FilesTouched,
@@ -423,6 +427,7 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 		return nil
 	}
 
+	// transcript is read from persisted checkpoint storage and already redacted.
 	compacted, err := compact.Compact(redact.AlreadyRedacted(transcript), compact.MetadataFields{
 		Agent:      string(m.Agent),
 		CLIVersion: versioninfo.Version,
