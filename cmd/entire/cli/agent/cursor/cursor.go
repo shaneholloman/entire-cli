@@ -161,7 +161,7 @@ func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) 
 
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("context ended while waiting for transcript: %w", err)
 		}
 
 		info, err := os.Stat(sessionRef)
@@ -186,7 +186,7 @@ func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) 
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return ctx.Err()
+			return fmt.Errorf("context ended while waiting for transcript: %w", ctx.Err())
 		case <-timer.C:
 		}
 	}
