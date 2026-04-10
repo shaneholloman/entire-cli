@@ -199,7 +199,7 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 	chunk1 := []byte(`{"line":"three"}` + "\n" + `{"line":"four"}`)
 
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	err = v2Store.ensureRef(refName)
+	err = v2Store.ensureRef(context.Background(), refName)
 	require.NoError(t, err)
 
 	_, rootTreeHash, err := v2Store.GetRefState(refName)
@@ -226,7 +226,7 @@ func TestV2ReadSessionContent_ChunkedTranscript(t *testing.T) {
 		},
 	}
 
-	newTreeHash, err := v2Store.gs.spliceCheckpointSubtree(rootTreeHash, cpID, cpID.Path()+"/", entries)
+	newTreeHash, err := v2Store.gs.spliceCheckpointSubtree(context.Background(), rootTreeHash, cpID, cpID.Path()+"/", entries)
 	require.NoError(t, err)
 
 	parentHash, _, err := v2Store.GetRefState(refName)

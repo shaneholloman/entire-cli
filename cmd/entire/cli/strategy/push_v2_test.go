@@ -36,7 +36,7 @@ func setupRepoWithV2Ref(t *testing.T) string {
 	require.NoError(t, err)
 
 	// Create v2 /main ref with an empty tree
-	emptyTree, err := checkpoint.BuildTreeFromEntries(repo, map[string]object.TreeEntry{})
+	emptyTree, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 
 	commitHash, err := checkpoint.CreateCommit(repo, emptyTree, plumbing.ZeroHash,
@@ -331,7 +331,7 @@ func TestFetchAndMergeRef_RotationConflict(t *testing.T) {
 		plumbing.NewHashReference(archiveRefName, archiveCommitHash)))
 
 	// Create fresh orphan /full/current
-	emptyTree, err := checkpoint.BuildTreeFromEntries(remoteRepo, map[string]object.TreeEntry{})
+	emptyTree, err := checkpoint.BuildTreeFromEntries(context.Background(), remoteRepo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 	orphanHash, err := checkpoint.CreateCommit(remoteRepo, emptyTree, plumbing.ZeroHash,
 		"Start generation", "Test", "test@test.com")

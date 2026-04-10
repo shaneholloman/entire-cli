@@ -59,7 +59,7 @@ func buildTasksTreeHash(t *testing.T, repo *git.Repository, toolUseID string) pl
 	blobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(`{"tool_use_id":"`+toolUseID+`"}`))
 	require.NoError(t, err)
 
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, map[string]object.TreeEntry{
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
 		toolUseID + "/checkpoint.json": {Mode: filemode.Regular, Hash: blobHash},
 	})
 	require.NoError(t, err)

@@ -425,7 +425,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		})
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return ApplyTreeChanges(ctx, s.repo, baseTreeHash, changes)
 }
 
 // ListTemporaryCheckpoints lists all checkpoint commits on a shadow branch.
@@ -733,15 +733,26 @@ func (s *GitStore) buildTreeWithChanges(
 
 	// Deleted files → nil Entry means deletion
 	for _, file := range deletedFiles {
-		changes = append(changes, TreeChange{Path: file, Entry: nil})
+		relPath, relErr := normalizeRepoRelativeTreePath(repoRoot, file)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "delete shadow branch entry", file, relErr)
+			continue
+		}
+		changes = append(changes, TreeChange{Path: relPath, Entry: nil})
 	}
 
 	// Modified/new files → create blobs from disk
 	for _, file := range modifiedFiles {
-		absPath := filepath.Join(repoRoot, file)
+		relPath, relErr := normalizeRepoRelativeTreePath(repoRoot, file)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "add shadow branch entry", file, relErr)
+			continue
+		}
+
+		absPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
 		if !fileExists(absPath) {
 			// File disappeared since detection — treat as deletion
-			changes = append(changes, TreeChange{Path: file, Entry: nil})
+			changes = append(changes, TreeChange{Path: relPath, Entry: nil})
 			continue
 		}
 
@@ -752,7 +763,7 @@ func (s *GitStore) buildTreeWithChanges(
 		}
 
 		changes = append(changes, TreeChange{
-			Path: file,
+			Path: relPath,
 			Entry: &object.TreeEntry{
 				Mode: mode,
 				Hash: blobHash,
@@ -762,14 +773,19 @@ func (s *GitStore) buildTreeWithChanges(
 
 	// Metadata directory files
 	if metadataDir != "" && metadataDirAbs != "" {
-		metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataDir)
-		if metaErr != nil {
-			return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
+		metadataRel, relErr := normalizeRepoRelativeTreePath(repoRoot, metadataDir)
+		if relErr != nil {
+			logInvalidGitTreePath(ctx, "add metadata directory", metadataDir, relErr)
+		} else {
+			metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataRel)
+			if metaErr != nil {
+				return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
+			}
+			changes = append(changes, metaChanges...)
 		}
-		changes = append(changes, metaChanges...)
 	}
 
-	return ApplyTreeChanges(s.repo, baseTreeHash, changes)
+	return ApplyTreeChanges(ctx, s.repo, baseTreeHash, changes)
 }
 
 // createCommit creates a commit object.
@@ -984,7 +1000,7 @@ func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) 
 
 // BuildTreeFromEntries builds a proper git tree structure from flattened file entries.
 // Exported for use by strategy package (push_common.go, session_test.go)
-func BuildTreeFromEntries(repo *git.Repository, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
+func BuildTreeFromEntries(ctx context.Context, repo *git.Repository, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
 	// Build a tree structure
 	root := &treeNode{
 		entries: make(map[string]*treeNode),
@@ -993,12 +1009,25 @@ func BuildTreeFromEntries(repo *git.Repository, entries map[string]object.TreeEn
 
 	// Insert all entries into the tree structure
 	for fullPath, entry := range entries {
-		parts := strings.Split(fullPath, "/")
+		normalizedPath, err := normalizeGitTreePath(fullPath)
+		if err != nil {
+			logInvalidGitTreePath(ctx, "build tree entry", fullPath, err)
+			continue
+		}
+		parts := strings.Split(normalizedPath, "/")
 		insertIntoTree(root, parts, entry)
 	}
 
 	// Recursively build tree objects from bottom up
 	return buildTreeObject(repo, root)
+}
+
+func normalizeRepoRelativeTreePath(repoRoot, path string) (string, error) {
+	if rel := paths.ToRelativePath(path, repoRoot); rel != "" && rel != "." {
+		return normalizeGitTreePath(rel)
+	}
+
+	return normalizeGitTreePath(path)
 }
 
 // insertIntoTree inserts a file entry into the tree structure.

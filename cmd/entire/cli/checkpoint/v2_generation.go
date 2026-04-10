@@ -324,7 +324,7 @@ func (s *V2GitStore) rotateGeneration(ctx context.Context) error {
 	}
 
 	// Phase 2: Create fresh orphan /full/current (empty tree, no generation.json)
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return fmt.Errorf("rotation: failed to build empty tree: %w", err)
 	}

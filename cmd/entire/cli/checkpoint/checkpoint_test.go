@@ -660,7 +660,7 @@ func TestUpdateSummary_NotFound(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -1170,6 +1170,39 @@ func writeSingleSession(t *testing.T, cpIDStr, sessionID, transcript string) (*G
 	return store, checkpointID
 }
 
+func TestWriteCommitted_CodexSanitizesPortableTranscript(t *testing.T) {
+	repo, _ := setupBranchTestRepo(t)
+	store := NewGitStore(repo)
+	checkpointID := id.MustCheckpointID("c0de1234beef")
+
+	transcript := `{"timestamp":"2026-03-25T11:31:11.754Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"brief"}],"encrypted_content":"REDACTED"}}
+{"timestamp":"2026-03-25T11:31:11.755Z","type":"response_item","payload":{"type":"compaction","encrypted_content":"REDACTED"}}
+{"timestamp":"2026-03-25T11:31:11.756Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"reasoning","summary":[{"text":"nested"}],"encrypted_content":"REDACTED"},{"type":"compaction","encrypted_content":"REDACTED"},{"type":"compaction_summary","encrypted_content":"REDACTED"}]}}
+`
+
+	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID:     checkpointID,
+		SessionID:        "codex-session",
+		Strategy:         "manual-commit",
+		Agent:            agent.AgentTypeCodex,
+		Transcript:       []byte(transcript),
+		CheckpointsCount: 1,
+		AuthorName:       "Test Author",
+		AuthorEmail:      "test@example.com",
+	})
+	require.NoError(t, err)
+
+	content, err := store.ReadLatestSessionContent(context.Background(), checkpointID)
+	require.NoError(t, err)
+
+	got := string(content.Transcript)
+	require.NotContains(t, got, `"encrypted_content":"REDACTED"`)
+	require.NotContains(t, got, `"type":"compaction"`)
+	require.NotContains(t, got, `"type":"compaction_summary"`)
+	require.Contains(t, got, `"summary":[{"text":"brief"}]`)
+	require.Contains(t, got, `"summary":[{"text":"nested"}]`)
+}
+
 // TestReadSessionContent_InvalidIndex verifies that ReadSessionContent returns
 // an error when requesting a session index that doesn't exist.
 func TestReadSessionContent_InvalidIndex(t *testing.T) {
@@ -1501,7 +1534,7 @@ func TestReadCommitted_NonexistentCheckpoint(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -1524,7 +1557,7 @@ func TestReadSessionContent_NonexistentCheckpoint(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -1636,6 +1669,129 @@ func TestWriteTemporary_FirstCheckpoint_CapturesModifiedTrackedFiles(t *testing.
 
 	if content != modifiedContent {
 		t.Errorf("checkpoint should contain modified content\ngot:\n%s\nwant:\n%s", content, modifiedContent)
+	}
+}
+
+// TestWriteTemporary_PathNormalizationAndSkipping verifies that shadow branch writes
+// normalize absolute in-repo paths back to repo-relative tree entries and skip invalid
+// paths rather than encoding them into git trees.
+func TestWriteTemporary_PathNormalizationAndSkipping(t *testing.T) {
+	tests := []struct {
+		name          string
+		modifiedFiles func(repoRoot, mainFile string) []string
+		wantUpdated   bool
+	}{
+		{
+			name: "absolute in repo path is normalized",
+			modifiedFiles: func(_, mainFile string) []string {
+				return []string{mainFile}
+			},
+			wantUpdated: true,
+		},
+		{
+			name: "absolute outside repo path is skipped",
+			modifiedFiles: func(_, _ string) []string {
+				return []string{"C:/Users/rober/Vaults/Flowsign/main.go"}
+			},
+			wantUpdated: false,
+		},
+		{
+			name: "empty segment path is skipped",
+			modifiedFiles: func(_, _ string) []string {
+				return []string{"dir//main.go"}
+			},
+			wantUpdated: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+
+			repo, err := git.PlainInit(tempDir, false)
+			if err != nil {
+				t.Fatalf("failed to init git repo: %v", err)
+			}
+
+			worktree, err := repo.Worktree()
+			if err != nil {
+				t.Fatalf("failed to get worktree: %v", err)
+			}
+
+			mainFile := filepath.Join(tempDir, "main.go")
+			if err := os.WriteFile(mainFile, []byte("package main\n"), 0o644); err != nil {
+				t.Fatalf("failed to write main.go: %v", err)
+			}
+			if _, err := worktree.Add("main.go"); err != nil {
+				t.Fatalf("failed to add main.go: %v", err)
+			}
+			initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
+				Author: &object.Signature{Name: "Test", Email: "test@test.com"},
+			})
+			if err != nil {
+				t.Fatalf("failed to commit: %v", err)
+			}
+
+			updatedContent := "package main\n\nfunc main() {}\n"
+			if err := os.WriteFile(mainFile, []byte(updatedContent), 0o644); err != nil {
+				t.Fatalf("failed to update main.go: %v", err)
+			}
+
+			t.Chdir(tempDir)
+
+			metadataDir := filepath.Join(tempDir, ".entire", "metadata", "test-session")
+			if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+				t.Fatalf("failed to create metadata dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(metadataDir, "full.jsonl"), []byte(`{"test": true}`), 0o644); err != nil {
+				t.Fatalf("failed to write transcript: %v", err)
+			}
+
+			store := NewGitStore(repo)
+			result, err := store.WriteTemporary(context.Background(), WriteTemporaryOptions{
+				SessionID:      "test-session",
+				BaseCommit:     initialCommit.String(),
+				ModifiedFiles:  tt.modifiedFiles(tempDir, mainFile),
+				MetadataDir:    ".entire/metadata/test-session",
+				MetadataDirAbs: metadataDir,
+				CommitMessage:  "Checkpoint with path normalization",
+				AuthorName:     "Test",
+				AuthorEmail:    "test@test.com",
+			})
+			if err != nil {
+				t.Fatalf("WriteTemporary() error = %v", err)
+			}
+
+			commit, err := repo.CommitObject(result.CommitHash)
+			if err != nil {
+				t.Fatalf("failed to get commit object: %v", err)
+			}
+
+			tree, err := commit.Tree()
+			if err != nil {
+				t.Fatalf("failed to get tree: %v", err)
+			}
+
+			assertNoEmptyEntryNames(t, repo, commit.TreeHash, "")
+
+			file, err := tree.File("main.go")
+			if err != nil {
+				t.Fatalf("main.go not found in checkpoint tree: %v", err)
+			}
+
+			content, err := file.Contents()
+			if err != nil {
+				t.Fatalf("failed to read main.go content: %v", err)
+			}
+
+			wantContent := "package main\n"
+			if tt.wantUpdated {
+				wantContent = updatedContent
+			}
+			if content != wantContent {
+				t.Errorf("unexpected main.go content\ngot:\n%s\nwant:\n%s", content, wantContent)
+			}
+		})
 	}
 }
 

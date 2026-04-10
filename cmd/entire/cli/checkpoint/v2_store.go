@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/go-git/go-git/v6"
@@ -55,13 +56,13 @@ func NewV2GitStore(repo *git.Repository, fetchRemote string) *V2GitStore {
 
 // ensureRef ensures that a custom ref exists, creating an orphan commit
 // with an empty tree if it does not.
-func (s *V2GitStore) ensureRef(refName plumbing.ReferenceName) error {
+func (s *V2GitStore) ensureRef(ctx context.Context, refName plumbing.ReferenceName) error {
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
 		return nil // Already exists
 	}
 
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return fmt.Errorf("failed to build empty tree: %w", err)
 	}

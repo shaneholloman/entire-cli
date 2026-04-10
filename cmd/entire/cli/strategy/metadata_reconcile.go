@@ -180,7 +180,7 @@ func ReconcileDisconnectedMetadataBranch(
 
 	fmt.Fprintf(w, "[entire] Cherry-picking %d local checkpoint(s) onto remote...\n", len(dataCommits))
 
-	newTip, err := cherryPickOnto(repo, remoteHash, dataCommits)
+	newTip, err := cherryPickOnto(ctx, repo, remoteHash, dataCommits)
 	if err != nil {
 		return fmt.Errorf("failed to cherry-pick local commits onto remote: %w", err)
 	}
@@ -253,7 +253,7 @@ func collectCommitChain(repo *git.Repository, tip plumbing.Hash) ([]*object.Comm
 // cherryPickOnto applies each commit's delta onto base, building a linear chain.
 // For each commit, it computes the full diff from its parent (additions, modifications,
 // and deletions), then applies that delta onto the current tip's tree.
-func cherryPickOnto(repo *git.Repository, base plumbing.Hash, commits []*object.Commit) (plumbing.Hash, error) {
+func cherryPickOnto(ctx context.Context, repo *git.Repository, base plumbing.Hash, commits []*object.Commit) (plumbing.Hash, error) {
 	currentTip := base
 
 	for _, commit := range commits {
@@ -324,7 +324,7 @@ func cherryPickOnto(repo *git.Repository, base plumbing.Hash, commits []*object.
 			delete(mergedEntries, path)
 		}
 
-		mergedTreeHash, err := checkpoint.BuildTreeFromEntries(repo, mergedEntries)
+		mergedTreeHash, err := checkpoint.BuildTreeFromEntries(ctx, repo, mergedEntries)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to build merged tree: %w", err)
 		}

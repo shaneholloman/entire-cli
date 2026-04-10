@@ -171,7 +171,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 		}
 	}
 
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -189,7 +189,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 // on /full/current while preserving other checkpoints' transcripts in the tree.
 func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts UpdateCommittedOptions, sessionIndex int) error {
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
@@ -225,7 +225,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 	}
 
 	// Splice into existing root tree (preserves other checkpoints' transcripts)
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 // Returns the session index used, so the caller can pass it to writeCommittedFullTranscript.
 func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommittedOptions) (int, error) {
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return 0, fmt.Errorf("failed to ensure /main ref: %w", err)
 	}
 
@@ -266,7 +266,7 @@ func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommitted
 	}
 
 	// Splice entries into root tree
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -461,7 +461,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	}
 
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
@@ -497,7 +497,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	}
 
 	// Splice checkpoint data into the root tree (preserves other checkpoints' transcripts)
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -637,7 +637,7 @@ func (s *V2GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoi
 		Hash: metadataHash,
 	}
 
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, checkpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, checkpointID, basePath, entries)
 	if err != nil {
 		return err
 	}

@@ -23,7 +23,7 @@ func TestReadGeneration_EmptyTree_ReturnsDefault(t *testing.T) {
 	store := NewV2GitStore(repo, "origin")
 
 	// Build an empty tree
-	emptyTree, err := BuildTreeFromEntries(repo, map[string]object.TreeEntry{})
+	emptyTree, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 
 	gen, err := store.readGeneration(emptyTree)
@@ -48,7 +48,7 @@ func TestReadGeneration_ParsesJSON(t *testing.T) {
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(original, entries))
 
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	// Read it back
@@ -78,7 +78,7 @@ func TestWriteGeneration_RoundTrips(t *testing.T) {
 	assert.True(t, ok)
 
 	// Build tree and read back
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	gen, err := store.readGeneration(treeHash)
@@ -102,7 +102,7 @@ func TestReadGenerationFromRef(t *testing.T) {
 
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(gen, entries))
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
@@ -131,7 +131,7 @@ func TestAddGenerationJSONToTree(t *testing.T) {
 		Mode: 0o100644,
 		Hash: plumbing.ZeroHash, // dummy
 	}
-	rootTreeHash, err := BuildTreeFromEntries(repo, shardEntries)
+	rootTreeHash, err := BuildTreeFromEntries(context.Background(), repo, shardEntries)
 	require.NoError(t, err)
 
 	gen := GenerationMetadata{
@@ -292,7 +292,7 @@ func createArchivedRef(t *testing.T, repo *git.Repository, number int) {
 	}
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(gen, entries))
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	authorName, authorEmail := GetGitAuthorFromRepo(repo)
@@ -332,7 +332,7 @@ func TestListArchivedGenerations_ExcludesCurrent(t *testing.T) {
 	store := NewV2GitStore(repo, "origin")
 
 	// Create /full/current ref
-	require.NoError(t, store.ensureRef(plumbing.ReferenceName(paths.V2FullCurrentRefName)))
+	require.NoError(t, store.ensureRef(context.Background(), plumbing.ReferenceName(paths.V2FullCurrentRefName)))
 
 	// Create an archived ref
 	createArchivedRef(t, repo, 1)
@@ -497,7 +497,7 @@ func TestReadGeneration_BackwardCompatible(t *testing.T) {
 			Hash: blobHash,
 		},
 	}
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	// Should parse without error, ignoring the unknown checkpoints field
