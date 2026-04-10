@@ -200,6 +200,9 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 	}
 
+	// On failure: drop the transcript but continue writing checkpoint metadata.
+	// Hooks run without user interaction so there is no retry path — preserving
+	// partial metadata is better than losing everything.
 	redactedTranscript, redactDuration, err := redactSessionTranscript(ctx, sessionData.Transcript)
 	if err != nil {
 		logging.Warn(logCtx, "failed to redact transcript secrets, dropping transcript for checkpoint",
