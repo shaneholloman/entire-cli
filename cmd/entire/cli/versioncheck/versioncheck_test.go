@@ -311,49 +311,64 @@ func TestParseGitHubRelease(t *testing.T) {
 
 func TestUpdateCommand(t *testing.T) {
 	tests := []struct {
-		name     string
-		execPath func() (string, error)
-		want     string
+		name           string
+		currentVersion string
+		execPath       func() (string, error)
+		want           string
 	}{
 		{
-			name:     "homebrew cellar path",
-			execPath: func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew stable cellar path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "homebrew opt path",
-			execPath: func() (string, error) { return "/opt/homebrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew stable cask path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "linuxbrew path",
-			execPath: func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "homebrew nightly path uses cask command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire@nightly",
 		},
 		{
-			name:     "mise path",
-			execPath: func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
-			want:     "mise upgrade entire",
+			name:           "linuxbrew path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "username mise not detected as mise install",
-			execPath: func() (string, error) { return "/home/mise/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "mise path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
+			want:           "mise upgrade entire",
 		},
 		{
-			name:     "username homebrew not detected as brew install",
-			execPath: func() (string, error) { return "/home/homebrew/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "scoop path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return `C:\Users\test\scoop\apps\cli\current\entire.exe`, nil },
+			want:           "scoop update entire/cli",
 		},
 		{
-			name:     "unknown path falls back to curl",
-			execPath: func() (string, error) { return "/usr/local/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "unknown path stable falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 		{
-			name:     "executable error falls back to curl",
-			execPath: func() (string, error) { return "", errors.New("not found") },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "unknown path nightly falls back to nightly curl command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return "/usr/local/bin/entire", nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly",
+		},
+		{
+			name:           "executable error falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "", errors.New("not found") },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 	}
 
@@ -363,7 +378,7 @@ func TestUpdateCommand(t *testing.T) {
 			executablePath = tt.execPath
 			t.Cleanup(func() { executablePath = original })
 
-			if got := updateCommand(); got != tt.want {
+			if got := updateCommand(tt.currentVersion); got != tt.want {
 				t.Errorf("updateCommand() = %q, want %q", got, tt.want)
 			}
 		})

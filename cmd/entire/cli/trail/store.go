@@ -1,6 +1,7 @@
 package trail
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,7 @@ func NewStore(repo *git.Repository) *Store {
 }
 
 // EnsureBranch creates the entire/trails/v1 orphan branch if it doesn't exist.
-func (s *Store) EnsureBranch() error {
+func (s *Store) EnsureBranch(ctx context.Context) error {
 	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
@@ -44,7 +45,7 @@ func (s *Store) EnsureBranch() error {
 	}
 
 	// Create orphan branch with empty tree
-	emptyTreeHash, err := checkpoint.BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := checkpoint.BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
 		return fmt.Errorf("failed to build empty tree: %w", err)
 	}
@@ -64,12 +65,12 @@ func (s *Store) EnsureBranch() error {
 
 // Write writes trail metadata, discussion, and checkpoints to the entire/trails/v1 branch.
 // If checkpoints is nil, an empty checkpoints list is written.
-func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
+func (s *Store) Write(ctx context.Context, metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
 	if metadata.TrailID.IsEmpty() {
 		return errors.New("trail ID is required")
 	}
 
-	if err := s.EnsureBranch(); err != nil {
+	if err := s.EnsureBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure trails branch: %w", err)
 	}
 
@@ -265,7 +266,7 @@ func (s *Store) List() ([]*Metadata, error) {
 
 // Update updates an existing trail's metadata. It reads the current metadata,
 // applies the provided update function, and writes it back.
-func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
+func (s *Store) Update(ctx context.Context, trailID ID, updateFn func(*Metadata)) error {
 	// ValidateID is called by Read, no need to duplicate here
 	metadata, discussion, checkpoints, err := s.Read(trailID)
 	if err != nil {
@@ -275,17 +276,17 @@ func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
 	updateFn(metadata)
 	metadata.UpdatedAt = time.Now()
 
-	return s.Write(metadata, discussion, checkpoints)
+	return s.Write(ctx, metadata, discussion, checkpoints)
 }
 
 // AddCheckpoint prepends a checkpoint reference to a trail's checkpoints list (newest first).
 // Only reads and writes the checkpoints.json file — metadata and discussion are untouched.
-func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
+func (s *Store) AddCheckpoint(ctx context.Context, trailID ID, ref CheckpointRef) error {
 	if err := ValidateID(string(trailID)); err != nil {
 		return err
 	}
 
-	if err := s.EnsureBranch(); err != nil {
+	if err := s.EnsureBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure trails branch: %w", err)
 	}
 
@@ -336,12 +337,12 @@ func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 }
 
 // Delete removes a trail from the entire/trails/v1 branch.
-func (s *Store) Delete(trailID ID) error {
+func (s *Store) Delete(ctx context.Context, trailID ID) error {
 	if err := ValidateID(string(trailID)); err != nil {
 		return err
 	}
 
-	if err := s.EnsureBranch(); err != nil {
+	if err := s.EnsureBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure trails branch: %w", err)
 	}
 

@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4130,6 +4131,86 @@ func TestCondenseSession_V2CompactTranscriptStart(t *testing.T) {
 	// Verify compact transcript lines were counted in the result
 	require.Positive(t, result.CompactTranscriptLines,
 		"CondenseResult should report compact transcript lines")
+
+	// Read compact transcript.jsonl from v2 /main for the first checkpoint.
+	compactFile1, err := sessionTree.File(paths.CompactTranscriptFileName)
+	require.NoError(t, err, "transcript.jsonl should exist on v2 /main")
+	compactContent1, err := compactFile1.Contents()
+	require.NoError(t, err)
+	firstCompactLines := bytes.Count([]byte(compactContent1), []byte{'\n'})
+	require.Positive(t, firstCompactLines, "first checkpoint compact transcript should have lines")
+
+	// --- Second condensation: add more transcript content ---
+	transcript2 := transcript + `{"type":"human","message":{"content":"next question"}}
+{"type":"assistant","message":{"content":"next answer"}}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript2), 0o644))
+
+	// Update state after first condensation (mimic what CondenseSessionByID does)
+	state.StepCount = 0
+	state.CheckpointTranscriptStart = result.TotalTranscriptLines
+	state.CompactTranscriptStart += result.CompactTranscriptLines
+
+	// SaveStep for second checkpoint
+	testutil.WriteFile(t, dir, "main.go", "package main\n// v2")
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:      sessionID,
+		ModifiedFiles:  []string{"main.go"},
+		MetadataDir:    metadataDir,
+		MetadataDirAbs: metadataDirAbs,
+		CommitMessage:  "Checkpoint 2",
+		AuthorName:     "Test",
+		AuthorEmail:    "test@test.com",
+	})
+	require.NoError(t, err)
+
+	state2, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state2.TranscriptPath = filepath.Join(metadataDirAbs, paths.TranscriptFileName)
+	state2.BaseCommit = commitHash[:7]
+	state2.AgentType = agent.AgentTypeClaudeCode
+	state2.CheckpointTranscriptStart = state.CheckpointTranscriptStart
+	state2.CompactTranscriptStart = state.CompactTranscriptStart
+
+	checkpointID2 := id.MustCheckpointID("dd22ee33ff44")
+	result2, err := s.CondenseSession(context.Background(), repo, checkpointID2, state2, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result2)
+
+	// v2 /main metadata for second checkpoint should have compact start = firstCompactLines.
+	v2MainRef2, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
+	require.NoError(t, err)
+	v2MainCommit2, err := repo.CommitObject(v2MainRef2.Hash())
+	require.NoError(t, err)
+	v2MainTree2, err := v2MainCommit2.Tree()
+	require.NoError(t, err)
+
+	cpPath2 := checkpointID2.Path()
+	sessionTree2, err := v2MainTree2.Tree(cpPath2 + "/0")
+	require.NoError(t, err)
+	metadataFile2, err := sessionTree2.File(paths.MetadataFileName)
+	require.NoError(t, err)
+	metadataContent2, err := metadataFile2.Contents()
+	require.NoError(t, err)
+
+	var v2Metadata2 checkpoint.CommittedMetadata
+	require.NoError(t, json.Unmarshal([]byte(metadataContent2), &v2Metadata2))
+	require.Equal(t, firstCompactLines, v2Metadata2.CheckpointTranscriptStart,
+		"second checkpoint v2 metadata should have checkpoint_transcript_start = first checkpoint's compact line count")
+
+	// The compact transcript.jsonl for checkpoint 2 should be CUMULATIVE:
+	// it should contain both checkpoint 1's and checkpoint 2's compact lines.
+	compactFile2, err := sessionTree2.File(paths.CompactTranscriptFileName)
+	require.NoError(t, err, "transcript.jsonl should exist for second checkpoint")
+	compactContent2, err := compactFile2.Contents()
+	require.NoError(t, err)
+	secondCompactTotalLines := bytes.Count([]byte(compactContent2), []byte{'\n'})
+	require.Greater(t, secondCompactTotalLines, firstCompactLines,
+		"second checkpoint compact transcript should include all prior content plus new content")
+
+	// The first checkpoint's content should be a prefix of the second checkpoint's content.
+	require.True(t, strings.HasPrefix(compactContent2, compactContent1),
+		"second checkpoint compact transcript should start with first checkpoint's content")
 }
 
 // TestCondenseSession_V2Disabled_NoV2Refs verifies that when checkpoints_v2 is
@@ -4190,6 +4271,7 @@ func TestCondenseSession_V2Disabled_NoV2Refs(t *testing.T) {
 	result, err := s.CondenseSession(context.Background(), repo, checkpointID, state, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Equal(t, 0, result.CompactTranscriptLines, "v2-disabled condensation should not report compact transcript line deltas")
 
 	// v1 should exist
 	_, err = repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
@@ -4228,6 +4310,73 @@ func TestCommittedFilesExcludingMetadata(t *testing.T) {
 	require.NotContains(t, resultSet, ".entire/settings.json", ".entire/ should be excluded")
 	require.NotContains(t, resultSet, ".entire/.gitignore", ".entire/ should be excluded")
 	require.Len(t, result, 3)
+}
+
+func TestMarshalPromptAttributionsIncludingPending_IncludesPending(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		PromptAttributions: []PromptAttribution{
+			{CheckpointNumber: 1, UserLinesAdded: 3},
+		},
+		PendingPromptAttribution: &PromptAttribution{
+			CheckpointNumber: 2, UserLinesAdded: 5,
+		},
+	}
+
+	raw := marshalPromptAttributionsIncludingPending(state)
+	require.NotNil(t, raw)
+
+	var result []PromptAttribution
+	require.NoError(t, json.Unmarshal(raw, &result))
+	require.Len(t, result, 2, "should include both committed and pending attributions")
+	require.Equal(t, 1, result[0].CheckpointNumber)
+	require.Equal(t, 3, result[0].UserLinesAdded)
+	require.Equal(t, 2, result[1].CheckpointNumber)
+	require.Equal(t, 5, result[1].UserLinesAdded)
+}
+
+func TestMarshalPromptAttributionsIncludingPending_NoPending(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		PromptAttributions: []PromptAttribution{
+			{CheckpointNumber: 1, UserLinesAdded: 3},
+		},
+	}
+
+	raw := marshalPromptAttributionsIncludingPending(state)
+	require.NotNil(t, raw)
+
+	var result []PromptAttribution
+	require.NoError(t, json.Unmarshal(raw, &result))
+	require.Len(t, result, 1)
+}
+
+func TestMarshalPromptAttributionsIncludingPending_Empty(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{}
+	raw := marshalPromptAttributionsIncludingPending(state)
+	require.Nil(t, raw, "empty state should return nil")
+}
+
+func TestMarshalPromptAttributionsIncludingPending_OnlyPending(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		PendingPromptAttribution: &PromptAttribution{
+			CheckpointNumber: 1, UserLinesAdded: 7,
+		},
+	}
+
+	raw := marshalPromptAttributionsIncludingPending(state)
+	require.NotNil(t, raw, "pending-only should still produce output")
+
+	var result []PromptAttribution
+	require.NoError(t, json.Unmarshal(raw, &result))
+	require.Len(t, result, 1)
+	require.Equal(t, 7, result[0].UserLinesAdded)
 }
 
 func TestCommittedFilesExcludingMetadata_AllMetadata(t *testing.T) {

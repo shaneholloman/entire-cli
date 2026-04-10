@@ -17,6 +17,15 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+const (
+	installManagerBrew    = "brew"
+	installManagerMise    = "mise"
+	installManagerScoop   = "scoop"
+	installManagerUnknown = "unknown"
+	installChannelStable  = "stable"
+	installChannelNightly = "nightly"
+)
+
 // CheckAndNotify performs a version check and notifies the user if a newer version is available.
 // This is the main entry point for the version check system.
 // The function is silent on all errors to avoid interrupting CLI operations.
@@ -304,33 +313,63 @@ func isOutdated(current, latest string) bool {
 // It's a variable so tests can override it.
 var executablePath = os.Executable
 
-// updateCommand returns the appropriate update instruction based on how the binary was installed.
-func updateCommand() string {
+func releaseChannel(version string) string {
+	if isNightly(version) {
+		return installChannelNightly
+	}
+	return installChannelStable
+}
+
+func installManagerForCurrentBinary() string {
 	execPath, err := executablePath()
 	if err != nil {
-		return "curl -fsSL https://entire.io/install.sh | bash"
+		return installManagerUnknown
 	}
 
-	// Resolve symlinks to find the real path (Homebrew symlinks from bin/ to Cellar/)
 	realPath, err := filepath.EvalSymlinks(execPath)
 	if err != nil {
 		realPath = execPath
 	}
+	normalizedPath := strings.ReplaceAll(filepath.ToSlash(realPath), "\\", "/")
 
-	if strings.Contains(realPath, "/Cellar/") || strings.Contains(realPath, "/opt/homebrew/") || strings.Contains(realPath, "/linuxbrew/") {
-		return "brew upgrade entire"
+	switch {
+	case strings.Contains(normalizedPath, "/Cellar/") ||
+		strings.Contains(normalizedPath, "/opt/homebrew/") ||
+		strings.Contains(normalizedPath, "/linuxbrew/") ||
+		strings.Contains(normalizedPath, "/Caskroom/"):
+		return installManagerBrew
+	case strings.Contains(normalizedPath, "/mise/installs/"):
+		return installManagerMise
+	case strings.Contains(normalizedPath, "/scoop/apps/"):
+		return installManagerScoop
+	default:
+		return installManagerUnknown
 	}
+}
 
-	if strings.Contains(realPath, "/mise/installs/") {
+// updateCommand returns the appropriate update instruction based on how the binary was installed.
+func updateCommand(currentVersion string) string {
+	switch installManagerForCurrentBinary() {
+	case installManagerBrew:
+		if releaseChannel(currentVersion) == installChannelNightly {
+			return "brew upgrade --cask entire@nightly"
+		}
+		return "brew upgrade --cask entire"
+	case installManagerMise:
 		return "mise upgrade entire"
+	case installManagerScoop:
+		return "scoop update entire/cli"
 	}
 
+	if releaseChannel(currentVersion) == installChannelNightly {
+		return "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly"
+	}
 	return "curl -fsSL https://entire.io/install.sh | bash"
 }
 
 // printNotification prints the version update notification to the user.
 func printNotification(w io.Writer, current, latest string) {
 	msg := fmt.Sprintf("\nA newer version of Entire CLI is available: %s (current: %s)\nRun '%s' to update.\n",
-		latest, current, updateCommand())
+		latest, current, updateCommand(current))
 	fmt.Fprint(w, msg)
 }

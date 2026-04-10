@@ -55,7 +55,7 @@ func TestV2GitStore_EnsureRef_CreatesNewRef(t *testing.T) {
 	require.Error(t, err)
 
 	// Ensure creates it
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
 	// Ref should now exist and point to a valid commit with an empty tree
 	ref, err := repo.Reference(refName, true)
@@ -76,12 +76,12 @@ func TestV2GitStore_EnsureRef_Idempotent(t *testing.T) {
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
 
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 	ref1, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 
 	// Second call should be a no-op — same commit hash
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 	ref2, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, ref1.Hash(), ref2.Hash())
@@ -95,8 +95,8 @@ func TestV2GitStore_EnsureRef_DifferentRefs(t *testing.T) {
 	mainRef := plumbing.ReferenceName(paths.V2MainRefName)
 	fullRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
 
-	require.NoError(t, store.ensureRef(mainRef))
-	require.NoError(t, store.ensureRef(fullRef))
+	require.NoError(t, store.ensureRef(context.Background(), mainRef))
+	require.NoError(t, store.ensureRef(context.Background(), fullRef))
 
 	// Both should exist independently
 	_, err := repo.Reference(mainRef, true)
@@ -111,7 +111,7 @@ func TestV2GitStore_GetRefState_ReturnsParentAndTree(t *testing.T) {
 	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
 	parentHash, treeHash, err := store.GetRefState(refName)
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestV2GitStore_UpdateRef_CreatesCommit(t *testing.T) {
 	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
 	parentHash, treeHash, err := store.GetRefState(refName)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestV2GitStore_UpdateRef_CreatesCommit(t *testing.T) {
 	entries := map[string]object.TreeEntry{
 		"test.txt": {Name: "test.txt", Mode: 0o100644, Hash: blobHash},
 	}
-	newTreeHash, err := BuildTreeFromEntries(repo, entries)
+	newTreeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 	require.NotEqual(t, treeHash, newTreeHash)
 

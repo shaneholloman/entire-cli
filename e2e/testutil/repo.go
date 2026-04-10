@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +20,8 @@ import (
 )
 
 const droidRepoSettingsPath = ".factory/settings.json"
+
+var geminiAckMu sync.Mutex
 
 // RepoState holds the working state for a single test's cloned repository.
 type RepoState struct {
@@ -82,6 +87,9 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	}
 
 	entire.Enable(t, dir, agent.EntireAgent())
+	if agent.Name() == "gemini-cli" {
+		acknowledgeGeminiSearchAgent(t, dir)
+	}
 	if agent.Name() == "factoryai-droid" {
 		if err := configureDroidRepoSettings(dir); err != nil {
 			t.Fatalf("configure droid repo settings: %v", err)
@@ -146,6 +154,58 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	})
 
 	return state
+}
+
+func acknowledgeGeminiSearchAgent(t *testing.T, repoDir string) {
+	t.Helper()
+
+	agentFile := filepath.Join(repoDir, ".gemini", "agents", "entire-search.md")
+	content, err := os.ReadFile(agentFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		t.Fatalf("read gemini agent file: %v", err)
+	}
+
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("get home dir: %v", err)
+	}
+	ackPath := filepath.Join(home, ".gemini", "acknowledgments", "agents.json")
+
+	geminiAckMu.Lock()
+	defer geminiAckMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(ackPath), 0o755); err != nil {
+		t.Fatalf("create gemini acknowledgments dir: %v", err)
+	}
+
+	acks := map[string]map[string]string{}
+	if data, readErr := os.ReadFile(ackPath); readErr == nil {
+		if err := json.Unmarshal(data, &acks); err != nil {
+			t.Fatalf("parse gemini acknowledgments: %v", err)
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("read gemini acknowledgments: %v", readErr)
+	}
+
+	if acks[repoDir] == nil {
+		acks[repoDir] = map[string]string{}
+	}
+	acks[repoDir]["entire-search"] = hash
+
+	out, err := json.MarshalIndent(acks, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal gemini acknowledgments: %v", err)
+	}
+	out = append(out, '\n')
+
+	if err := os.WriteFile(ackPath, out, 0o644); err != nil {
+		t.Fatalf("write gemini acknowledgments: %v", err)
+	}
 }
 
 func configureDroidRepoSettings(repoDir string) error {

@@ -293,7 +293,7 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	}
 
 	// Build new tree
-	newTreeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	newTreeHash, err := checkpoint.BuildTreeFromEntries(ctx, repo, entries)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build tree: %w", err)
 	}

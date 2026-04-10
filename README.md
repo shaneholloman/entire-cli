@@ -43,15 +43,25 @@ With Entire, you can:
 ## Quick Start
 
 ```bash
-# Install via Homebrew
+# Install stable via Homebrew
 brew tap entireio/tap
-brew install entireio/tap/entire
+brew install --cask entire
 
-# Or install via Scoop (Windows)
+# Or install nightly via Homebrew
+brew tap entireio/tap
+brew install --cask entire@nightly
+
+# Or install stable via install.sh
+curl -fsSL https://entire.io/install.sh | bash
+
+# Or install nightly via install.sh
+curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly
+
+# Or install stable via Scoop (Windows)
 scoop bucket add entire https://github.com/entireio/scoop-bucket.git
 scoop install entire/cli
 
-# Or install via Go
+# Or install via Go (development/manual setup)
 go install github.com/entireio/cli/cmd/entire@latest
 
 # Linux: Add Go binaries to PATH (add to ~/.zshrc or ~/.bashrc if not already configured)
@@ -63,6 +73,21 @@ cd your-project && entire enable
 # Check status
 entire status
 ```
+
+## Release Channels
+
+Entire currently ships two release channels:
+
+- `stable`: recommended for most users. Stable releases change less often and are the default for Homebrew, Scoop, and `install.sh`.
+- `nightly`: prerelease builds for users who want the latest changes earlier. Nightlies are published more frequently and may include newer, less-proven changes than stable.
+
+How to use each channel:
+
+- Homebrew stable: `brew install --cask entire`
+- Homebrew nightly: `brew install --cask entire@nightly`
+- `install.sh` stable: `curl -fsSL https://entire.io/install.sh | bash`
+- `install.sh` nightly: `curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly`
+- Scoop: currently supports `stable` only via `scoop install entire/cli`
 
 ## Typical Workflow
 

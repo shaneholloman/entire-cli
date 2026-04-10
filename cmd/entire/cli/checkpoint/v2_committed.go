@@ -12,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -170,7 +171,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 		}
 	}
 
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -188,7 +189,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 // on /full/current while preserving other checkpoints' transcripts in the tree.
 func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts UpdateCommittedOptions, sessionIndex int) error {
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
@@ -224,7 +225,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 	}
 
 	// Splice into existing root tree (preserves other checkpoints' transcripts)
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -240,7 +241,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 // Returns the session index used, so the caller can pass it to writeCommittedFullTranscript.
 func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommittedOptions) (int, error) {
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return 0, fmt.Errorf("failed to ensure /main ref: %w", err)
 	}
 
@@ -265,7 +266,7 @@ func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommitted
 	}
 
 	// Splice entries into root tree
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return 0, err
 	}
@@ -460,7 +461,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	}
 
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
-	if err := s.ensureRef(refName); err != nil {
+	if err := s.ensureRef(ctx, refName); err != nil {
 		return fmt.Errorf("failed to ensure /full/current ref: %w", err)
 	}
 
@@ -496,7 +497,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	}
 
 	// Splice checkpoint data into the root tree (preserves other checkpoints' transcripts)
-	newTreeHash, err := s.gs.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -573,4 +574,75 @@ func validateWriteOpts(opts WriteCommittedOptions) error {
 		return fmt.Errorf("invalid checkpoint options: %w", err)
 	}
 	return nil
+}
+
+// UpdateSummary persists an AI-generated summary into the latest session's
+// metadata on the v2 /main ref. Mirrors GitStore.UpdateSummary for v1.
+func (s *V2GitStore) UpdateSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error {
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // Propagating context cancellation
+	}
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
+	if err != nil {
+		return ErrCheckpointNotFound
+	}
+
+	basePath := checkpointID.Path() + "/"
+	checkpointPath := checkpointID.Path()
+	entries, err := s.gs.flattenCheckpointEntries(rootTreeHash, checkpointPath)
+	if err != nil {
+		return err
+	}
+
+	rootMetadataPath := basePath + paths.MetadataFileName
+	entry, exists := entries[rootMetadataPath]
+	if !exists {
+		return ErrCheckpointNotFound
+	}
+
+	cpSummary, err := readJSONFromBlob[CheckpointSummary](s.repo, entry.Hash)
+	if err != nil {
+		return fmt.Errorf("failed to read checkpoint summary: %w", err)
+	}
+	if len(cpSummary.Sessions) == 0 {
+		return ErrCheckpointNotFound
+	}
+
+	latestIndex := len(cpSummary.Sessions) - 1
+	sessionMetadataPath := fmt.Sprintf("%s%d/%s", basePath, latestIndex, paths.MetadataFileName)
+	sessionEntry, exists := entries[sessionMetadataPath]
+	if !exists {
+		return fmt.Errorf("session metadata not found at index %d", latestIndex)
+	}
+
+	metadata, err := readJSONFromBlob[CommittedMetadata](s.repo, sessionEntry.Hash)
+	if err != nil {
+		return fmt.Errorf("failed to read session metadata: %w", err)
+	}
+	metadata.Summary = redactSummary(summary)
+
+	metadataJSON, err := jsonutil.MarshalIndentWithNewline(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	if err != nil {
+		return fmt.Errorf("failed to create metadata blob: %w", err)
+	}
+	entries[sessionMetadataPath] = object.TreeEntry{
+		Name: sessionMetadataPath,
+		Mode: filemode.Regular,
+		Hash: metadataHash,
+	}
+
+	newTreeHash, err := s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, checkpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+
+	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, metadata.SessionID)
+	return s.updateRef(refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 }

@@ -53,8 +53,8 @@ type CondenseResult struct {
 	CheckpointsCount       int
 	FilesTouched           []string
 	Prompts                []string // User prompts from the condensed session
-	TotalTranscriptLines   int      // Total lines in full.jsonl after this condensation
-	CompactTranscriptLines int      // Lines in the compact transcript written for this checkpoint (0 if v2 disabled)
+	TotalTranscriptLines   int      // Total transcript units after this condensation (JSONL line count or message count by agent format)
+	CompactTranscriptLines int      // New compact transcript lines added by this checkpoint (0 if v2 disabled); used to advance CompactTranscriptStart
 	Transcript             []byte   // Raw transcript bytes for downstream consumers (trail title generation)
 }
 

@@ -13,6 +13,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/cmd/entire/cli/transcript/compact"
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
@@ -61,7 +63,7 @@ func buildTasksTreeHash(t *testing.T, repo *git.Repository, toolUseID string) pl
 	blobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(`{"tool_use_id":"`+toolUseID+`"}`))
 	require.NoError(t, err)
 
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, map[string]object.TreeEntry{
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
 		toolUseID + "/checkpoint.json": {Mode: filemode.Regular, Hash: blobHash},
 	})
 	require.NoError(t, err)
@@ -436,9 +438,17 @@ func TestMigrateCheckpointsV2_UsesComputedCompactTranscriptStart(t *testing.T) {
 
 	v1Content, err := v1Store.ReadSessionContent(ctx, cpID, 0)
 	require.NoError(t, err)
-	compacted := tryCompactTranscript(ctx, v1Content.Transcript, v1Content.Metadata)
-	require.NotNil(t, compacted)
-	expectedOffset := computeCompactOffset(v1Content.Transcript, compacted, v1Content.Metadata)
+	fullCompacted := tryCompactTranscript(ctx, v1Content.Transcript, v1Content.Metadata)
+	require.NotNil(t, fullCompacted)
+	scopedCompacted, err := compact.Compact(v1Content.Transcript, compact.MetadataFields{
+		Agent:      string(v1Content.Metadata.Agent),
+		CLIVersion: versioninfo.Version,
+		StartLine:  v1Content.Metadata.GetTranscriptStart(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, scopedCompacted)
+	require.Greater(t, bytes.Count(fullCompacted, []byte{'\n'}), bytes.Count(scopedCompacted, []byte{'\n'}))
+	expectedOffset := computeCompactOffset(ctx, v1Content.Transcript, fullCompacted, v1Content.Metadata)
 	require.Positive(t, expectedOffset, "expected non-zero compact transcript start")
 
 	var stdout bytes.Buffer
@@ -461,6 +471,10 @@ func TestMigrateCheckpointsV2_UsesComputedCompactTranscriptStart(t *testing.T) {
 	var metadata checkpoint.CommittedMetadata
 	require.NoError(t, json.Unmarshal([]byte(metadataContent), &metadata))
 	assert.Equal(t, expectedOffset, metadata.CheckpointTranscriptStart)
+
+	storedCompact, err := v2Store.ReadSessionCompactTranscript(ctx, cpID, 0)
+	require.NoError(t, err)
+	assert.Equal(t, fullCompacted, storedCompact, "migration should persist cumulative compact transcript")
 }
 
 func TestMigrateCheckpointsV2_RepairsMissingFullTranscriptBeforeBackfill(t *testing.T) {

@@ -148,7 +148,7 @@ func (a *openCodeAgent) StartSession(ctx context.Context, dir string) (Session, 
 		// Wait for TUI to be ready (input area with placeholder text).
 		// OpenCode's TUI has a large ASCII banner and multiple panels that
 		// can take a while to render on CI, plus WaitFor needs 2s settle.
-		if _, err := s.WaitFor(`Ask anything`, 30*time.Second); err != nil {
+		if _, err := s.WaitFor(`Ask anything`, 60*time.Second); err != nil {
 			content := s.Capture()
 			_ = s.Close()
 			if strings.TrimSpace(content) == "" && attempt == 0 {
