@@ -148,7 +148,7 @@ func (c *CursorAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, 
 // or until the timeout expires.
 func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) error {
 	const (
-		maxWait      = 3 * time.Second
+		maxWait      = 5 * time.Second
 		pollInterval = 50 * time.Millisecond
 	)
 

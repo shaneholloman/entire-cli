@@ -1707,6 +1707,12 @@ func TestWriteTemporary_PathNormalizationAndSkipping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tempDir := t.TempDir()
+			// Resolve symlinks so absolute paths match git's resolved repo root.
+			// On macOS, t.TempDir() returns /var/... but git resolves to /private/var/...
+			tempDir, err := filepath.EvalSymlinks(tempDir)
+			if err != nil {
+				t.Fatalf("failed to resolve symlinks: %v", err)
+			}
 
 			repo, err := git.PlainInit(tempDir, false)
 			if err != nil {

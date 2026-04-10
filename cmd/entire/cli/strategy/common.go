@@ -1637,6 +1637,11 @@ func IsOnDefaultBranch(repo *git.Repository) (bool, string) {
 // Only prepares for ACTIVE sessions — IDLE/ENDED sessions are already flushed.
 // Resolves the agent from state.AgentType internally. Multiple calls are safe but
 // not free — callers should avoid redundant calls for performance.
+//
+// Before waiting for the transcript file, this re-resolves the transcript path
+// via the agent's ResolveSessionFile. This handles agents like Cursor that create
+// the target directory before flushing the file — without re-resolution,
+// PrepareTranscript would poll the wrong (flat) path for its entire timeout.
 func prepareTranscriptForState(ctx context.Context, state *SessionState) {
 	if !state.Phase.IsActive() || state.TranscriptPath == "" || state.AgentType == "" {
 		return
@@ -1650,6 +1655,23 @@ func prepareTranscriptForState(ctx context.Context, state *SessionState) {
 		)
 		return
 	}
+
+	// Re-resolve transcript path before waiting — agents like Cursor may
+	// relocate transcripts from a flat layout (<dir>/<id>.jsonl) to a nested
+	// layout (<dir>/<id>/<id>.jsonl). ResolveSessionFile predicts the correct
+	// destination based on directory structure, even before the file is flushed.
+	sessionDir := filepath.Dir(state.TranscriptPath)
+	base := filepath.Base(state.TranscriptPath)
+	agentSessionID := strings.TrimSuffix(base, filepath.Ext(base))
+	if resolved := ag.ResolveSessionFile(sessionDir, agentSessionID); resolved != state.TranscriptPath {
+		logging.Debug(ctx, "prepareTranscriptForState: re-resolved transcript path",
+			slog.String("session_id", state.SessionID),
+			slog.String("old_path", state.TranscriptPath),
+			slog.String("new_path", resolved),
+		)
+		state.TranscriptPath = resolved
+	}
+
 	prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
 }
 

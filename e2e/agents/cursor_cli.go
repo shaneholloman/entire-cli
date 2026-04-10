@@ -121,7 +121,7 @@ func (a *CursorCLI) RunPrompt(ctx context.Context, dir string, prompt string, op
 	}
 
 	// Wait for the TUI to be ready.
-	if _, err := s.WaitFor(a.PromptPattern(), 30*time.Second); err != nil {
+	if _, err := s.WaitFor(a.PromptPattern(), 45*time.Second); err != nil {
 		return Output{Command: displayCmd, Stdout: s.Capture(), ExitCode: -1},
 			fmt.Errorf("waiting for startup prompt: %w", err)
 	}
@@ -161,7 +161,7 @@ func (a *CursorCLI) StartSession(ctx context.Context, dir string) (Session, erro
 	}
 
 	// Wait for the TUI to be ready (input prompt).
-	if _, err := s.WaitFor(a.PromptPattern(), 30*time.Second); err != nil {
+	if _, err := s.WaitFor(a.PromptPattern(), 45*time.Second); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("waiting for startup prompt: %w", err)
 	}
@@ -221,7 +221,7 @@ func (a *CursorCLI) acceptTrustDialogIfNeeded(s *TmuxSession) error {
 	// Race: either the trust dialog or the input prompt will appear first.
 	// Use a short timeout to check for the trust dialog without blocking
 	// too long if the workspace is already trusted.
-	content, err := s.WaitFor(`Trust this workspace|`+a.PromptPattern(), 30*time.Second)
+	content, err := s.WaitFor(`Trust this workspace|`+a.PromptPattern(), 45*time.Second)
 	if err != nil {
 		return fmt.Errorf("waiting for trust dialog or prompt: %w", err)
 	}
