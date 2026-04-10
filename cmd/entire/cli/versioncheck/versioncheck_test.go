@@ -335,6 +335,12 @@ func TestUpdateCommand(t *testing.T) {
 			want:           "brew upgrade entire",
 		},
 		{
+			name:           "mise path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
+			want:           "mise upgrade entire",
+		},
+		{
 			name:           "scoop path",
 			currentVersion: "1.0.0",
 			execPath:       func() (string, error) { return `C:\Users\test\scoop\apps\cli\current\entire.exe`, nil },

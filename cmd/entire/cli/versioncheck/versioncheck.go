@@ -19,6 +19,7 @@ import (
 
 const (
 	installManagerBrew    = "brew"
+	installManagerMise    = "mise"
 	installManagerScoop   = "scoop"
 	installManagerUnknown = "unknown"
 	installChannelStable  = "stable"
@@ -337,6 +338,8 @@ func installManagerForCurrentBinary() string {
 		strings.Contains(normalizedPath, "/linuxbrew/") ||
 		strings.Contains(normalizedPath, "/Caskroom/"):
 		return installManagerBrew
+	case strings.Contains(normalizedPath, "/mise/installs/"):
+		return installManagerMise
 	case strings.Contains(normalizedPath, "/scoop/apps/"):
 		return installManagerScoop
 	default:
@@ -352,6 +355,8 @@ func updateCommand(currentVersion string) string {
 			return "brew upgrade --cask entire@nightly"
 		}
 		return "brew upgrade entire"
+	case installManagerMise:
+		return "mise upgrade entire"
 	case installManagerScoop:
 		return "scoop update entire/cli"
 	}
