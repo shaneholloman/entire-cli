@@ -77,7 +77,7 @@ func TestAlreadyRedacted(t *testing.T) {
 	input := []byte(`some data`)
 	rb := AlreadyRedacted(input)
 	if !bytes.Equal(rb.Bytes(), input) {
-		t.Errorf("AlreadyRedacted() = %q, want %q", rb, input)
+		t.Errorf("AlreadyRedacted() = %q, want %q", rb.Bytes(), input)
 	}
 }
 
