@@ -33,8 +33,8 @@ func (a *CursorCLI) EntireAgent() string        { return "cursor" }
 func (a *CursorCLI) TimeoutMultiplier() float64 { return 1.5 }
 
 // PromptPattern returns a regex matching the Cursor CLI's TUI input prompt.
-// The CLI shows a styled input box with placeholder text when ready for input.
-func (a *CursorCLI) PromptPattern() string { return `/ commands` }
+// Cursor has used both legacy and newer placeholder copy across releases.
+func (a *CursorCLI) PromptPattern() string { return `(/ commands|Plan, search, build anything)` }
 
 func (a *CursorCLI) IsTransientError(out Output, err error) bool {
 	if err == nil {
