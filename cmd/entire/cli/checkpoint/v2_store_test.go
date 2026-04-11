@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,18 +25,12 @@ func initTestRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	dir := t.TempDir()
 
-	repo, err := git.PlainInit(dir, false)
-	require.NoError(t, err)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "README.md", "init")
+	testutil.GitAdd(t, dir, "README.md")
+	testutil.GitCommit(t, dir, "initial")
 
-	wt, err := repo.Worktree()
-	require.NoError(t, err)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("init"), 0o644))
-	_, err = wt.Add("README.md")
-	require.NoError(t, err)
-	_, err = wt.Commit("initial", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
+	repo, err := git.PlainOpen(dir)
 	require.NoError(t, err)
 
 	return repo
@@ -209,7 +203,7 @@ func TestV2GitStore_WriteCommittedMain_WritesMetadata(t *testing.T) {
 		SessionID:    "test-session-001",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"human","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -246,7 +240,7 @@ func TestV2GitStore_WriteCommittedMain_WritesPrompts(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}`)),
 		Prompts:      []string{"do the thing", "also this"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -279,7 +273,7 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-003",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}` + "\n" + `{"line":"two"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}` + "\n" + `{"line":"two"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -317,7 +311,7 @@ func TestV2GitStore_WriteCommittedMain_WritesCompactTranscript(t *testing.T) {
 		CheckpointID:      cpID,
 		SessionID:         "test-session-compact",
 		Strategy:          "manual-commit",
-		Transcript:        []byte(`{"type":"human","message":"hello"}`),
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
 		CompactTranscript: compactData,
 		Prompts:           []string{"hello"},
 		AuthorName:        "Test",
@@ -357,7 +351,7 @@ func TestV2GitStore_WriteCommittedMain_NoCompactTranscript_SkipsGracefully(t *te
 		CheckpointID:      cpID,
 		SessionID:         "test-session-no-compact",
 		Strategy:          "manual-commit",
-		Transcript:        []byte(`{"type":"human","message":"hello"}`),
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
 		CompactTranscript: nil,
 		Prompts:           []string{"hello"},
 		AuthorName:        "Test",
@@ -379,6 +373,42 @@ func TestV2GitStore_WriteCommittedMain_NoCompactTranscript_SkipsGracefully(t *te
 	assert.Error(t, err, "transcript.jsonl should not exist when CompactTranscript is nil")
 }
 
+func TestV2GitStore_WriteCommittedMain_UsesCompactTranscriptStart(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a1b2c3d4e5f7")
+	compactData := []byte("{\"v\":1,\"type\":\"user\",\"content\":\"hello\"}\n{\"v\":1,\"type\":\"assistant\",\"content\":\"hi\"}\n")
+
+	_, err := store.writeCommittedMain(ctx, WriteCommittedOptions{
+		CheckpointID:              cpID,
+		SessionID:                 "test-session-compact-start",
+		Strategy:                  "manual-commit",
+		Transcript:                redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
+		CompactTranscript:         compactData,
+		Prompts:                   []string{"hello"},
+		AuthorName:                "Test",
+		AuthorEmail:               "test@test.com",
+		CheckpointTranscriptStart: 42, // full.jsonl offset (must not be used in v2 metadata)
+		CompactTranscriptStart:    15, // transcript.jsonl offset (must be used in v2 metadata)
+	})
+	require.NoError(t, err)
+
+	tree := v2MainTree(t, repo)
+	cpPath := cpID.Path()
+
+	// Read session metadata from /main
+	metadataContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.MetadataFileName)
+	var metadata CommittedMetadata
+	require.NoError(t, json.Unmarshal([]byte(metadataContent), &metadata))
+
+	// v2 should store the compact offset, not the full transcript offset.
+	assert.Equal(t, 15, metadata.CheckpointTranscriptStart,
+		"v2 /main metadata should use CompactTranscriptStart for checkpoint_transcript_start")
+}
+
 func TestV2GitStore_UpdateCommitted_WritesCompactTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
@@ -390,7 +420,7 @@ func TestV2GitStore_UpdateCommitted_WritesCompactTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-update-compact",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"human","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -401,7 +431,7 @@ func TestV2GitStore_UpdateCommitted_WritesCompactTranscript(t *testing.T) {
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID:      cpID,
 		SessionID:         "test-session-update-compact",
-		Transcript:        []byte(`{"type":"human","message":"hello updated"}`),
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello updated"}`)),
 		CompactTranscript: compactData,
 		Agent:             "Claude Code",
 	})
@@ -438,7 +468,7 @@ func TestV2GitStore_WriteCommittedMain_MultiSession(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"line":"a"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"line":"a"}`)),
 		CheckpointsCount: 3,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -450,7 +480,7 @@ func TestV2GitStore_WriteCommittedMain_MultiSession(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-B",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"line":"b"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"line":"b"}`)),
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -497,7 +527,7 @@ func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-full-001",
 		Strategy:     "manual-commit",
-		Transcript:   transcript,
+		Transcript:   redact.AlreadyRedacted(transcript),
 		Agent:        agent.AgentTypeClaudeCode,
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -524,7 +554,7 @@ func TestV2GitStore_WriteCommittedFull_ExcludesMetadata(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-full-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -594,7 +624,7 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 		CheckpointID: cpA,
 		SessionID:    "session-A",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"A"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"A"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}, 0)
@@ -605,7 +635,7 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 		CheckpointID: cpB,
 		SessionID:    "session-B",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"B"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"B"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}, 0)
@@ -633,7 +663,7 @@ func TestV2GitStore_WriteCommitted_WritesBothRefs(t *testing.T) {
 		SessionID:    "test-session-both",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		Prompts:      []string{"hi there"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -701,7 +731,7 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"from":"X"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"from":"X"}`)),
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -713,7 +743,7 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-Y",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"from":"Y"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"from":"Y"}`)),
 		CheckpointsCount: 3,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -749,7 +779,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 		SessionID:    "test-session-update",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"initial"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"initial"}`)),
 		Prompts:      []string{"first prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -760,7 +790,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "test-session-update",
-		Transcript:   []byte(`{"type":"assistant","message":"finalized"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"finalized"}`)),
 		Prompts:      []string{"first prompt", "second prompt"},
 		Agent:        agent.AgentTypeClaudeCode,
 	})
@@ -793,7 +823,7 @@ func TestV2GitStore_UpdateCommitted_NoTranscript_OnlyUpdatesMain(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-noupdate",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"assistant","message":"original"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"original"}`)),
 		Prompts:      []string{"old prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -832,7 +862,7 @@ func TestV2GitStore_UpdateCommitted_CheckpointNotFound(t *testing.T) {
 	err := store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "nonexistent",
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		Agent:        agent.AgentTypeClaudeCode,
 	})
 	require.Error(t, err)
@@ -853,7 +883,7 @@ func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 			SessionID:    fmt.Sprintf("session-rot-%d", i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})
@@ -886,7 +916,7 @@ func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 		SessionID:    "session-rot-3",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"cp":3}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"cp":3}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -914,7 +944,7 @@ func TestWriteCommitted_NoRotationBelowThreshold(t *testing.T) {
 			SessionID:    fmt.Sprintf("session-norot-%d", i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})

@@ -197,7 +197,7 @@ func (s *GitStore) writeIncrementalTaskCheckpoint(opts WriteCommittedOptions, ta
 		Type:      opts.IncrementalType,
 		ToolUseID: opts.ToolUseID,
 		Timestamp: time.Now().UTC(),
-		Data:      incData,
+		Data:      json.RawMessage(incData.Bytes()),
 	}
 	cpData, err := jsonutil.MarshalIndentWithNewline(checkpoint, "", "  ")
 	if err != nil {
@@ -254,9 +254,10 @@ func (s *GitStore) writeFinalTaskCheckpoint(ctx context.Context, opts WriteCommi
 					slog.String("path", opts.SubagentTranscriptPath),
 					slog.String("error", jsonlErr.Error()),
 				)
-				redacted = redact.Bytes(agentContent)
+				agentContent = redact.Bytes(agentContent)
+			} else {
+				agentContent = redacted.Bytes()
 			}
-			agentContent = redacted
 
 			agentBlobHash, agentBlobErr := CreateBlobFromContent(s.repo, agentContent)
 			if agentBlobErr == nil {
@@ -629,39 +630,37 @@ func aggregateTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {
 // If the transcript exceeds MaxChunkSize, it's split into multiple chunk files.
 func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry) error {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
-	transcript := opts.Transcript
-	if len(transcript) == 0 && opts.TranscriptPath != "" {
-		var readErr error
-		transcript, readErr = os.ReadFile(opts.TranscriptPath)
+	transcriptBytes := opts.Transcript.Bytes()
+
+	// TranscriptPath fallback: data read from disk is an untrusted source,
+	// so we redact it here. The in-memory path (opts.Transcript) is already
+	// pre-redacted by the caller — enforced by the RedactedBytes type.
+	if len(transcriptBytes) == 0 && opts.TranscriptPath != "" {
+		rawData, readErr := os.ReadFile(opts.TranscriptPath)
 		if readErr != nil {
 			// Non-fatal: transcript may not exist yet
-			transcript = nil
+			rawData = nil
+		}
+		if len(rawData) > 0 {
+			redacted, redactErr := redact.JSONLBytes(rawData)
+			if redactErr != nil {
+				return fmt.Errorf("failed to redact transcript from file: %w", redactErr)
+			}
+			transcriptBytes = redacted.Bytes()
 		}
 	}
-	if len(transcript) == 0 {
+	if len(transcriptBytes) == 0 {
 		return nil
 	}
 
 	if opts.Agent == agent.AgentTypeCodex {
-		transcript = codex.SanitizePortableTranscript(transcript)
+		transcriptBytes = codex.SanitizePortableTranscript(transcriptBytes)
 	}
-
-	// Redact secrets before chunking so content hash reflects redacted content
-	redactStart := time.Now()
-	redactCtx, redactTranscriptSpan := perf.Start(ctx, "redact_transcript")
-	transcript, err := redact.JSONLBytes(transcript)
-	if err != nil {
-		redactTranscriptSpan.RecordError(err)
-		redactTranscriptSpan.End()
-		return fmt.Errorf("failed to redact transcript secrets: %w", err)
-	}
-	redactTranscriptSpan.End()
-	redactDuration := time.Since(redactStart)
 
 	// Chunk the transcript if it's too large
 	chunkStart := time.Now()
-	chunkCtx, chunkTranscriptSpan := perf.Start(redactCtx, "chunk_transcript")
-	chunks, err := agent.ChunkTranscript(chunkCtx, transcript, opts.Agent)
+	chunkCtx, chunkTranscriptSpan := perf.Start(ctx, "chunk_transcript")
+	chunks, err := agent.ChunkTranscript(chunkCtx, transcriptBytes, opts.Agent)
 	if err != nil {
 		chunkTranscriptSpan.RecordError(err)
 		chunkTranscriptSpan.End()
@@ -693,7 +692,7 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 	// Content hash for deduplication (hash of full transcript)
 	contentHashStart := time.Now()
 	_, contentHashSpan := perf.Start(blobCtx, "write_transcript_content_hash")
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcriptBytes))
 	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
 		contentHashSpan.RecordError(err)
@@ -711,11 +710,10 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 		slog.String("session_id", opts.SessionID),
 		slog.String("checkpoint_id", opts.CheckpointID.String()),
 		slog.String("agent", string(opts.Agent)),
-		slog.Int64("redact_transcript_ms", redactDuration.Milliseconds()),
 		slog.Int64("chunk_transcript_ms", chunkDuration.Milliseconds()),
 		slog.Int64("write_transcript_blobs_ms", blobDuration.Milliseconds()),
 		slog.Int64("write_transcript_content_hash_ms", time.Since(contentHashStart).Milliseconds()),
-		slog.Int("transcript_bytes", len(transcript)),
+		slog.Int("transcript_bytes", len(transcriptBytes)),
 		slog.Int("chunk_count", len(chunks)),
 	)
 	return nil
@@ -1309,14 +1307,10 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
 
-	// Replace transcript (full replace, not append)
-	// Apply redaction as safety net (caller should redact, but we ensure it here)
-	if len(opts.Transcript) > 0 {
-		transcript, err := redact.JSONLBytes(opts.Transcript)
-		if err != nil {
-			return fmt.Errorf("failed to redact transcript secrets: %w", err)
-		}
-		if err := s.replaceTranscript(ctx, transcript, opts.Agent, sessionPath, entries); err != nil {
+	// Replace transcript (full replace, not append).
+	// Transcript is pre-redacted by the caller (enforced by RedactedBytes type).
+	if opts.Transcript.Len() > 0 {
+		if err := s.replaceTranscript(ctx, opts.Transcript, opts.Agent, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
 	}
@@ -1359,7 +1353,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 // replaceTranscript writes the full transcript content, replacing any existing transcript.
 // Also removes any chunk files from a previous write and updates the content hash.
-func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
+func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
 	// Remove existing transcript files (base + any chunks)
 	transcriptBase := sessionPath + paths.TranscriptFileName
 	for key := range entries {
@@ -1369,7 +1363,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 	}
 
 	// Chunk the transcript (matches writeTranscript behavior)
-	chunks, err := agent.ChunkTranscript(ctx, transcript, agentType)
+	chunks, err := agent.ChunkTranscript(ctx, transcript.Bytes(), agentType)
 	if err != nil {
 		return fmt.Errorf("failed to chunk transcript: %w", err)
 	}
@@ -1389,7 +1383,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 	}
 
 	// Update content hash
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript.Bytes()))
 	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
 		return fmt.Errorf("failed to create content hash blob: %w", err)
@@ -1592,9 +1586,10 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	if strings.HasSuffix(treePath, ".jsonl") {
 		redacted, jsonlErr := redact.JSONLBytes(content)
 		if jsonlErr != nil {
-			redacted = redact.Bytes(content)
+			content = redact.Bytes(content)
+		} else {
+			content = redacted.Bytes()
 		}
-		content = redacted
 	} else {
 		content = redact.Bytes(content)
 	}

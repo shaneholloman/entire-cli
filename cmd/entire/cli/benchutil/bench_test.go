@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -322,11 +323,12 @@ func benchWriteCommitted(messageCount, avgMsgBytes, filesTouched, priorCheckpoin
 			if err != nil {
 				b.Fatalf("generate ID: %v", err)
 			}
+			redactedTranscript := redact.AlreadyRedacted(transcript)
 			err = repo.Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
 				CheckpointID:     cpID,
 				SessionID:        fmt.Sprintf("bench-session-%d", i),
 				Strategy:         "manual-commit",
-				Transcript:       transcript,
+				Transcript:       redactedTranscript,
 				Prompts:          prompts,
 				FilesTouched:     files,
 				CheckpointsCount: 5,

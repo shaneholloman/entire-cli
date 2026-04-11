@@ -27,6 +27,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -523,7 +524,8 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 	}
 	defer cancel()
 
-	summary, err := generateTranscriptSummary(timeoutCtx, scopedTranscript, filesTouched, agentType, nil)
+	// scopedTranscript is read from checkpoint storage, which redacts on write.
+	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, nil)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(timeoutCtx.Err(), context.Canceled) {
 			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
@@ -778,7 +780,8 @@ func extractPromptsFromTranscript(transcriptBytes []byte, agentType types.AgentT
 		return nil
 	}
 
-	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
+	// transcriptBytes is read from checkpoint storage, which redacts on write.
+	condensed, err := summarize.BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(transcriptBytes), agentType)
 	if err != nil || len(condensed) == 0 {
 		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
 	}
@@ -929,7 +932,8 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 		return "  (none)\n"
 	}
 
-	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
+	// transcriptBytes is read from checkpoint storage, which redacts on write.
+	condensed, err := summarize.BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(transcriptBytes), agentType)
 	if err != nil || len(condensed) == 0 {
 		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
 	}

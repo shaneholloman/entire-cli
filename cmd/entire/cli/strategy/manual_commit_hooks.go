@@ -1314,6 +1314,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	state.AttributionBaseCommit = newHead
 	state.StepCount = 0
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
+	state.CompactTranscriptStart += result.CompactTranscriptLines
 	state.CheckpointTranscriptSize = int64(len(result.Transcript))
 
 	// Clear attribution tracking — condensation already used these values
@@ -2507,17 +2508,24 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		prompts = readPromptsFromFilesystem(ctx, state.SessionID)
 	}
 
-	// Redact secrets before writing — matches WriteCommitted behavior.
-	// The live transcript on disk contains raw content; redaction must happen
-	// before anything is persisted to the metadata branch.
-	fullTranscript, err = redact.JSONLBytes(fullTranscript)
-	if err != nil {
-		logging.Warn(logCtx, "finalize: transcript redaction failed, skipping",
+	// Redact secrets before writing. Checkpoint store methods require
+	// pre-redacted in-memory transcript content from callers. The live
+	// transcript on disk is still treated as raw/untrusted input, so redact it
+	// here before anything is persisted to the metadata branch.
+	//
+	// On failure: drop the transcript but continue writing checkpoint metadata
+	// (attribution, files touched, prompts). Hooks run without user interaction
+	// so there is no retry path — preserving partial metadata is better than
+	// losing everything. Persisting an unredacted transcript would be worse.
+	_, redactSpan := perf.Start(logCtx, "redact_transcript")
+	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
+	redactSpan.End()
+	if redactErr != nil {
+		logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
 			slog.String("session_id", state.SessionID),
-			slog.String("error", err.Error()),
+			slog.String("error", redactErr.Error()),
 		)
-		state.TurnCheckpointIDs = nil
-		return 1 // Count as error - all checkpoints will be skipped
+		redactedTranscript = redact.RedactedBytes{}
 	}
 	for i, p := range prompts {
 		prompts[i] = redact.String(p)
@@ -2546,13 +2554,13 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		updateOpts := checkpoint.UpdateCommittedOptions{
 			CheckpointID: cpID,
 			SessionID:    state.SessionID,
-			Transcript:   fullTranscript,
+			Transcript:   redactedTranscript,
 			Prompts:      prompts,
 			Agent:        state.AgentType,
 		}
 
 		// Generate compact transcript for v2 /main
-		if v2Store != nil && len(fullTranscript) > 0 {
+		if v2Store != nil && redactedTranscript.Len() > 0 {
 			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
 			startLine := 0
 			if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
@@ -2568,7 +2576,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 					slog.String("error", errMsg),
 				)
 			}
-			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, fullTranscript, startLine)
+			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
 		}
 
 		updateErr := store.UpdateCommitted(ctx, updateOpts)
@@ -2712,6 +2720,7 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 	// but this would complicate checkpoint retrieval and require careful tracking of dependencies.
 	state.StepCount = 1
 	state.CheckpointTranscriptStart = 0
+	state.CompactTranscriptStart = 0
 	state.CheckpointTranscriptSize = 0
 	state.LastCheckpointID = ""
 	// NOTE: TurnCheckpointIDs is intentionally NOT cleared here. Those checkpoint

@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
@@ -247,7 +248,7 @@ func TestExplain_CheckpointV2EnabledPrefersV2WhenDualWriteExists(t *testing.T) {
 	err = v1Store.UpdateCommitted(context.Background(), checkpoint.UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    v1Content.Metadata.SessionID,
-		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"v1 overridden prompt"}]}}` + "\n"),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"v1 overridden prompt"}]}}` + "\n")),
 		Prompts:      []string{"v1 overridden prompt"},
 		Agent:        v1Content.Metadata.Agent,
 	})
@@ -306,7 +307,7 @@ func TestExplain_CheckpointV2NoFullTranscriptUsesCompact(t *testing.T) {
 	err = v1Store.UpdateCommitted(context.Background(), checkpoint.UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    v1Content.Metadata.SessionID,
-		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"v1 marker prompt"}]}}` + "\n"),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"v1 marker prompt"}]}}` + "\n")),
 		Prompts:      []string{"v1 marker prompt"},
 		Agent:        v1Content.Metadata.Agent,
 	})

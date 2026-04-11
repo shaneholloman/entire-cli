@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -24,6 +26,7 @@ import (
 
 func newMigrateCmd() *cobra.Command {
 	var checkpointsFlag string
+	var forceFlag bool
 
 	cmd := &cobra.Command{
 		Use:    "migrate",
@@ -52,11 +55,12 @@ func newMigrateCmd() *cobra.Command {
 			} else {
 				defer logging.Close()
 			}
-			return runMigrateCheckpointsV2(ctx, cmd)
+			return runMigrateCheckpointsV2(ctx, cmd, forceFlag)
 		},
 	}
 
 	cmd.Flags().StringVar(&checkpointsFlag, "checkpoints", "", "Target checkpoint format version (e.g., \"v2\")")
+	cmd.Flags().BoolVar(&forceFlag, "force", false, "Force re-migration of all checkpoints, overwriting existing v2 data")
 
 	return cmd
 }
@@ -67,7 +71,7 @@ type migrateResult struct {
 	failed   int
 }
 
-func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command) error {
+func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command, force bool) error {
 	repo, err := strategy.OpenRepository(ctx)
 	if err != nil {
 		cmd.SilenceUsage = true
@@ -79,7 +83,7 @@ func runMigrateCheckpointsV2(ctx context.Context, cmd *cobra.Command) error {
 	v2Store := checkpoint.NewV2GitStore(repo, migrateRemoteName)
 	out := cmd.OutOrStdout()
 
-	result, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, out)
+	result, err := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, out, force)
 	if err != nil {
 		return err
 	}
@@ -102,7 +106,7 @@ var (
 
 const migrateRemoteName = "origin"
 
-func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, out io.Writer) (*migrateResult, error) {
+func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, out io.Writer, force bool) (*migrateResult, error) {
 	v1List, err := v1Store.ListCommitted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list v1 checkpoints: %w", err)
@@ -113,14 +117,18 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 		return &migrateResult{}, nil
 	}
 
-	fmt.Fprintln(out, "Migrating v1 checkpoints to v2...")
+	if force {
+		fmt.Fprintln(out, "Force-migrating v1 checkpoints to v2 (overwriting existing)...")
+	} else {
+		fmt.Fprintln(out, "Migrating v1 checkpoints to v2...")
+	}
 	total := len(v1List)
 	result := &migrateResult{}
 
 	for i, info := range v1List {
 		prefix := fmt.Sprintf("  [%d/%d] Migrating checkpoint %s...", i+1, total, info.CheckpointID)
 
-		if migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, out, prefix); migrateErr != nil {
+		if migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, out, prefix, force); migrateErr != nil {
 			switch {
 			case errors.Is(migrateErr, errAlreadyMigrated):
 				fmt.Fprintf(out, "%s skipped (already in v2)\n", prefix)
@@ -145,14 +153,14 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 	return result, nil
 }
 
-func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, out io.Writer, prefix string) error {
+func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, out io.Writer, prefix string, force bool) error {
 	existing, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
 		return fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
 
-	// Already in v2 — check if any aspect of sessions are missing and backfill
-	if existing != nil {
+	// Already in v2 — when not forcing, check if any aspect of sessions are missing and backfill
+	if existing != nil && !force {
 		repaired, repairErr := repairPartialV2Checkpoint(ctx, repo, v1Store, v2Store, info, existing)
 		if repairErr != nil {
 			return repairErr
@@ -203,6 +211,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 		compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata)
 		if compacted != nil {
 			opts.CompactTranscript = compacted
+			opts.CompactTranscriptStart = computeCompactOffset(ctx, content.Transcript, compacted, content.Metadata)
 		} else if len(content.Transcript) > 0 {
 			compactFailed = true
 		}
@@ -253,9 +262,11 @@ func repairPartialV2Checkpoint(ctx context.Context, repo *git.Repository, v1Stor
 		updateOpts := checkpoint.UpdateCommittedOptions{
 			CheckpointID: info.CheckpointID,
 			SessionID:    content.Metadata.SessionID,
-			Transcript:   content.Transcript,
-			Prompts:      checkpoint.SplitPromptContent(content.Prompts),
-			Agent:        content.Metadata.Agent,
+			// content.Transcript was read from v1 checkpoint storage and is
+			// already redacted at write time.
+			Transcript: redact.AlreadyRedacted(content.Transcript),
+			Prompts:    checkpoint.SplitPromptContent(content.Prompts),
+			Agent:      content.Metadata.Agent,
 		}
 		if compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata); compacted != nil {
 			updateOpts.CompactTranscript = compacted
@@ -387,11 +398,13 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 	prompts := checkpoint.SplitPromptContent(content.Prompts)
 
 	return checkpoint.WriteCommittedOptions{
-		CheckpointID:                info.CheckpointID,
-		SessionID:                   m.SessionID,
-		Strategy:                    m.Strategy,
-		Branch:                      m.Branch,
-		Transcript:                  content.Transcript,
+		CheckpointID: info.CheckpointID,
+		SessionID:    m.SessionID,
+		Strategy:     m.Strategy,
+		Branch:       m.Branch,
+		// content.Transcript comes from persisted checkpoint storage and is
+		// already redacted.
+		Transcript:                  redact.AlreadyRedacted(content.Transcript),
 		Prompts:                     prompts,
 		FilesTouched:                m.FilesTouched,
 		CheckpointsCount:            m.CheckpointsCount,
@@ -412,6 +425,10 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 }
 
 func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.CommittedMetadata) []byte {
+	return compactTranscriptForStartLine(ctx, transcript, m, 0)
+}
+
+func compactTranscriptForStartLine(ctx context.Context, transcript []byte, m checkpoint.CommittedMetadata, startLine int) []byte {
 	if len(transcript) == 0 {
 		return nil
 	}
@@ -422,10 +439,11 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 		return nil
 	}
 
-	compacted, err := compact.Compact(transcript, compact.MetadataFields{
+	// transcript is read from persisted checkpoint storage and already redacted.
+	compacted, err := compact.Compact(redact.AlreadyRedacted(transcript), compact.MetadataFields{
 		Agent:      string(m.Agent),
 		CLIVersion: versioninfo.Version,
-		StartLine:  m.GetTranscriptStart(),
+		StartLine:  startLine,
 	})
 	if err != nil {
 		logging.Warn(ctx, "compact transcript generation failed during migration",
@@ -444,6 +462,51 @@ func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.C
 		return nil
 	}
 	return compacted
+}
+
+// computeCompactOffset determines the transcript.jsonl line offset for a checkpoint
+// by comparing a full compact (startLine=0) against the scoped compact. The difference
+// is the number of compact lines before this checkpoint's data.
+func computeCompactOffset(ctx context.Context, fullTranscript, fullCompact []byte, m checkpoint.CommittedMetadata) int {
+	startLine := m.GetTranscriptStart()
+	if startLine == 0 || len(fullTranscript) == 0 || m.Agent == "" {
+		return 0
+	}
+
+	if len(fullCompact) == 0 {
+		return 0
+	}
+
+	// fullTranscript is read from persisted checkpoint storage and already redacted.
+	scopedCompact, err := compact.Compact(redact.AlreadyRedacted(fullTranscript), compact.MetadataFields{
+		Agent:      string(m.Agent),
+		CLIVersion: versioninfo.Version,
+		StartLine:  startLine,
+	})
+	if err != nil {
+		logging.Warn(ctx, "compact transcript offset calculation failed during migration",
+			slog.String("checkpoint_id", string(m.CheckpointID)),
+			slog.String("agent", string(m.Agent)),
+			slog.String("error", err.Error()),
+		)
+		return 0
+	}
+	if len(scopedCompact) == 0 {
+		return 0
+	}
+
+	fullLines := bytes.Count(fullCompact, []byte{'\n'})
+	scopedLines := bytes.Count(scopedCompact, []byte{'\n'})
+	offset := fullLines - scopedLines
+	if offset < 0 {
+		logging.Warn(ctx, "compact transcript offset was negative during migration, defaulting to 0",
+			slog.String("checkpoint_id", string(m.CheckpointID)),
+			slog.Int("full_lines", fullLines),
+			slog.Int("scoped_lines", scopedLines),
+		)
+		return 0
+	}
+	return offset
 }
 
 // copyTaskMetadataToV2 copies task metadata files (subagent transcripts, checkpoint JSONs)

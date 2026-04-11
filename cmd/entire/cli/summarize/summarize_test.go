@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/require"
 )
 
@@ -436,7 +437,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiUserAndAssistant(t *testing.T) 
 		{"type":"gemini","content":"Sure, here is a function that does what you need."}
 	]}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(geminiJSON), agent.AgentTypeGemini)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(geminiJSON)), agent.AgentTypeGemini)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -469,7 +470,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiToolCalls(t *testing.T) {
 		]}
 	]}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(geminiJSON), agent.AgentTypeGemini)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(geminiJSON)), agent.AgentTypeGemini)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -508,7 +509,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiToolCallArgShapes(t *testing.T)
 		]}
 	]}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(geminiJSON), agent.AgentTypeGemini)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(geminiJSON)), agent.AgentTypeGemini)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiSkipsEmptyContent(t *testing.T)
 		{"type":"user","content":"Thanks"}
 	]}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(geminiJSON), agent.AgentTypeGemini)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(geminiJSON)), agent.AgentTypeGemini)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -565,7 +566,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiSkipsEmptyContent(t *testing.T)
 func TestBuildCondensedTranscriptFromBytes_GeminiEmptyTranscript(t *testing.T) {
 	geminiJSON := `{"messages":[]}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(geminiJSON), agent.AgentTypeGemini)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(geminiJSON)), agent.AgentTypeGemini)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -576,7 +577,7 @@ func TestBuildCondensedTranscriptFromBytes_GeminiEmptyTranscript(t *testing.T) {
 }
 
 func TestBuildCondensedTranscriptFromBytes_GeminiInvalidJSON(t *testing.T) {
-	_, err := BuildCondensedTranscriptFromBytes([]byte(`not json`), agent.AgentTypeGemini)
+	_, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(`not json`)), agent.AgentTypeGemini)
 	if err == nil {
 		t.Error("expected error for invalid Gemini JSON")
 	}
@@ -662,7 +663,7 @@ func TestGenerateFromTranscript(t *testing.T) {
 	transcript := []byte(`{"type":"user","message":{"content":"Hello"}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Hi there"}]}}`)
 
-	summary, err := GenerateFromTranscript(context.Background(), transcript, []string{"file.go"}, "", mockGenerator)
+	summary, err := GenerateFromTranscript(context.Background(), redact.AlreadyRedacted(transcript), []string{"file.go"}, "", mockGenerator)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -675,7 +676,7 @@ func TestGenerateFromTranscript(t *testing.T) {
 func TestGenerateFromTranscript_EmptyTranscript(t *testing.T) {
 	mockGenerator := &ClaudeGenerator{}
 
-	summary, err := GenerateFromTranscript(context.Background(), []byte{}, []string{}, "", mockGenerator)
+	summary, err := GenerateFromTranscript(context.Background(), redact.AlreadyRedacted([]byte{}), []string{}, "", mockGenerator)
 	if err == nil {
 		t.Error("expected error for empty transcript")
 	}
@@ -689,7 +690,7 @@ func TestGenerateFromTranscript_NilGenerator(t *testing.T) {
 
 	// With nil generator, should use default ClaudeGenerator
 	// This will fail because claude CLI isn't available in test, but tests the nil handling
-	_, err := GenerateFromTranscript(context.Background(), transcript, []string{}, "", nil)
+	_, err := GenerateFromTranscript(context.Background(), redact.AlreadyRedacted(transcript), []string{}, "", nil)
 	// Error is expected (claude CLI not available), but function should not panic
 	if err == nil {
 		t.Log("Unexpectedly succeeded - claude CLI must be available")
@@ -707,7 +708,7 @@ func TestBuildCondensedTranscriptFromBytes_Codex(t *testing.T) {
 {"timestamp":"2026-04-01T23:31:32.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
 `)
 
-	entries, err := BuildCondensedTranscriptFromBytes(codexTranscript, agent.AgentTypeCodex)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(codexTranscript), agent.AgentTypeCodex)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -744,7 +745,7 @@ func TestBuildCondensedTranscriptFromBytes_Codex_CustomToolCall(t *testing.T) {
 {"timestamp":"t6","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
 `)
 
-	entries, err := BuildCondensedTranscriptFromBytes(codexTranscript, agent.AgentTypeCodex)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(codexTranscript), agent.AgentTypeCodex)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -779,7 +780,7 @@ func TestBuildCondensedTranscriptFromBytes_Codex_ExecCommandDetail(t *testing.T)
 {"timestamp":"t4","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"total 0"}}
 `)
 
-	entries, err := BuildCondensedTranscriptFromBytes(codexTranscript, agent.AgentTypeCodex)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(codexTranscript), agent.AgentTypeCodex)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -813,7 +814,7 @@ func TestBuildCondensedTranscriptFromBytes_OpenCodeUserAndAssistant(t *testing.T
 		]
 	}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(ocExportJSON), agent.AgentTypeOpenCode)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(ocExportJSON)), agent.AgentTypeOpenCode)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -851,7 +852,7 @@ func TestBuildCondensedTranscriptFromBytes_OpenCodeToolCalls(t *testing.T) {
 		]
 	}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(ocExportJSON), agent.AgentTypeOpenCode)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(ocExportJSON)), agent.AgentTypeOpenCode)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -890,7 +891,7 @@ func TestBuildCondensedTranscriptFromBytes_OpenCodeSkipsEmptyContent(t *testing.
 		]
 	}`
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(ocExportJSON), agent.AgentTypeOpenCode)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(ocExportJSON)), agent.AgentTypeOpenCode)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -905,7 +906,7 @@ func TestBuildCondensedTranscriptFromBytes_OpenCodeSkipsEmptyContent(t *testing.
 
 func TestBuildCondensedTranscriptFromBytes_OpenCodeInvalidJSON(t *testing.T) {
 	// Invalid JSON now returns an error (not silently skipped like JSONL)
-	_, err := BuildCondensedTranscriptFromBytes([]byte("not json"), agent.AgentTypeOpenCode)
+	_, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte("not json")), agent.AgentTypeOpenCode)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -920,7 +921,7 @@ func TestBuildCondensedTranscriptFromBytes_CursorRoleBasedJSONL(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"text","text":"Created one.txt with one and committed."}]}}
 `
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(cursorJSONL), agent.AgentTypeCursor)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(cursorJSONL)), agent.AgentTypeCursor)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -964,7 +965,7 @@ func TestBuildCondensedTranscriptFromBytes_CursorNoToolUseBlocks(t *testing.T) {
 {"role":"assistant","message":{"content":[{"type":"text","text":"Here is a poem about code."}]}}
 `
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(cursorJSONL), agent.AgentTypeCursor)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(cursorJSONL)), agent.AgentTypeCursor)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -990,7 +991,7 @@ func TestBuildCondensedTranscriptFromBytes_DroidUserAndAssistant(t *testing.T) {
 		`{"type":"message","id":"m3","message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"main.go","content":"package main"}}]}}`,
 	}, "\n") + "\n"
 
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(droidJSONL), agent.AgentTypeFactoryAIDroid)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte(droidJSONL)), agent.AgentTypeFactoryAIDroid)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1027,7 +1028,7 @@ func TestBuildCondensedTranscriptFromBytes_DroidUserAndAssistant(t *testing.T) {
 
 func TestBuildCondensedTranscriptFromBytes_DroidMalformedInput(t *testing.T) {
 	// Completely invalid content should return an error from the Droid parser
-	_, err := BuildCondensedTranscriptFromBytes([]byte("not valid jsonl at all{{{"), agent.AgentTypeFactoryAIDroid)
+	_, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte("not valid jsonl at all{{{")), agent.AgentTypeFactoryAIDroid)
 	// Droid parser is lenient — malformed lines are skipped. With no valid messages,
 	// it returns an empty slice (not an error).
 	if err != nil {
@@ -1036,7 +1037,7 @@ func TestBuildCondensedTranscriptFromBytes_DroidMalformedInput(t *testing.T) {
 }
 
 func TestBuildCondensedTranscriptFromBytes_DroidEmptyTranscript(t *testing.T) {
-	entries, err := BuildCondensedTranscriptFromBytes([]byte(""), agent.AgentTypeFactoryAIDroid)
+	entries, err := BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted([]byte("")), agent.AgentTypeFactoryAIDroid)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

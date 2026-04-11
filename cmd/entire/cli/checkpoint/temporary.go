@@ -314,13 +314,13 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 
 	if opts.IsIncremental {
 		// Incremental checkpoint: only add the checkpoint file
-		var incData []byte
-		var err error
+		var incData json.RawMessage
 		if opts.IncrementalData != nil {
-			incData, err = redact.JSONLBytes(opts.IncrementalData)
-			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("failed to redact incremental checkpoint: %w", err)
+			redacted, redactErr := redact.JSONLBytes(opts.IncrementalData)
+			if redactErr != nil {
+				return plumbing.ZeroHash, fmt.Errorf("failed to redact incremental checkpoint: %w", redactErr)
 			}
+			incData = json.RawMessage(redacted.Bytes())
 		}
 		incrementalCheckpoint := struct {
 			Type      string          `json:"type"`
@@ -393,9 +393,10 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 						slog.String("path", opts.SubagentTranscriptPath),
 						slog.String("error", jsonlErr.Error()),
 					)
-					redacted = redact.Bytes(agentContent)
+					agentContent = redact.Bytes(agentContent)
+				} else {
+					agentContent = redacted.Bytes()
 				}
-				agentContent = redacted
 				if blobHash, blobErr := CreateBlobFromContent(s.repo, agentContent); blobErr == nil {
 					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl"
 					changes = append(changes, TreeChange{

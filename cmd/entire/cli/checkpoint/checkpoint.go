@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -212,8 +213,9 @@ type WriteCommittedOptions struct {
 	// Branch is the branch name where the checkpoint was created (empty if detached HEAD)
 	Branch string
 
-	// Transcript is the session transcript content (full.jsonl)
-	Transcript []byte
+	// Transcript is the session transcript content (full.jsonl).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains user prompts from the session
 	Prompts []string
@@ -273,6 +275,11 @@ type WriteCommittedOptions struct {
 	// CheckpointTranscriptStart is written to both CommittedMetadata.CheckpointTranscriptStart
 	// and the deprecated CommittedMetadata.TranscriptLinesAtStart for backward compatibility.
 
+	// CompactTranscriptStart is the transcript.jsonl line offset at checkpoint start.
+	// V2 /main writes this to checkpoint_transcript_start; v1 continues to use
+	// CheckpointTranscriptStart (full.jsonl).
+	CompactTranscriptStart int
+
 	// TokenUsage contains the token usage for this checkpoint
 	TokenUsage *agent.TokenUsage
 
@@ -314,8 +321,9 @@ type UpdateCommittedOptions struct {
 	// SessionID identifies which session slot to update within the checkpoint
 	SessionID string
 
-	// Transcript is the full session transcript (replaces existing)
-	Transcript []byte
+	// Transcript is the full session transcript (replaces existing).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains all user prompts (replaces existing)
 	Prompts []string

@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -190,7 +191,7 @@ func TestCountCheckpointsInTree_CountsShardDirectories(t *testing.T) {
 			SessionID:    "test-session",
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(`{"type":"test"}`),
+			Transcript:   redact.AlreadyRedacted([]byte(`{"type":"test"}`)),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})
@@ -218,7 +219,7 @@ func TestWriteCommittedFull_NoGenerationJSON(t *testing.T) {
 		SessionID:    "session-gen-001",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -250,7 +251,7 @@ func TestUpdateCommitted_DoesNotAddGenerationJSON(t *testing.T) {
 		SessionID:    "session-noupdate-gen",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"initial"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"initial"}`)),
 		Prompts:      []string{"first"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -261,7 +262,7 @@ func TestUpdateCommitted_DoesNotAddGenerationJSON(t *testing.T) {
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-noupdate-gen",
-		Transcript:   []byte(`{"type":"assistant","message":"finalized"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"finalized"}`)),
 		Prompts:      []string{"first", "second"},
 		Agent:        agent.AgentTypeClaudeCode,
 	})
@@ -378,7 +379,7 @@ func populateFullCurrent(t *testing.T, store *V2GitStore, n, offset int) []id.Ch
 			SessionID:    fmt.Sprintf("session-rot-%d", offset+i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})

@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -137,7 +138,7 @@ func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID,
 		CheckpointID: cpID,
 		SessionID:    sessionID,
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"` + sessionID + `"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"` + sessionID + `"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})

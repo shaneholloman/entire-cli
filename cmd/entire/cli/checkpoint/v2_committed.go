@@ -67,7 +67,7 @@ func (s *V2GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 		return fmt.Errorf("v2 /main update failed: %w", err)
 	}
 
-	if len(opts.Transcript) > 0 {
+	if opts.Transcript.Len() > 0 {
 		if err := s.updateCommittedFullTranscript(ctx, opts, sessionIndex); err != nil {
 			return fmt.Errorf("v2 /full/current update failed: %w", err)
 		}
@@ -382,7 +382,7 @@ func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, 
 		IsTask:                      opts.IsTask,
 		ToolUseID:                   opts.ToolUseID,
 		TranscriptIdentifierAtStart: opts.TranscriptIdentifierAtStart,
-		CheckpointTranscriptStart:   opts.CheckpointTranscriptStart,
+		CheckpointTranscriptStart:   opts.CompactTranscriptStart,
 		TokenUsage:                  opts.TokenUsage,
 		SessionMetrics:              opts.SessionMetrics,
 		InitialAttribution:          opts.InitialAttribution,
@@ -449,14 +449,24 @@ func (s *V2GitStore) writeCompactTranscriptHash(compactTranscript []byte, sessio
 // This is a no-op if opts.Transcript is empty (and opts.TranscriptPath is unset).
 func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts WriteCommittedOptions, sessionIndex int) error {
 	transcript := opts.Transcript
-	if len(transcript) == 0 && opts.TranscriptPath != "" {
-		var readErr error
-		transcript, readErr = os.ReadFile(opts.TranscriptPath)
+
+	// TranscriptPath fallback: data read from disk is an untrusted source,
+	// so we redact it here. The in-memory path (opts.Transcript) is already
+	// pre-redacted by the caller.
+	if transcript.Len() == 0 && opts.TranscriptPath != "" {
+		rawData, readErr := os.ReadFile(opts.TranscriptPath)
 		if readErr != nil {
-			transcript = nil
+			rawData = nil
+		}
+		if len(rawData) > 0 {
+			redacted, redactErr := redact.JSONLBytes(rawData)
+			if redactErr != nil {
+				return fmt.Errorf("failed to redact transcript from file: %w", redactErr)
+			}
+			transcript = redacted
 		}
 	}
-	if len(transcript) == 0 {
+	if transcript.Len() == 0 {
 		return nil // No transcript to write
 	}
 
@@ -529,16 +539,11 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	return nil
 }
 
-// writeTranscriptBlobs writes redacted, chunked transcript blobs to entries.
-// Returns the redacted transcript bytes so the caller can compute the content hash.
-func (s *V2GitStore) writeTranscriptBlobs(ctx context.Context, transcript []byte, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) ([]byte, error) {
-	// Redact secrets before chunking
-	redacted, err := redact.JSONLBytes(transcript)
-	if err != nil {
-		return nil, fmt.Errorf("failed to redact transcript: %w", err)
-	}
-
-	chunks, err := agent.ChunkTranscript(ctx, redacted, agentType)
+// writeTranscriptBlobs writes pre-redacted, chunked transcript blobs to entries.
+// Returns the transcript bytes so the caller can compute the content hash.
+func (s *V2GitStore) writeTranscriptBlobs(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) ([]byte, error) {
+	raw := transcript.Bytes()
+	chunks, err := agent.ChunkTranscript(ctx, raw, agentType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to chunk transcript: %w", err)
 	}
@@ -556,7 +561,7 @@ func (s *V2GitStore) writeTranscriptBlobs(ctx context.Context, transcript []byte
 		}
 	}
 
-	return redacted, nil
+	return raw, nil
 }
 
 // validateWriteOpts validates identifiers in WriteCommittedOptions.

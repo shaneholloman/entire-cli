@@ -6,6 +6,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +26,7 @@ func TestV2ReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -62,7 +63,7 @@ func TestV2ReadSessionContent_ReturnsMetadataAndTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"message": "hello world"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"message": "hello world"}`)),
 		Prompts:      []string{"test prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -89,7 +90,7 @@ func TestV2ReadSessionContent_TranscriptFromArchivedGeneration(t *testing.T) {
 		CheckpointID: cpID1,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"first": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"first": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -100,7 +101,7 @@ func TestV2ReadSessionContent_TranscriptFromArchivedGeneration(t *testing.T) {
 		CheckpointID: cpID2,
 		SessionID:    "session-2",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"second": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"second": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -258,7 +259,7 @@ func TestV2ReadSessionCompactTranscript_ReturnsCompactData(t *testing.T) {
 		CheckpointID:      cpID,
 		SessionID:         "session-compact",
 		Strategy:          "manual-commit",
-		Transcript:        []byte(`{"raw":true}` + "\n"),
+		Transcript:        redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
 		CompactTranscript: compact,
 		AuthorName:        "Test",
 		AuthorEmail:       "test@test.com",
@@ -281,7 +282,7 @@ func TestV2ReadSessionCompactTranscript_MissingCompactTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-no-compact",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"raw":true}` + "\n"),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -305,7 +306,7 @@ func TestV2ReadSessionCompactTranscript_MissingCheckpointOrSession(t *testing.T)
 		CheckpointID: cpID,
 		SessionID:    "session-0",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"raw":true}` + "\n"),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"raw":true}` + "\n")),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}))
@@ -325,7 +326,7 @@ func TestV2UpdateSummary_PersistsSummaryToLatestSession(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-summary-test",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n"),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
