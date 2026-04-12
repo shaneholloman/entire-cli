@@ -2,10 +2,12 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	agentpkg "github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,11 +33,13 @@ func TestInstallHooks_CreatesConfig(t *testing.T) {
 	hooksPath := filepath.Join(tempDir, ".codex", HooksFileName)
 	data, err := os.ReadFile(hooksPath)
 	require.NoError(t, err)
-	require.Contains(t, string(data), "Powered by Entire: Tracking is enabled")
-	require.Contains(t, string(data), "installation-methods")
-	require.Contains(t, string(data), "entire hooks codex session-start")
-	require.Contains(t, string(data), "entire hooks codex user-prompt-submit")
-	require.Contains(t, string(data), "entire hooks codex stop")
+
+	var hooksFile HooksFile
+	require.NoError(t, json.Unmarshal(data, &hooksFile))
+
+	assertHookCommand(t, hooksFile.Hooks.SessionStart, agentpkg.WrapProductionJSONWarningHookCommand("entire hooks codex session-start", agentpkg.WarningFormatSingleLine), "SessionStart")
+	assertHookCommand(t, hooksFile.Hooks.UserPromptSubmit, agentpkg.WrapProductionSilentHookCommand("entire hooks codex user-prompt-submit"), "UserPromptSubmit")
+	assertHookCommand(t, hooksFile.Hooks.Stop, agentpkg.WrapProductionSilentHookCommand("entire hooks codex stop"), "Stop")
 
 	// Verify project-level config.toml enables codex_hooks feature (per-repo)
 	projectConfig := filepath.Join(tempDir, ".codex", configFileName)
@@ -239,4 +243,17 @@ func TestInstallHooks_DoesNotModifyUserConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(configData), "model = \"gpt-4.1\"")
 	require.NotContains(t, string(configData), `trust_level = "trusted"`)
+}
+
+// assertHookCommand verifies that one of the hook entries in groups contains the expected command.
+func assertHookCommand(t *testing.T, groups []MatcherGroup, expectedCmd, label string) {
+	t.Helper()
+	for _, g := range groups {
+		for _, h := range g.Hooks {
+			if h.Command == expectedCmd {
+				return
+			}
+		}
+	}
+	t.Errorf("%s: expected hook command not found: %s", label, expectedCmd)
 }
