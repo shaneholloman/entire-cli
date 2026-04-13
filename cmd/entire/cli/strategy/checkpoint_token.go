@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
 // CheckpointTokenEnvVar is the environment variable for providing an access token
@@ -127,4 +129,14 @@ func resolveTargetProtocol(ctx context.Context, target string) string {
 		return ""
 	}
 	return info.protocol
+}
+
+// ResolveFilteredFetchTarget returns the git fetch target to use for filtered
+// fetches. When the rollout flag is enabled, configured remotes are resolved to
+// their URL so git does not persist promisor settings onto the remote name.
+func ResolveFilteredFetchTarget(ctx context.Context, target string) (string, error) {
+	if isURL(target) || !settings.IsFilteredFetchesUseURLEnabled(ctx) {
+		return target, nil
+	}
+	return getRemoteURL(ctx, target)
 }

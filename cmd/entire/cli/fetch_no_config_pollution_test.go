@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,13 @@ func TestFetchDoesNotPolluteOriginConfig(t *testing.T) {
 	// user identity so any subsequent ops here don't fail.
 	runGit(t, clonedDir, "config", "user.email", "test@example.com")
 	runGit(t, clonedDir, "config", "user.name", "Test")
+	if err := os.MkdirAll(filepath.Join(clonedDir, ".entire"), 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	settingsJSON := `{"enabled": true, "strategy_options": {"filtered_fetches_use_url": true}}`
+	if err := os.WriteFile(filepath.Join(clonedDir, ".entire", "settings.json"), []byte(settingsJSON), 0o644); err != nil {
+		t.Fatalf("failed to write settings.json: %v", err)
+	}
 
 	t.Chdir(clonedDir)
 

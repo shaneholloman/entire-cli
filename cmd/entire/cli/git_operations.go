@@ -376,8 +376,6 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 // support on-demand blob retrieval.
 // Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
 // which breaks HTTPS URLs that require authentication.
-// Fetches by URL (not by remote name) so git does not persist
-// remote.origin.promisor / remote.origin.partialclonefilter in .git/config.
 func FetchMetadataBranch(ctx context.Context) error {
 	branchName := paths.MetadataBranchName
 
@@ -385,14 +383,14 @@ func FetchMetadataBranch(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	originURL, err := strategy.OriginURL(ctx)
+	fetchTarget, err := strategy.ResolveFilteredFetchTarget(ctx, "origin")
 	if err != nil {
-		return fmt.Errorf("failed to resolve origin URL: %w", err)
+		return fmt.Errorf("failed to resolve filtered fetch target: %w", err)
 	}
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, originURL, "fetch", "--no-tags", "--filter=blob:none", originURL, refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, "fetch", "--no-tags", "--filter=blob:none", fetchTarget, refSpec)
 	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("fetch timed out after 2 minutes")
@@ -432,14 +430,14 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	originURL, err := strategy.OriginURL(ctx)
+	fetchTarget, err := strategy.ResolveFilteredFetchTarget(ctx, "origin")
 	if err != nil {
-		return fmt.Errorf("failed to resolve origin URL: %w", err)
+		return fmt.Errorf("failed to resolve filtered fetch target: %w", err)
 	}
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, originURL, "fetch", "--no-tags", "--depth=1", "--filter=blob:none", originURL, refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, "fetch", "--no-tags", "--depth=1", "--filter=blob:none", fetchTarget, refSpec)
 	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("treeless fetch timed out after 2 minutes")
@@ -475,14 +473,14 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	originURL, err := strategy.OriginURL(ctx)
+	fetchTarget, err := strategy.ResolveFilteredFetchTarget(ctx, "origin")
 	if err != nil {
-		return fmt.Errorf("failed to resolve origin URL: %w", err)
+		return fmt.Errorf("failed to resolve filtered fetch target: %w", err)
 	}
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, originURL, "fetch", "--no-tags", "--depth=1", "--filter=blob:none", originURL, refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, "fetch", "--no-tags", "--depth=1", "--filter=blob:none", fetchTarget, refSpec)
 	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("v2 treeless fetch timed out after 2 minutes")
@@ -501,14 +499,14 @@ func FetchV2MainRef(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	originURL, err := strategy.OriginURL(ctx)
+	fetchTarget, err := strategy.ResolveFilteredFetchTarget(ctx, "origin")
 	if err != nil {
-		return fmt.Errorf("failed to resolve origin URL: %w", err)
+		return fmt.Errorf("failed to resolve filtered fetch target: %w", err)
 	}
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, originURL, "fetch", "--no-tags", "--filter=blob:none", originURL, refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, "fetch", "--no-tags", "--filter=blob:none", fetchTarget, refSpec)
 	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("v2 fetch timed out after 2 minutes")

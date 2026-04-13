@@ -87,6 +87,49 @@ func TestResolveTargetProtocol_SSHRemoteName(t *testing.T) {
 	assert.Equal(t, protocolSSH, resolveTargetProtocol(ctx, "origin"))
 }
 
+// Not parallel: uses t.Chdir()
+func TestResolveFilteredFetchTarget(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	cmd := exec.CommandContext(ctx, "git", "remote", "add", "origin", "https://github.com/org/repo.git")
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	t.Chdir(tmpDir)
+
+	t.Run("disabled returns remote name", func(t *testing.T) {
+		target, err := ResolveFilteredFetchTarget(ctx, "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "origin", target)
+	})
+
+	t.Run("enabled resolves remote to URL", func(t *testing.T) {
+		testutil.WriteFile(
+			t,
+			tmpDir,
+			".entire/settings.json",
+			`{"enabled": true, "strategy_options": {"filtered_fetches_use_url": true}}`,
+		)
+
+		target, err := ResolveFilteredFetchTarget(ctx, "origin")
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/org/repo.git", target)
+	})
+
+	t.Run("URL target stays unchanged", func(t *testing.T) {
+		target, err := ResolveFilteredFetchTarget(ctx, "https://github.com/org/repo.git")
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/org/repo.git", target)
+	})
+}
+
 func TestAppendCheckpointTokenEnv(t *testing.T) {
 	t.Parallel()
 

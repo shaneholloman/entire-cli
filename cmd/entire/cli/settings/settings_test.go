@@ -597,6 +597,36 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 	}
 }
 
+func TestIsFilteredFetchesUseURLEnabled_DefaultsFalse(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{Enabled: true}
+	if s.IsFilteredFetchesUseURLEnabled() {
+		t.Error("expected IsFilteredFetchesUseURLEnabled to default to false")
+	}
+}
+
+func TestIsFilteredFetchesUseURLEnabled_True(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"filtered_fetches_use_url": true},
+	}
+	if !s.IsFilteredFetchesUseURLEnabled() {
+		t.Error("expected IsFilteredFetchesUseURLEnabled to be true")
+	}
+}
+
+func TestIsFilteredFetchesUseURLEnabled_WrongType(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"filtered_fetches_use_url": "yes"},
+	}
+	if s.IsFilteredFetchesUseURLEnabled() {
+		t.Error("expected IsFilteredFetchesUseURLEnabled to be false for non-bool value")
+	}
+}
+
 // containsUnknownField checks if the error message indicates an unknown field
 func containsUnknownField(msg string) bool {
 	// Go's json package reports unknown fields with this message format

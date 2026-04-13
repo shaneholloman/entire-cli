@@ -432,6 +432,16 @@ func IsPushV2RefsEnabled(ctx context.Context) bool {
 	return s.IsPushV2RefsEnabled()
 }
 
+// IsFilteredFetchesUseURLEnabled checks if filtered fetches should resolve
+// remote names to URLs before invoking git fetch. Returns false by default.
+func IsFilteredFetchesUseURLEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.IsFilteredFetchesUseURLEnabled()
+}
+
 // IsSummarizeEnabled checks if auto-summarize is enabled in settings.
 // Returns false by default if settings cannot be loaded or the key is missing.
 func IsSummarizeEnabled(ctx context.Context) bool {
@@ -521,6 +531,17 @@ func (s *EntireSettings) IsPushV2RefsEnabled() bool {
 		return false
 	}
 	val, ok := s.StrategyOptions["push_v2_refs"].(bool)
+	return ok && val
+}
+
+// IsFilteredFetchesUseURLEnabled checks if filtered fetches should use a
+// resolved remote URL instead of a remote name. This is a temporary rollout
+// guard for the URL-based filtered fetch behavior.
+func (s *EntireSettings) IsFilteredFetchesUseURLEnabled() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["filtered_fetches_use_url"].(bool)
 	return ok && val
 }
 

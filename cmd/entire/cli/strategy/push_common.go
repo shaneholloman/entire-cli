@@ -187,11 +187,17 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// Determine fetch refspec. When target is a URL, use a temp ref;
-	// when it's a remote name, use the standard remote-tracking ref.
+	fetchTarget, err := ResolveFilteredFetchTarget(ctx, target)
+	if err != nil {
+		return fmt.Errorf("resolve filtered fetch target: %w", err)
+	}
+
+	// Determine fetch refspec. When the resolved fetch target is a URL, use a
+	// temp ref; when it's still a remote name, use the standard remote-tracking
+	// ref.
 	var fetchedRefName plumbing.ReferenceName
 	var refSpec string
-	if isURL(target) {
+	if isURL(fetchTarget) {
 		tmpRef := "refs/entire-fetch-tmp/" + branchName
 		refSpec = fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
 		fetchedRefName = plumbing.ReferenceName(tmpRef)
@@ -204,7 +210,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	// Use --filter=blob:none for a partial fetch that downloads only commits
 	// and trees, skipping blobs. The merge only needs the tree structure to
 	// combine entries; blobs are already local or fetched on demand.
-	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, refSpec)
+	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, "fetch", "--no-tags", "--filter=blob:none", fetchTarget, refSpec)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
