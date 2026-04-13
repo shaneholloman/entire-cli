@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +37,56 @@ func createV2Ref(t *testing.T, repo *git.Repository, refName string) {
 		Author:    object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
 		Committer: object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
 		Message:   "init v2 ref",
+		TreeHash:  treeHash,
+	}
+	enc := repo.Storer.NewEncodedObject()
+	require.NoError(t, commitObj.Encode(enc))
+	commitHash, err := repo.Storer.SetEncodedObject(enc)
+	require.NoError(t, err)
+
+	ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), commitHash)
+	require.NoError(t, repo.Storer.SetReference(ref))
+}
+
+// createBlob stores a string as a git blob and returns its hash.
+func createBlob(t *testing.T, repo *git.Repository, content string) plumbing.Hash {
+	t.Helper()
+	obj := repo.Storer.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	w, err := obj.Writer()
+	require.NoError(t, err)
+	_, err = w.Write([]byte(content))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	hash, err := repo.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	return hash
+}
+
+// createV2RefWithCheckpoints creates a v2 custom ref with N checkpoint shard directories.
+// Each shard has a minimal metadata.json file.
+func createV2RefWithCheckpoints(t *testing.T, repo *git.Repository, refName string, count int) {
+	t.Helper()
+
+	entries := make(map[string]object.TreeEntry)
+	for i := range count {
+		cpID := fmt.Sprintf("%02x%010x", i%256, i)
+		path := cpID[:2] + "/" + cpID[2:] + "/" + paths.MetadataFileName
+		blobHash := createBlob(t, repo, fmt.Sprintf(`{"checkpoint_id":"%s"}`, cpID))
+		entries[path] = object.TreeEntry{
+			Name: paths.MetadataFileName,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		}
+	}
+
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
+	require.NoError(t, err)
+
+	commitObj := &object.Commit{
+		Author:    object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+		Committer: object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+		Message:   "v2 ref with checkpoints",
 		TreeHash:  treeHash,
 	}
 	enc := repo.Storer.NewEncodedObject()
@@ -394,6 +446,65 @@ func TestCheckV2RefExistence_OnlyFullCurrentExists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stdout.String(), "INCONSISTENT")
 	assert.Contains(t, stdout.String(), "/main is missing")
+}
+
+func TestCheckV2CheckpointCounts_Consistent(t *testing.T) {
+	t.Parallel()
+	dir := setupGitRepoForPhaseTest(t)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	createV2RefWithCheckpoints(t, repo, paths.V2MainRefName, 10)
+	createV2RefWithCheckpoints(t, repo, paths.V2FullCurrentRefName, 5)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err = checkV2CheckpointCounts(cmd, repo)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "v2 checkpoint counts: OK")
+	assert.Contains(t, stdout.String(), "main: 10")
+	assert.Contains(t, stdout.String(), "full/current: 5")
+}
+
+func TestCheckV2CheckpointCounts_FullExceedsMain(t *testing.T) {
+	t.Parallel()
+	dir := setupGitRepoForPhaseTest(t)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	createV2RefWithCheckpoints(t, repo, paths.V2MainRefName, 3)
+	createV2RefWithCheckpoints(t, repo, paths.V2FullCurrentRefName, 5)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err = checkV2CheckpointCounts(cmd, repo)
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "INCONSISTENT")
+}
+
+func TestCheckV2CheckpointCounts_SkipsWhenRefsMissing(t *testing.T) {
+	t.Parallel()
+	dir := setupGitRepoForPhaseTest(t)
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err = checkV2CheckpointCounts(cmd, repo)
+	require.NoError(t, err)
+	assert.Empty(t, stdout.String())
 }
 
 // TestRunSessionsFix_MetadataCheckFailure_PropagatesError verifies that when

@@ -362,6 +362,44 @@ func checkDisconnectedMetadata(cmd *cobra.Command, force bool) error {
 	return nil
 }
 
+// checkV2CheckpointCounts verifies checkpoint count consistency between /main and /full/current.
+// /main is permanent (accumulates all checkpoints), /full/current holds only the current generation.
+// So main count >= full/current count. If full/current exceeds main, a dual-write partially failed.
+// Skips silently if either ref doesn't exist (already covered by checkV2RefExistence).
+func checkV2CheckpointCounts(cmd *cobra.Command, repo *git.Repository) error {
+	w := cmd.OutOrStdout()
+
+	v2Store := checkpoint.NewV2GitStore(repo, "origin")
+
+	mainRefName := plumbing.ReferenceName(paths.V2MainRefName)
+	fullRefName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+
+	_, mainTreeHash, mainErr := v2Store.GetRefState(mainRefName)
+	_, fullTreeHash, fullErr := v2Store.GetRefState(fullRefName)
+
+	if mainErr != nil || fullErr != nil {
+		return nil
+	}
+
+	mainCount, err := v2Store.CountCheckpointsInTree(mainTreeHash)
+	if err != nil {
+		return fmt.Errorf("failed to count /main checkpoints: %w", err)
+	}
+
+	fullCount, err := v2Store.CountCheckpointsInTree(fullTreeHash)
+	if err != nil {
+		return fmt.Errorf("failed to count /full/current checkpoints: %w", err)
+	}
+
+	if fullCount > mainCount {
+		fmt.Fprintf(w, "v2 checkpoint counts: INCONSISTENT — /full/current has %d checkpoints but /main has only %d\n", fullCount, mainCount)
+	} else {
+		fmt.Fprintf(w, "✓ v2 checkpoint counts: OK (main: %d, full/current: %d)\n", mainCount, fullCount)
+	}
+
+	return nil
+}
+
 // checkV2RefExistence verifies that v2 refs exist (or both are absent for a fresh repo).
 // One ref without the other suggests a partial initialization.
 func checkV2RefExistence(cmd *cobra.Command, repo *git.Repository) error {
