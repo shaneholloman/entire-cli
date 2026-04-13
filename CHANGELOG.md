@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] - 2026-04-13
+
+### Added
+
+- Checkpoints v2 (work in progress): `--force` flag for `entire migrate-v2` to rerun migrations that previously completed, and `checkpoint_transcript_start` support for compact `transcript.jsonl` files ([#885](https://github.com/entireio/cli/pull/885), [#877](https://github.com/entireio/cli/pull/877))
+
+### Changed
+
+- Hide `entire search` command from the menu while it stabilizes ([#928](https://github.com/entireio/cli/pull/928))
+- Condensation logic refactored with type-enforced redaction boundaries for safer session data handling ([#922](https://github.com/entireio/cli/pull/922))
+
+### Fixed
+
+- Fetch checkpoint refs by URL to avoid polluting `origin` git config ([#934](https://github.com/entireio/cli/pull/934))
+- Support Claude JSON array responses in `explain` summary generation ([#921](https://github.com/entireio/cli/pull/921))
+- GoReleaser using the wrong tag during concurrent releases ([#918](https://github.com/entireio/cli/pull/918))
+
+### Housekeeping
+
+- Stabilize flaky Cursor and OpenCode E2E behavior and transcript prep timing ([#923](https://github.com/entireio/cli/pull/923))
+- More hermetic separation for Gemini auth config files in E2E tests ([#915](https://github.com/entireio/cli/pull/915))
+- Bump `actions/upload-artifact` from 7.0.0 to 7.0.1 ([#920](https://github.com/entireio/cli/pull/920))
+
 ## [0.5.4] - 2026-04-10
 
 ### Added
