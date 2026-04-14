@@ -342,8 +342,17 @@ func lsRemoteRef(ctx context.Context, repoPath, remote, refName string) (plumbin
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", remote, refName)
+	fetchTarget, err := ResolveFetchTarget(ctx, remote)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("resolve fetch target for ls-remote: %w", err)
+	}
+
+	cmd := CheckpointGitCommand(ctx, remote, "ls-remote", fetchTarget, refName)
 	cmd.Dir = repoPath
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
 	output, err := cmd.Output()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("git ls-remote %s failed: %w", RedactURL(remote), err)
@@ -367,11 +376,27 @@ func fetchRefToTemp(ctx context.Context, repoPath, remote, srcRef, dstRef string
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	fetchTarget, err := ResolveFetchTarget(ctx, remote)
+	if err != nil {
+		return fmt.Errorf("resolve fetch target for doctor v2 fetch: %w", err)
+	}
+
 	refspec := fmt.Sprintf("+%s:%s", srcRef, dstRef)
-	cmd := exec.CommandContext(ctx, "git", "fetch", "--no-tags", remote, refspec)
+	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, refspec})
+	cmd := CheckpointGitCommand(ctx, remote, fetchArgs...)
 	cmd.Dir = repoPath
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch %s failed: %w", RedactURL(remote), err)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		redactedURL := RedactURL(remote)
+		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remote, redactedURL))
+		if msg != "" {
+			return fmt.Errorf("git fetch %s failed: %s: %w", redactedURL, msg, err)
+		}
+		return fmt.Errorf("git fetch %s failed: %w", redactedURL, err)
 	}
 	return nil
 }

@@ -620,6 +620,12 @@ func checkV2RefExistence(cmd *cobra.Command, repo *git.Repository) error {
 
 	_, mainErr := repo.Reference(mainRefName, true)
 	_, fullErr := repo.Reference(fullRefName, true)
+	if mainErr != nil && !errors.Is(mainErr, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("failed to read /main ref: %w", mainErr)
+	}
+	if fullErr != nil && !errors.Is(fullErr, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("failed to read /full/current ref: %w", fullErr)
+	}
 
 	hasMain := mainErr == nil
 	hasFull := fullErr == nil
