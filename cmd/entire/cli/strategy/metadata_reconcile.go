@@ -378,7 +378,7 @@ func fetchRefToTemp(ctx context.Context, repoPath, remote, srcRef, dstRef string
 
 // cleanupTmpRef deletes the temporary ref used by doctor checks.
 func cleanupTmpRef(repo *git.Repository) {
-	_ = repo.Storer.RemoveReference(plumbing.ReferenceName(v2DoctorTmpRef))
+	_ = repo.Storer.RemoveReference(plumbing.ReferenceName(v2DoctorTmpRef)) //nolint:errcheck // best-effort cleanup
 }
 
 // isDisconnected checks if two commits have no common ancestor using git merge-base.

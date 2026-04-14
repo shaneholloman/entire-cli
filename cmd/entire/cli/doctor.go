@@ -523,8 +523,11 @@ func checkV2GenerationHealth(cmd *cobra.Command, repo *git.Repository) error {
 
 	if len(archived) > 1 {
 		for i := 1; i < len(archived); i++ {
-			prev, _ := strconv.ParseInt(archived[i-1], 10, 64)
-			curr, _ := strconv.ParseInt(archived[i], 10, 64)
+			prev, prevErr := strconv.ParseInt(archived[i-1], 10, 64)
+			curr, currErr := strconv.ParseInt(archived[i], 10, 64)
+			if prevErr != nil || currErr != nil {
+				continue
+			}
 			if curr-prev > 1 {
 				warnings = append(warnings, fmt.Sprintf("INFO — gap in generation sequence (%013d missing)", prev+1))
 			}
@@ -558,8 +561,9 @@ func checkV2CheckpointCounts(cmd *cobra.Command, repo *git.Repository) error {
 	_, mainTreeHash, mainErr := v2Store.GetRefState(mainRefName)
 	_, fullTreeHash, fullErr := v2Store.GetRefState(fullRefName)
 
+	// Skip if either ref doesn't exist (already covered by checkV2RefExistence)
 	if mainErr != nil || fullErr != nil {
-		return nil
+		return nil //nolint:nilerr // Intentional: missing ref is not an error here, just means nothing to compare
 	}
 
 	mainCount, err := v2Store.CountCheckpointsInTree(mainTreeHash)
@@ -583,7 +587,7 @@ func checkV2CheckpointCounts(cmd *cobra.Command, repo *git.Repository) error {
 
 // checkV2RefExistence verifies that v2 refs exist (or both are absent for a fresh repo).
 // One ref without the other suggests a partial initialization.
-func checkV2RefExistence(cmd *cobra.Command, repo *git.Repository) error {
+func checkV2RefExistence(cmd *cobra.Command, repo *git.Repository) error { //nolint:unparam // error return kept for consistency with other check functions
 	w := cmd.OutOrStdout()
 
 	mainRefName := plumbing.ReferenceName(paths.V2MainRefName)

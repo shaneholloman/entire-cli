@@ -846,8 +846,8 @@ func TestRunSessionsFix_V2ChecksRunWhenEnabled(t *testing.T) {
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	_ = runSessionsFix(cmd, true)
 	// May get an error from the disconnected check (no remote), that's OK
+	_ = runSessionsFix(cmd, true) //nolint:errcheck // error from missing remote is expected
 
 	output := stdout.String()
 	// v2 checks should appear in output
