@@ -346,7 +346,7 @@ func lsRemoteRef(ctx context.Context, repoPath, remote, refName string) (plumbin
 	cmd.Dir = repoPath
 	output, err := cmd.Output()
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("git ls-remote failed: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("git ls-remote %s failed: %w", RedactURL(remote), err)
 	}
 
 	line := strings.TrimSpace(string(output))
@@ -370,8 +370,8 @@ func fetchRefToTemp(ctx context.Context, repoPath, remote, srcRef, dstRef string
 	refspec := fmt.Sprintf("+%s:%s", srcRef, dstRef)
 	cmd := exec.CommandContext(ctx, "git", "fetch", "--no-tags", remote, refspec)
 	cmd.Dir = repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git fetch failed: %s: %w", output, err)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s failed: %w", RedactURL(remote), err)
 	}
 	return nil
 }
