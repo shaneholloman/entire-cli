@@ -224,75 +224,32 @@ func TestAttach_V2DualWriteEnabled(t *testing.T) {
 	}
 }
 
-func TestAttach_V2ExistingCheckpointAppendsWithoutBackfill(t *testing.T) {
+func TestAttach_V2DualWriteDisabled(t *testing.T) {
 	setupAttachTestRepo(t)
 
 	repoDir := mustGetwd(t)
-	setAttachCheckpointsV2Enabled(t, repoDir)
 
-	session1ID := "test-attach-v2-existing-session-1"
-	setupClaudeTranscript(t, session1ID, `{"type":"user","message":{"role":"user","content":"first prompt"},"uuid":"uuid-1"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]},"uuid":"uuid-2"}
+	sessionID := "test-attach-v2-disabled"
+	setupClaudeTranscript(t, sessionID, `{"type":"user","message":{"role":"user","content":"create hello.txt"},"uuid":"uuid-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Write","input":{"file_path":"hello.txt","content":"hello"}}]},"uuid":"uuid-2"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"wrote file"}]},"uuid":"uuid-3"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"uuid":"uuid-4"}
 `)
 
 	var out bytes.Buffer
-	if err := runAttach(context.Background(), &out, session1ID, agent.AgentNameClaudeCode, true); err != nil {
-		t.Fatalf("first attach failed: %v", err)
+	if err := runAttach(context.Background(), &out, sessionID, agent.AgentNameClaudeCode, true); err != nil {
+		t.Fatalf("runAttach failed: %v", err)
 	}
 
 	repo, err := git.PlainOpen(repoDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	mainRefBefore, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
-	if err != nil {
-		t.Fatalf("failed to read %s after first attach: %v", paths.V2MainRefName, err)
+	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true); err == nil {
+		t.Fatalf("did not expect %s when checkpoints_v2 is disabled", paths.V2MainRefName)
 	}
-	fullRefBefore, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
-	if err != nil {
-		t.Fatalf("failed to read %s after first attach: %v", paths.V2FullCurrentRefName, err)
-	}
-
-	session2ID := "test-attach-v2-existing-session-2"
-	setupClaudeTranscript(t, session2ID, `{"type":"user","message":{"role":"user","content":"second prompt"},"uuid":"uuid-3"}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second answer"}]},"uuid":"uuid-4"}
-`)
-
-	out.Reset()
-	if err := runAttach(context.Background(), &out, session2ID, agent.AgentNameClaudeCode, true); err != nil {
-		t.Fatalf("second attach failed: %v", err)
-	}
-
-	mainRefAfter, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
-	if err != nil {
-		t.Fatalf("failed to read %s after second attach: %v", paths.V2MainRefName, err)
-	}
-	fullRefAfter, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
-	if err != nil {
-		t.Fatalf("failed to read %s after second attach: %v", paths.V2FullCurrentRefName, err)
-	}
-
-	mainCommitAfter, err := repo.CommitObject(mainRefAfter.Hash())
-	if err != nil {
-		t.Fatalf("failed to read v2 main commit: %v", err)
-	}
-	if got, want := len(mainCommitAfter.ParentHashes), 1; got != want {
-		t.Fatalf("len(mainCommitAfter.ParentHashes) = %d, want %d", got, want)
-	}
-	if got := mainCommitAfter.ParentHashes[0]; got != mainRefBefore.Hash() {
-		t.Fatalf("v2 main ref advanced by more than one commit: parent=%s previous=%s", got, mainRefBefore.Hash())
-	}
-
-	fullCommitAfter, err := repo.CommitObject(fullRefAfter.Hash())
-	if err != nil {
-		t.Fatalf("failed to read v2 full/current commit: %v", err)
-	}
-	if got, want := len(fullCommitAfter.ParentHashes), 1; got != want {
-		t.Fatalf("len(fullCommitAfter.ParentHashes) = %d, want %d", got, want)
-	}
-	if got := fullCommitAfter.ParentHashes[0]; got != fullRefBefore.Hash() {
-		t.Fatalf("v2 full/current ref advanced by more than one commit: parent=%s previous=%s", got, fullRefBefore.Hash())
+	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true); err == nil {
+		t.Fatalf("did not expect %s when checkpoints_v2 is disabled", paths.V2FullCurrentRefName)
 	}
 }
 
