@@ -4027,8 +4027,8 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	require.NoError(t, err)
 	fullSessionTree, err := fullCpTree.Tree("0")
 	require.NoError(t, err)
-	_, err = fullSessionTree.File(paths.TranscriptFileName)
-	require.NoError(t, err, "full.jsonl should exist on /full/current")
+	_, err = fullSessionTree.File(paths.V2RawTranscriptFileName)
+	require.NoError(t, err, "raw_transcript should exist on /full/current")
 }
 
 // TestCondenseSession_V2CompactTranscriptStart verifies v2 /main writes

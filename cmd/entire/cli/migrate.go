@@ -300,7 +300,7 @@ func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2
 
 	hasTranscript := false
 	for _, entry := range sessionTree.Entries {
-		if entry.Name == paths.TranscriptFileName || strings.HasPrefix(entry.Name, paths.TranscriptFileName+".") {
+		if entry.Name == paths.V2RawTranscriptFileName || strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+".") {
 			hasTranscript = true
 			break
 		}
@@ -309,7 +309,7 @@ func hasCurrentFullSessionArtifacts(repo *git.Repository, v2Store *checkpoint.V2
 		return false, nil
 	}
 
-	if _, err := sessionTree.File(paths.ContentHashFileName); err != nil {
+	if _, err := sessionTree.File(paths.V2RawTranscriptHashFileName); err != nil {
 		return false, nil //nolint:nilerr // Missing content hash indicates incomplete /full/current artifacts.
 	}
 

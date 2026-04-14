@@ -237,7 +237,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 
 // writeCommittedMain writes metadata entries to the /main ref.
 // This includes session metadata and prompts — but NOT the raw transcript
-// (full.jsonl) or content hash (content_hash.txt), which go to /full/current.
+// (raw_transcript) or content hash (raw_transcript_hash.txt), which go to /full/current.
 // Returns the session index used, so the caller can pass it to writeCommittedFullTranscript.
 func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommittedOptions) (int, error) {
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
@@ -321,8 +321,8 @@ func (s *V2GitStore) writeMainCheckpointEntries(ctx context.Context, opts WriteC
 
 // writeMainSessionToSubdirectory writes a single session's metadata, prompts,
 // and compact transcript to a session subdirectory (0/, 1/, 2/, … indexed by
-// session order within the checkpoint). The raw transcript (full.jsonl) and its
-// content hash (content_hash.txt) go to /full/current, not here.
+// session order within the checkpoint). The raw transcript (raw_transcript) and its
+// content hash (raw_transcript_hash.txt) go to /full/current, not here.
 func (s *V2GitStore) writeMainSessionToSubdirectory(opts WriteCommittedOptions, sessionPath string, entries map[string]object.TreeEntry) (SessionFilePaths, error) {
 	filePaths := SessionFilePaths{}
 
@@ -416,8 +416,8 @@ func (s *V2GitStore) writeContentHash(redactedTranscript []byte, sessionPath str
 	if err != nil {
 		return err
 	}
-	entries[sessionPath+paths.ContentHashFileName] = object.TreeEntry{
-		Name: sessionPath + paths.ContentHashFileName,
+	entries[sessionPath+paths.V2RawTranscriptHashFileName] = object.TreeEntry{
+		Name: sessionPath + paths.V2RawTranscriptHashFileName,
 		Mode: filemode.Regular,
 		Hash: hashBlob,
 	}
@@ -549,7 +549,7 @@ func (s *V2GitStore) writeTranscriptBlobs(ctx context.Context, transcript redact
 	}
 
 	for i, chunk := range chunks {
-		chunkPath := sessionPath + agent.ChunkFileName(paths.TranscriptFileName, i)
+		chunkPath := sessionPath + agent.ChunkFileName(paths.V2RawTranscriptFileName, i)
 		blobHash, err := CreateBlobFromContent(s.repo, chunk)
 		if err != nil {
 			return nil, err

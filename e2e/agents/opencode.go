@@ -100,6 +100,10 @@ func (a *openCodeAgent) RunPrompt(ctx context.Context, dir string, prompt string
 			timeout = parsed
 		}
 	}
+	// Per-prompt timeout is the most specific override.
+	if cfg.PromptTimeout > 0 {
+		timeout = cfg.PromptTimeout
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

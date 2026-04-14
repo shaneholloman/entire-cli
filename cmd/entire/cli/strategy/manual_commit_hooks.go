@@ -62,6 +62,13 @@ func hasTTY() bool {
 		return false
 	}
 
+	// Pi Coding Agent sets PI_CODING_AGENT=true when running shell commands.
+	// Like other agents, the subprocess may inherit the TTY but can't respond
+	// to interactive prompts.
+	if os.Getenv("PI_CODING_AGENT") != "" {
+		return false
+	}
+
 	// GIT_TERMINAL_PROMPT=0 disables git's own terminal prompts.
 	// Factory AI Droid (and other non-interactive environments like CI) set this.
 	// Since we run as a git hook, respect it — if the environment doesn't want

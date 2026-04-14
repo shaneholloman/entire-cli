@@ -114,6 +114,11 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	fetchTarget, err := ResolveFetchTarget(ctx, target)
+	if err != nil {
+		return fmt.Errorf("resolve fetch target: %w", err)
+	}
+
 	// Fetch to a temp ref
 	tmpRefSuffix := strings.ReplaceAll(string(refName), "/", "-")
 	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + tmpRefSuffix)
@@ -122,7 +127,8 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	// Use --filter=blob:none for a partial fetch that downloads only commits
 	// and trees, skipping blobs. The merge only needs the tree structure to
 	// combine entries; blobs are already local or fetched on demand.
-	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, refSpec)
+	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, refSpec})
+	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
@@ -140,7 +146,7 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	if refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
 		remoteOnlyArchives, detectErr := detectRemoteOnlyArchives(ctx, target, repo)
 		if detectErr == nil && len(remoteOnlyArchives) > 0 {
-			return handleRotationConflict(ctx, target, repo, refName, tmpRefName, remoteOnlyArchives)
+			return handleRotationConflict(ctx, target, fetchTarget, repo, refName, tmpRefName, remoteOnlyArchives)
 		}
 	}
 
@@ -241,7 +247,7 @@ func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repo
 // handleRotationConflict handles the case where remote /full/current was rotated.
 // Merges local /full/current into the latest remote archived generation to avoid
 // duplicating checkpoint data, then adopts remote's /full/current as local.
-func handleRotationConflict(ctx context.Context, target string, repo *git.Repository, refName, tmpRefName plumbing.ReferenceName, remoteOnlyArchives []string) error {
+func handleRotationConflict(ctx context.Context, target, fetchTarget string, repo *git.Repository, refName, tmpRefName plumbing.ReferenceName, remoteOnlyArchives []string) error {
 	// Use the latest remote-only archive
 	latestArchive := remoteOnlyArchives[len(remoteOnlyArchives)-1]
 	archiveRefName := plumbing.ReferenceName(paths.V2FullRefPrefix + latestArchive)
@@ -249,7 +255,8 @@ func handleRotationConflict(ctx context.Context, target string, repo *git.Reposi
 	// Fetch the latest archived generation
 	archiveTmpRef := plumbing.ReferenceName("refs/entire-fetch-tmp/archive-" + latestArchive)
 	archiveRefSpec := fmt.Sprintf("+%s:%s", archiveRefName, archiveTmpRef)
-	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, archiveRefSpec)
+	fetchArgs := AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, archiveRefSpec})
+	fetchCmd := CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
 	if output, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		return fmt.Errorf("fetch archived generation failed: %s", output)

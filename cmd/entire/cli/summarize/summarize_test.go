@@ -3,7 +3,6 @@ package summarize
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -654,10 +653,7 @@ func TestFormatCondensedTranscript_EmptyInput(t *testing.T) {
 func TestGenerateFromTranscript(t *testing.T) {
 	// Test with mock generator
 	mockGenerator := &ClaudeGenerator{
-		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			response := `{"result":"{\"intent\":\"Test intent\",\"outcome\":\"Test outcome\",\"learnings\":{\"repo\":[],\"code\":[],\"workflow\":[]},\"friction\":[],\"open_items\":[]}"}`
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
-		},
+		TextGenerator: &stubTextGenerator{text: `{"intent":"Test intent","outcome":"Test outcome","learnings":{"repo":[],"code":[],"workflow":[]},"friction":[],"open_items":[]}`},
 	}
 
 	transcript := []byte(`{"type":"user","message":{"content":"Hello"}}

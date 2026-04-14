@@ -127,8 +127,8 @@ func TestAddGenerationJSONToTree(t *testing.T) {
 
 	// Start with a root tree that has a shard directory entry (simulating checkpoint data)
 	shardEntries := map[string]object.TreeEntry{}
-	shardEntries["aa/bbccddeeff/0/full.jsonl"] = object.TreeEntry{
-		Name: "full.jsonl",
+	shardEntries["aa/bbccddeeff/0/"+paths.V2RawTranscriptFileName] = object.TreeEntry{
+		Name: paths.V2RawTranscriptFileName,
 		Mode: 0o100644,
 		Hash: plumbing.ZeroHash, // dummy
 	}
@@ -233,7 +233,7 @@ func TestWriteCommittedFull_NoGenerationJSON(t *testing.T) {
 	}
 
 	// Checkpoint data should still be present
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "hello")
 }
 
@@ -276,7 +276,7 @@ func TestUpdateCommitted_DoesNotAddGenerationJSON(t *testing.T) {
 	}
 
 	// Verify the transcript was actually updated (sanity check)
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "finalized")
 }
 
@@ -414,7 +414,7 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	archiveTree, err := archiveCommit.Tree()
 	require.NoError(t, err)
 	for _, cpID := range cpIDs {
-		_, treeErr := archiveTree.File(cpID.Path() + "/0/" + paths.TranscriptFileName)
+		_, treeErr := archiveTree.File(cpID.Path() + "/0/" + paths.V2RawTranscriptFileName)
 		require.NoError(t, treeErr, "archived tree should contain transcript for %s", cpID)
 	}
 

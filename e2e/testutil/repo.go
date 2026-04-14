@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +19,6 @@ import (
 )
 
 const droidRepoSettingsPath = ".factory/settings.json"
-
-var geminiAckMu sync.Mutex
 
 // RepoState holds the working state for a single test's cloned repository.
 type RepoState struct {
@@ -88,7 +85,7 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 
 	entire.Enable(t, dir, agent.EntireAgent())
 	if agent.Name() == "gemini-cli" {
-		acknowledgeGeminiSearchAgent(t, dir)
+		setupGeminiTestHome(t, dir)
 	}
 	if agent.Name() == "factoryai-droid" {
 		if err := configureDroidRepoSettings(dir); err != nil {
@@ -156,8 +153,25 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	return state
 }
 
-func acknowledgeGeminiSearchAgent(t *testing.T, repoDir string) {
+func setupGeminiTestHome(t *testing.T, repoDir string) {
 	t.Helper()
+
+	homeDir := geminiTestHomeDir(repoDir)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(homeDir); err != nil {
+			t.Errorf("remove gemini test home: %v", err)
+		}
+	})
+
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	if err := os.MkdirAll(filepath.Join(geminiDir, "acknowledgments"), 0o755); err != nil {
+		t.Fatalf("create gemini test home: %v", err)
+	}
+
+	config := `{"security":{"auth":{"selectedType":"gemini-api-key"}}}`
+	if err := os.WriteFile(filepath.Join(geminiDir, "settings.json"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write gemini settings: %v", err)
+	}
 
 	agentFile := filepath.Join(repoDir, ".gemini", "agents", "entire-search.md")
 	content, err := os.ReadFile(agentFile)
@@ -171,18 +185,7 @@ func acknowledgeGeminiSearchAgent(t *testing.T, repoDir string) {
 	sum := sha256.Sum256(content)
 	hash := hex.EncodeToString(sum[:])
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("get home dir: %v", err)
-	}
-	ackPath := filepath.Join(home, ".gemini", "acknowledgments", "agents.json")
-
-	geminiAckMu.Lock()
-	defer geminiAckMu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(ackPath), 0o755); err != nil {
-		t.Fatalf("create gemini acknowledgments dir: %v", err)
-	}
-
+	ackPath := filepath.Join(geminiDir, "acknowledgments", "agents.json")
 	acks := map[string]map[string]string{}
 	if data, readErr := os.ReadFile(ackPath); readErr == nil {
 		if err := json.Unmarshal(data, &acks); err != nil {
@@ -206,6 +209,10 @@ func acknowledgeGeminiSearchAgent(t *testing.T, repoDir string) {
 	if err := os.WriteFile(ackPath, out, 0o644); err != nil {
 		t.Fatalf("write gemini acknowledgments: %v", err)
 	}
+}
+
+func geminiTestHomeDir(repoDir string) string {
+	return filepath.Join(filepath.Dir(repoDir), filepath.Base(repoDir)+"-gemini-home")
 }
 
 func configureDroidRepoSettings(repoDir string) error {

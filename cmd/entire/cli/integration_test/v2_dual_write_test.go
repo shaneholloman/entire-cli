@@ -96,8 +96,8 @@ func TestV2DualWrite_FullWorkflow(t *testing.T) {
 	assert.Contains(t, mainPrompts, "Add greeting function")
 
 	// Transcript should NOT be on /main
-	_, found = env.ReadFileFromRef(paths.V2MainRefName, cpPath+"/0/"+paths.TranscriptFileName)
-	assert.False(t, found, "full.jsonl should NOT be on v2 /main")
+	_, found = env.ReadFileFromRef(paths.V2MainRefName, cpPath+"/0/"+paths.V2RawTranscriptFileName)
+	assert.False(t, found, "raw_transcript should NOT be on v2 /main")
 
 	// transcript.jsonl (compact format) SHOULD be on /main
 	compactTranscript, found := env.ReadFileFromRef(paths.V2MainRefName, cpPath+"/0/"+paths.CompactTranscriptFileName)
@@ -117,13 +117,13 @@ func TestV2DualWrite_FullWorkflow(t *testing.T) {
 		"v2 /full/current ref should exist")
 
 	// Transcript should be on /full/current
-	fullTranscript, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.TranscriptFileName)
-	require.True(t, found, "full.jsonl should exist on v2 /full/current")
+	fullTranscript, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.V2RawTranscriptFileName)
+	require.True(t, found, "raw_transcript should exist on v2 /full/current")
 	assert.Contains(t, fullTranscript, "Greet")
 
 	// Content hash should be co-located with transcript
-	fullHash, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.ContentHashFileName)
-	require.True(t, found, "content_hash.txt should exist on v2 /full/current")
+	fullHash, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.V2RawTranscriptHashFileName)
+	require.True(t, found, "raw_transcript_hash.txt should exist on v2 /full/current")
 	assert.True(t, strings.HasPrefix(fullHash, "sha256:"))
 
 	// Metadata should NOT be on /full/current
@@ -235,8 +235,8 @@ func TestV2DualWrite_StopTimeFinalization(t *testing.T) {
 	require.NoError(t, err)
 
 	// After stop-time finalization, /full/current should have the finalized transcript
-	fullTranscript, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.TranscriptFileName)
-	require.True(t, found, "full.jsonl should exist on /full/current after finalization")
+	fullTranscript, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.V2RawTranscriptFileName)
+	require.True(t, found, "raw_transcript should exist on /full/current after finalization")
 	assert.Contains(t, fullTranscript, "main")
 
 	// transcript.jsonl should exist on /main after stop-time finalization

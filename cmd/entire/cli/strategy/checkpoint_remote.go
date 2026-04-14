@@ -186,6 +186,11 @@ func ResolveRemoteRepo(ctx context.Context, remoteName string) (host, owner, rep
 	return info.host, info.owner, info.repo, nil
 }
 
+// OriginURL returns the configured URL for the origin remote.
+func OriginURL(ctx context.Context) (string, error) {
+	return getRemoteURL(ctx, "origin")
+}
+
 // gitRemoteInfo holds parsed components of a git remote URL.
 type gitRemoteInfo struct {
 	protocol string // "ssh" or "https"
@@ -207,7 +212,7 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 		// Split on the first ":"
 		parts := strings.SplitN(rawURL, ":", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid SSH URL: %s", redactURL(rawURL))
+			return nil, fmt.Errorf("invalid SSH URL: %s", RedactURL(rawURL))
 		}
 		hostPart := parts[0] // e.g., "git@github.com"
 		pathPart := parts[1] // e.g., "org/repo.git"
@@ -228,12 +233,12 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 	// URL format: https://github.com/org/repo.git or ssh://git@github.com/org/repo.git
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("invalid URL: %s", RedactURL(rawURL))
 	}
 
 	protocol := u.Scheme
 	if protocol == "" {
-		return nil, fmt.Errorf("no protocol in URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("no protocol in URL: %s", RedactURL(rawURL))
 	}
 	host := u.Hostname()
 
@@ -301,9 +306,9 @@ func getRemoteURL(ctx context.Context, remoteName string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// redactURL removes credentials from a URL for safe logging.
+// RedactURL removes credentials from a URL for safe logging.
 // Handles both HTTPS URLs with embedded credentials and general URLs.
-func redactURL(rawURL string) string {
+func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		// For non-URL formats (SSH SCP), just return the host portion
@@ -368,22 +373,24 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 
 	tmpRef := "refs/entire-fetch-tmp/" + branchName
 	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
-	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, "fetch", "--no-tags", "--filter=blob:none", remoteURL, refSpec)
+	fetchArgs := AppendFetchFilterArgs(fetchCtx, []string{"fetch", "--no-tags", remoteURL, refSpec})
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, fetchArgs...)
 	// Merge GIT_TERMINAL_PROMPT=0 into whatever env CheckpointGitCommand set.
 	// If the token was injected, cmd.Env is already populated; otherwise use os.Environ().
 	if fetchCmd.Env == nil {
 		fetchCmd.Env = os.Environ()
 	}
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
+	output, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
 		// Include redacted output for diagnostics without leaking credentials.
 		// Git stderr may echo the URL with embedded credentials, so replace it.
-		redactedURL := redactURL(remoteURL)
+		redactedURL := RedactURL(remoteURL)
 		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
 		if msg != "" {
-			return fmt.Errorf("fetch from %s failed: %s: %w", redactedURL, msg, err)
+			return fmt.Errorf("fetch from %s failed: %s: %w", redactedURL, msg, fetchErr)
 		}
-		return fmt.Errorf("fetch from %s failed: %w", redactedURL, err)
+		return fmt.Errorf("fetch from %s failed: %w", redactedURL, fetchErr)
 	}
 
 	repo, err := OpenRepository(ctx)
@@ -414,18 +421,20 @@ func FetchV2MainFromURL(ctx context.Context, remoteURL string) error {
 	defer cancel()
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
-	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, "fetch", "--no-tags", "--filter=blob:none", remoteURL, refSpec)
+	fetchArgs := AppendFetchFilterArgs(fetchCtx, []string{"fetch", "--no-tags", remoteURL, refSpec})
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, fetchArgs...)
 	if fetchCmd.Env == nil {
 		fetchCmd.Env = os.Environ()
 	}
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		redactedURL := redactURL(remoteURL)
+	output, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
+		redactedURL := RedactURL(remoteURL)
 		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
 		if msg != "" {
-			return fmt.Errorf("fetch v2 /main from %s failed: %s: %w", redactedURL, msg, err)
+			return fmt.Errorf("fetch v2 /main from %s failed: %s: %w", redactedURL, msg, fetchErr)
 		}
-		return fmt.Errorf("fetch v2 /main from %s failed: %w", redactedURL, err)
+		return fmt.Errorf("fetch v2 /main from %s failed: %w", redactedURL, fetchErr)
 	}
 
 	return nil

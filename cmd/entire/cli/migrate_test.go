@@ -569,10 +569,10 @@ func removeV2SessionTranscriptFiles(t *testing.T, repo *git.Repository, v2Store 
 		checkpoint.UpdateSubtreeOptions{
 			MergeMode: checkpoint.MergeKeepExisting,
 			DeleteNames: []string{
-				paths.TranscriptFileName,
-				paths.TranscriptFileName + ".001",
-				paths.TranscriptFileName + ".002",
-				paths.ContentHashFileName,
+				paths.V2RawTranscriptFileName,
+				paths.V2RawTranscriptFileName + ".001",
+				paths.V2RawTranscriptFileName + ".002",
+				paths.V2RawTranscriptHashFileName,
 			},
 		},
 	)

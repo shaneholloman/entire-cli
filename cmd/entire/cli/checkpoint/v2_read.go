@@ -240,7 +240,7 @@ func (s *V2GitStore) ReadSessionMetadataAndPrompts(ctx context.Context, checkpoi
 }
 
 // ReadSessionContent reads a session's metadata and prompts from the v2 /main ref,
-// and the raw transcript (full.jsonl) from /full/* refs (current + archived generations).
+// and the raw transcript (raw_transcript) from /full/* refs (current + archived generations).
 // This is the v2 equivalent of GitStore.ReadSessionContent — it reads the raw agent
 // transcript, not the compact transcript.jsonl. Used by resume and RestoreLogsOnly.
 // Returns ErrNoTranscript if the session exists but no raw transcript is available.
@@ -411,7 +411,7 @@ func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
 
 // readTranscriptFromRef reads the raw transcript from a specific /full/* ref.
 // Follows the same chunking convention as readTranscriptFromTree in committed.go:
-// chunk 0 is the base file (full.jsonl), chunks 1+ are full.jsonl.001, .002, etc.
+// chunk 0 is the base file (raw_transcript), chunks 1+ are raw_transcript.001, .002, etc.
 // When chunk files exist, all chunks (including chunk 0) are reassembled using
 // agent-aware reassembly via agent.ReassembleTranscript.
 func (s *V2GitStore) readTranscriptFromRef(refName plumbing.ReferenceName, sessionPath string, agentType types.AgentType) ([]byte, error) {
@@ -441,11 +441,11 @@ func readTranscriptFromObjectTree(tree *object.Tree, agentType types.AgentType) 
 	var hasBaseFile bool
 
 	for _, entry := range tree.Entries {
-		if entry.Name == paths.TranscriptFileName {
+		if entry.Name == paths.V2RawTranscriptFileName {
 			hasBaseFile = true
 		}
-		if strings.HasPrefix(entry.Name, paths.TranscriptFileName+".") {
-			idx := agent.ParseChunkIndex(entry.Name, paths.TranscriptFileName)
+		if strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+".") {
+			idx := agent.ParseChunkIndex(entry.Name, paths.V2RawTranscriptFileName)
 			if idx > 0 {
 				chunkFiles = append(chunkFiles, entry.Name)
 			}
@@ -454,9 +454,9 @@ func readTranscriptFromObjectTree(tree *object.Tree, agentType types.AgentType) 
 
 	// If chunk files exist, reassemble all chunks (base file is chunk 0)
 	if len(chunkFiles) > 0 {
-		chunkFiles = agent.SortChunkFiles(chunkFiles, paths.TranscriptFileName)
+		chunkFiles = agent.SortChunkFiles(chunkFiles, paths.V2RawTranscriptFileName)
 		if hasBaseFile {
-			chunkFiles = append([]string{paths.TranscriptFileName}, chunkFiles...)
+			chunkFiles = append([]string{paths.V2RawTranscriptFileName}, chunkFiles...)
 		}
 
 		var chunks [][]byte
@@ -483,7 +483,7 @@ func readTranscriptFromObjectTree(tree *object.Tree, agentType types.AgentType) 
 
 	// No chunk files — read base file directly (non-chunked transcript)
 	if hasBaseFile {
-		file, err := tree.File(paths.TranscriptFileName)
+		file, err := tree.File(paths.V2RawTranscriptFileName)
 		if err == nil {
 			content, contentErr := file.Contents()
 			if contentErr == nil {

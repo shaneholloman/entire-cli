@@ -255,11 +255,11 @@ func TestV2GitStore_WriteCommittedMain_WritesPrompts(t *testing.T) {
 	assert.Contains(t, promptContent, "do the thing")
 	assert.Contains(t, promptContent, "also this")
 
-	// content_hash.txt should NOT be on /main — it lives on /full/current
+	// raw_transcript_hash.txt should NOT be on /main — it lives on /full/current
 	mainSessionTree, err := tree.Tree(cpPath + "/0")
 	require.NoError(t, err)
-	_, err = mainSessionTree.File(paths.ContentHashFileName)
-	assert.Error(t, err, "content_hash.txt should not be on /main ref")
+	_, err = mainSessionTree.File(paths.V2RawTranscriptHashFileName)
+	assert.Error(t, err, "raw_transcript_hash.txt should not be on /main ref")
 }
 
 func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
@@ -283,7 +283,7 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 	tree := v2MainTree(t, repo)
 	cpPath := cpID.Path()
 
-	// full.jsonl should NOT be in the /main tree
+	// raw_transcript should NOT be in the /main tree
 	cpTree, err := tree.Tree(cpPath)
 	require.NoError(t, err)
 
@@ -291,9 +291,9 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, entry := range sessionTree.Entries {
-		assert.NotEqual(t, paths.TranscriptFileName, entry.Name,
-			"raw transcript (full.jsonl) must not be on /main ref")
-		assert.False(t, strings.HasPrefix(entry.Name, paths.TranscriptFileName+"."),
+		assert.NotEqual(t, paths.V2RawTranscriptFileName, entry.Name,
+			"raw transcript (raw_transcript) must not be on /main ref")
+		assert.False(t, strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+"."),
 			"transcript chunks must not be on /main ref")
 	}
 }
@@ -391,7 +391,7 @@ func TestV2GitStore_WriteCommittedMain_UsesCompactTranscriptStart(t *testing.T) 
 		Prompts:                   []string{"hello"},
 		AuthorName:                "Test",
 		AuthorEmail:               "test@test.com",
-		CheckpointTranscriptStart: 42, // full.jsonl offset (must not be used in v2 metadata)
+		CheckpointTranscriptStart: 42, // raw_transcript offset (must not be used in v2 metadata)
 		CompactTranscriptStart:    15, // transcript.jsonl offset (must be used in v2 metadata)
 	})
 	require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 	cpPath := cpID.Path()
 
 	// Transcript should exist at session subdirectory 0/
-	content := v2ReadFile(t, tree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, tree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, `"type":"human"`)
 	assert.Contains(t, content, `"type":"assistant"`)
 }
@@ -577,8 +577,8 @@ func TestV2GitStore_WriteCommittedFull_ExcludesMetadata(t *testing.T) {
 			"prompt.txt must not be on /full/current ref")
 	}
 
-	// content_hash.txt SHOULD be on /full/current (co-located with the transcript it hashes)
-	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.ContentHashFileName)
+	// raw_transcript_hash.txt SHOULD be on /full/current (co-located with the transcript it hashes)
+	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.V2RawTranscriptHashFileName)
 	assert.True(t, strings.HasPrefix(hashContent, "sha256:"), "content hash should be sha256 prefixed")
 }
 
@@ -644,10 +644,10 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 	tree := v2FullTree(t, repo)
 
 	// Both checkpoints should be present
-	contentA := v2ReadFile(t, tree, cpA.Path()+"/0/"+paths.TranscriptFileName)
+	contentA := v2ReadFile(t, tree, cpA.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentA, `"from":"A"`)
 
-	contentB := v2ReadFile(t, tree, cpB.Path()+"/0/"+paths.TranscriptFileName)
+	contentB := v2ReadFile(t, tree, cpB.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentB, `"from":"B"`)
 }
 
@@ -681,15 +681,15 @@ func TestV2GitStore_WriteCommitted_WritesBothRefs(t *testing.T) {
 	mainSessionTree, err := mainTree.Tree(cpPath + "/0")
 	require.NoError(t, err)
 	for _, entry := range mainSessionTree.Entries {
-		assert.NotEqual(t, paths.TranscriptFileName, entry.Name)
-		assert.NotEqual(t, paths.ContentHashFileName, entry.Name)
+		assert.NotEqual(t, paths.V2RawTranscriptFileName, entry.Name)
+		assert.NotEqual(t, paths.V2RawTranscriptHashFileName, entry.Name)
 	}
 
 	// /full/current ref should have transcript + content hash
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, `"type":"assistant"`)
-	hashContent := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.ContentHashFileName)
+	hashContent := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptHashFileName)
 	assert.True(t, strings.HasPrefix(hashContent, "sha256:"))
 }
 
@@ -761,7 +761,7 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 
 	// /full/current should have session Y (latest write replaces)
 	fullTree := v2FullTree(t, repo)
-	contentY := v2ReadFile(t, fullTree, cpPath+"/1/"+paths.TranscriptFileName)
+	contentY := v2ReadFile(t, fullTree, cpPath+"/1/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentY, `"from":"Y"`)
 }
 
@@ -805,7 +805,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 
 	// /full/current should have finalized transcript
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "finalized")
 	assert.NotContains(t, content, "initial")
 }
@@ -846,7 +846,7 @@ func TestV2GitStore_UpdateCommitted_NoTranscript_OnlyUpdatesMain(t *testing.T) {
 
 	// /full/current should still have original transcript (not replaced)
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "original")
 }
 

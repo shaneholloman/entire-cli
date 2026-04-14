@@ -826,6 +826,109 @@ func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 	assert.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "temporary fetched ref should be cleaned up")
 }
 
+// TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef verifies that enabling
+// filtered_fetches for a normal remote-name target follows the temp-ref
+// path and still cleans up after rebasing.
+//
+// Not parallel: uses t.Chdir() (required for OpenRepository).
+func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
+	ctx := context.Background()
+	branchName := paths.MetadataBranchName
+
+	bareDir := t.TempDir()
+	setupDir := t.TempDir()
+	gitRun := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = testutil.GitIsolatedEnv()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v in %s failed: %s", args, dir, out)
+	}
+
+	gitRun(bareDir, "init", "--bare", "-b", "main")
+	gitRun(setupDir, "clone", bareDir, ".")
+	gitRun(setupDir, "config", "user.email", "test@test.com")
+	gitRun(setupDir, "config", "user.name", "Test User")
+	gitRun(setupDir, "config", "commit.gpgsign", "false")
+	require.NoError(t, os.WriteFile(filepath.Join(setupDir, "README.md"), []byte("# Test"), 0o644))
+	gitRun(setupDir, "add", ".")
+	gitRun(setupDir, "commit", "-m", "init")
+	gitRun(setupDir, "push", "origin", "main")
+
+	gitRun(setupDir, "checkout", "--orphan", branchName)
+	gitRun(setupDir, "rm", "-rf", ".")
+	baseDir := filepath.Join(setupDir, "aa", "aaaaaaaaaa")
+	require.NoError(t, os.MkdirAll(baseDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "metadata.json"),
+		[]byte(`{"checkpoint_id":"aaaaaaaaaaaa"}`), 0o644))
+	gitRun(setupDir, "add", ".")
+	gitRun(setupDir, "commit", "-m", "Checkpoint: aaaaaaaaaaaa")
+	gitRun(setupDir, "push", "origin", branchName)
+	gitRun(setupDir, "checkout", "main")
+
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	require.NoError(t, os.MkdirAll(cloneDir, 0o755))
+	gitRun(cloneDir, "clone", bareDir, ".")
+	gitRun(cloneDir, "config", "user.email", "test@test.com")
+	gitRun(cloneDir, "config", "user.name", "Test User")
+	gitRun(cloneDir, "config", "commit.gpgsign", "false")
+	gitRun(cloneDir, "branch", branchName, "origin/"+branchName)
+	require.NoError(t, os.MkdirAll(filepath.Join(cloneDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cloneDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"filtered_fetches": true}}`),
+		0o644,
+	))
+
+	gitRun(cloneDir, "checkout", "--orphan", "temp-orphan")
+	gitRun(cloneDir, "rm", "-rf", ".")
+	localDir := filepath.Join(cloneDir, "cc", "cccccccccc")
+	require.NoError(t, os.MkdirAll(localDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(localDir, "metadata.json"),
+		[]byte(`{"checkpoint_id":"cccccccccccc"}`), 0o644))
+	gitRun(cloneDir, "add", ".")
+	gitRun(cloneDir, "commit", "-m", "Checkpoint: cccccccccccc")
+	gitRun(cloneDir, "branch", "-f", branchName, "temp-orphan")
+	gitRun(cloneDir, "checkout", "main")
+
+	repo, err := git.PlainOpen(cloneDir)
+	require.NoError(t, err)
+	localRefBeforeFetch, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	require.NoError(t, err)
+	staleOriginRef := plumbing.NewHashReference(
+		plumbing.NewRemoteReferenceName("origin", branchName),
+		localRefBeforeFetch.Hash(),
+	)
+	require.NoError(t, repo.Storer.SetReference(staleOriginRef))
+
+	t.Chdir(cloneDir)
+
+	err = fetchAndRebaseSessionsCommon(ctx, "origin", branchName)
+	require.NoError(t, err)
+
+	repo, err = git.PlainOpen(cloneDir)
+	require.NoError(t, err)
+
+	localRef, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
+	require.NoError(t, err)
+
+	tipCommit, err := repo.CommitObject(localRef.Hash())
+	require.NoError(t, err)
+	require.Len(t, tipCommit.ParentHashes, 1)
+
+	tree, err := tipCommit.Tree()
+	require.NoError(t, err)
+
+	entries := make(map[string]object.TreeEntry)
+	require.NoError(t, checkpoint.FlattenTree(repo, tree, "", entries))
+	assert.Contains(t, entries, "aa/aaaaaaaaaa/metadata.json", "remote checkpoint should be preserved")
+	assert.Contains(t, entries, "cc/cccccccccc/metadata.json", "local checkpoint should be preserved")
+
+	_, err = repo.Reference(plumbing.ReferenceName("refs/entire-fetch-tmp/"+branchName), true)
+	assert.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "temporary fetched ref should be cleaned up")
+}
+
 // TestIsCheckpointRemoteCommitted verifies that the discoverability check reads
 // the committed content of .entire/settings.json at HEAD, not just tracking status.
 // Not parallel: uses t.Chdir().
