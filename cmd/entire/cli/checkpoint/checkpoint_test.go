@@ -529,7 +529,7 @@ func TestWriteCommitted_MergesVercelConfigOnMetadataBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBlobFromContent() error = %v", err)
 	}
-	treeHash, err := BuildTreeFromEntries(repo, map[string]object.TreeEntry{
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
 		vercelconfig.FileName: {Name: vercelconfig.FileName, Mode: filemode.Regular, Hash: blobHash},
 	})
 	if err != nil {
@@ -550,7 +550,7 @@ func TestWriteCommitted_MergesVercelConfigOnMetadataBranch(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-id",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
