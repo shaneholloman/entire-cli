@@ -436,6 +436,13 @@ func checkDisconnectedV2Main(cmd *cobra.Command, force bool) error {
 
 	disconnected, err := strategy.IsV2MainDisconnected(ctx, repo, remote)
 	if err != nil {
+		// If no checkpoint_remote is configured and origin doesn't exist or is
+		// unreachable, treat as "can't check" rather than a hard failure — mirrors
+		// the v1 behavior which no-ops when the remote-tracking ref is absent.
+		if !configured {
+			fmt.Fprintln(cmd.OutOrStdout(), "✓ v2 /main ref: OK (no remote to compare)")
+			return nil
+		}
 		return fmt.Errorf("could not check v2 /main ref state: %w", err)
 	}
 

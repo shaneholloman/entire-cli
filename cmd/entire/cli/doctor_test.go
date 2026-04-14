@@ -857,10 +857,11 @@ func TestRunSessionsFix_V2ChecksRunWhenEnabled(t *testing.T) {
 
 	cmd, stdout, _ := newTestCmd(t)
 
-	// May get an error from the disconnected check (no remote), that's OK
-	_ = runSessionsFix(cmd, true) //nolint:errcheck // error from missing remote is expected
+	err = runSessionsFix(cmd, true)
+	require.NoError(t, err)
 
 	output := stdout.String()
 	// v2 checks should appear in output
+	assert.Contains(t, output, "v2 /main ref: OK (no remote to compare)")
 	assert.Contains(t, output, "v2 refs: OK")
 }
