@@ -1555,10 +1555,6 @@ func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, target
 			return false, nil
 		}
 
-		if targetFile == "" {
-			targetFile, _ = settingsTargetFile(ctx, false, false)
-		}
-
 		configDisplay := configDisplayProject
 		if targetFile == settings.EntireSettingsLocalFile {
 			configDisplay = configDisplayLocal

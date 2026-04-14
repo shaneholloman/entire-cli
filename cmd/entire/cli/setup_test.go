@@ -1726,7 +1726,7 @@ func TestMaybePromptVercelDeploymentDisable_MergesExistingConfig(t *testing.T) {
 
 	var prompted bool
 	var buf bytes.Buffer
-	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, "", func() (bool, error) {
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
 		prompted = true
 		return true, nil
 	})
@@ -1757,7 +1757,7 @@ func TestMaybePromptVercelDeploymentDisable_CreatesConfigWhenVercelDetected(t *t
 	}
 
 	var buf bytes.Buffer
-	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, "", func() (bool, error) {
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
 		return true, nil
 	})
 	if err != nil {
@@ -1791,7 +1791,7 @@ func TestMaybePromptVercelDeploymentDisable_SkipsPromptWhenAlreadyDisabledInVerc
 
 	promptCalled := false
 	var buf bytes.Buffer
-	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, "", func() (bool, error) {
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
 		promptCalled = true
 		return true, nil
 	})
