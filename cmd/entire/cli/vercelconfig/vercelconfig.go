@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
@@ -69,7 +70,7 @@ func Load(path string, exists bool) (map[string]any, bool, error) {
 		return make(map[string]any), false, nil
 	}
 
-	data, err := osReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false, fmt.Errorf("read %s: %w", FileName, err)
 	}
