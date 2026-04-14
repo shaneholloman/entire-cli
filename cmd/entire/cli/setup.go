@@ -31,9 +31,10 @@ const (
 
 // Flag names used across setup commands.
 const (
-	agentFlagName        = "agent"
-	flagCheckpointRemote = "checkpoint-remote"
-	flagSkipPushSessions = "skip-push-sessions"
+	agentFlagName            = "agent"
+	flagCheckpointRemote     = "checkpoint-remote"
+	flagSkipPushSessions     = "skip-push-sessions"
+	checkpointProviderGitHub = "github"
 )
 
 // EnableOptions holds the flags for `entire enable`.
@@ -178,10 +179,10 @@ func parseCheckpointRemoteFlag(value string) (provider, repo string, err error) 
 	repo = parts[1]
 
 	switch provider {
-	case "github":
+	case checkpointProviderGitHub:
 		// valid
 	default:
-		return "", "", fmt.Errorf("unsupported provider %q (supported: github)", provider)
+		return "", "", fmt.Errorf("unsupported provider %q (supported: %s)", provider, checkpointProviderGitHub)
 	}
 
 	repoParts := strings.SplitN(repo, "/", 2)
