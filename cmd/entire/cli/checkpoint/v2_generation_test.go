@@ -10,6 +10,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -20,16 +21,15 @@ import (
 func TestReadGeneration_EmptyTree_ReturnsDefault(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	// Build an empty tree
-	emptyTree, err := BuildTreeFromEntries(repo, map[string]object.TreeEntry{})
+	emptyTree, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 
 	gen, err := store.readGeneration(emptyTree)
 	require.NoError(t, err)
 
-	assert.Empty(t, gen.Checkpoints)
 	assert.True(t, gen.OldestCheckpointAt.IsZero())
 	assert.True(t, gen.NewestCheckpointAt.IsZero())
 }
@@ -37,11 +37,10 @@ func TestReadGeneration_EmptyTree_ReturnsDefault(t *testing.T) {
 func TestReadGeneration_ParsesJSON(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	now := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
 	original := GenerationMetadata{
-		Checkpoints:        []id.CheckpointID{id.MustCheckpointID("aabbccddeeff"), id.MustCheckpointID("112233445566")},
 		OldestCheckpointAt: now.Add(-1 * time.Hour),
 		NewestCheckpointAt: now,
 	}
@@ -50,14 +49,13 @@ func TestReadGeneration_ParsesJSON(t *testing.T) {
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(original, entries))
 
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	// Read it back
 	gen, err := store.readGeneration(treeHash)
 	require.NoError(t, err)
 
-	assert.Equal(t, []id.CheckpointID{id.MustCheckpointID("aabbccddeeff"), id.MustCheckpointID("112233445566")}, gen.Checkpoints)
 	assert.True(t, gen.OldestCheckpointAt.Equal(now.Add(-1*time.Hour)))
 	assert.True(t, gen.NewestCheckpointAt.Equal(now))
 }
@@ -65,11 +63,10 @@ func TestReadGeneration_ParsesJSON(t *testing.T) {
 func TestWriteGeneration_RoundTrips(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	now := time.Date(2026, 3, 25, 10, 0, 0, 0, time.UTC)
 	original := GenerationMetadata{
-		Checkpoints:        []id.CheckpointID{id.MustCheckpointID("aabbccddeeff")},
 		OldestCheckpointAt: now,
 		NewestCheckpointAt: now,
 	}
@@ -82,31 +79,31 @@ func TestWriteGeneration_RoundTrips(t *testing.T) {
 	assert.True(t, ok)
 
 	// Build tree and read back
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	gen, err := store.readGeneration(treeHash)
 	require.NoError(t, err)
 
-	assert.Equal(t, original.Checkpoints, gen.Checkpoints)
+	assert.True(t, gen.OldestCheckpointAt.Equal(now))
+	assert.True(t, gen.NewestCheckpointAt.Equal(now))
 }
 
 func TestReadGenerationFromRef(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	// Create a ref with generation.json in its tree
 	now := time.Date(2026, 3, 25, 14, 0, 0, 0, time.UTC)
 	gen := GenerationMetadata{
-		Checkpoints:        []id.CheckpointID{id.MustCheckpointID("aabbccddeeff")},
 		OldestCheckpointAt: now,
 		NewestCheckpointAt: now,
 	}
 
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(gen, entries))
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
@@ -119,37 +116,39 @@ func TestReadGenerationFromRef(t *testing.T) {
 	result, err := store.readGenerationFromRef(refName)
 	require.NoError(t, err)
 
-	assert.Equal(t, []id.CheckpointID{id.MustCheckpointID("aabbccddeeff")}, result.Checkpoints)
+	assert.True(t, result.OldestCheckpointAt.Equal(now))
+	assert.True(t, result.NewestCheckpointAt.Equal(now))
 }
 
-func TestAddGenerationToRootTree(t *testing.T) {
+func TestAddGenerationJSONToTree(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	// Start with a root tree that has a shard directory entry (simulating checkpoint data)
 	shardEntries := map[string]object.TreeEntry{}
-	shardEntries["aa/bbccddeeff/0/full.jsonl"] = object.TreeEntry{
-		Name: "full.jsonl",
+	shardEntries["aa/bbccddeeff/0/"+paths.V2RawTranscriptFileName] = object.TreeEntry{
+		Name: paths.V2RawTranscriptFileName,
 		Mode: 0o100644,
 		Hash: plumbing.ZeroHash, // dummy
 	}
-	rootTreeHash, err := BuildTreeFromEntries(repo, shardEntries)
+	rootTreeHash, err := BuildTreeFromEntries(context.Background(), repo, shardEntries)
 	require.NoError(t, err)
 
 	gen := GenerationMetadata{
-		Checkpoints: []id.CheckpointID{id.MustCheckpointID("aabbccddeeff")},
+		OldestCheckpointAt: time.Now().UTC(),
+		NewestCheckpointAt: time.Now().UTC(),
 	}
 
 	// Add generation.json to the root tree
-	newRootHash, err := store.addGenerationToRootTree(rootTreeHash, gen)
+	newRootHash, err := store.AddGenerationJSONToTree(rootTreeHash, gen)
 	require.NoError(t, err)
 	assert.NotEqual(t, rootTreeHash, newRootHash)
 
 	// Verify generation.json is present and shard dir is preserved
 	readGen, err := store.readGeneration(newRootHash)
 	require.NoError(t, err)
-	assert.Len(t, readGen.Checkpoints, 1)
+	assert.False(t, readGen.OldestCheckpointAt.IsZero())
 
 	// Verify the shard directory still exists in the tree
 	tree, err := repo.TreeObject(newRootHash)
@@ -163,19 +162,55 @@ func TestAddGenerationToRootTree(t *testing.T) {
 	assert.True(t, foundShard, "shard directory should be preserved")
 }
 
-// v2FullGeneration reads generation.json from the /full/current ref.
-func v2FullGeneration(t *testing.T, repo *git.Repository) GenerationMetadata {
-	t.Helper()
-	store := NewV2GitStore(repo)
-	gen, err := store.readGenerationFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName))
-	require.NoError(t, err)
-	return gen
-}
-
-func TestWriteCommittedFull_UpdatesGenerationJSON(t *testing.T) {
+func TestCountCheckpointsInTree_EmptyTree(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
+
+	count, err := store.CountCheckpointsInTree(plumbing.ZeroHash)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestCountCheckpointsInTree_CountsShardDirectories(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	// Write 3 checkpoints to /full/current
+	cpIDs := []id.CheckpointID{
+		id.MustCheckpointID("aabbccddeeff"),
+		id.MustCheckpointID("112233445566"),
+		id.MustCheckpointID("ffeeddccbbaa"),
+	}
+
+	for _, cpID := range cpIDs {
+		err := store.WriteCommitted(ctx, WriteCommittedOptions{
+			CheckpointID: cpID,
+			SessionID:    "test-session",
+			Strategy:     "manual-commit",
+			Agent:        agent.AgentTypeClaudeCode,
+			Transcript:   redact.AlreadyRedacted([]byte(`{"type":"test"}`)),
+			AuthorName:   "Test",
+			AuthorEmail:  "test@test.com",
+		})
+		require.NoError(t, err)
+	}
+
+	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	_, treeHash, err := store.GetRefState(refName)
+	require.NoError(t, err)
+
+	count, err := store.CountCheckpointsInTree(treeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+}
+
+func TestWriteCommittedFull_NoGenerationJSON(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("d1e2f3a4b5c6")
@@ -184,60 +219,28 @@ func TestWriteCommittedFull_UpdatesGenerationJSON(t *testing.T) {
 		SessionID:    "session-gen-001",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
 	require.NoError(t, err)
 
-	gen := v2FullGeneration(t, repo)
-	assert.Len(t, gen.Checkpoints, 1)
-	assert.Equal(t, []id.CheckpointID{cpID}, gen.Checkpoints)
-	assert.False(t, gen.OldestCheckpointAt.IsZero())
-	assert.False(t, gen.NewestCheckpointAt.IsZero())
+	// /full/current should NOT contain generation.json (written at archive time only)
+	fullTree := v2FullTree(t, repo)
+	for _, entry := range fullTree.Entries {
+		assert.NotEqual(t, paths.GenerationFileName, entry.Name,
+			"/full/current should not contain generation.json")
+	}
+
+	// Checkpoint data should still be present
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
+	assert.Contains(t, content, "hello")
 }
 
-func TestWriteCommittedFull_AccumulatesInGenerationJSON(t *testing.T) {
+func TestUpdateCommitted_DoesNotAddGenerationJSON(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
-	ctx := context.Background()
-
-	cpA := id.MustCheckpointID("e2f3a4b5c6d1")
-	cpB := id.MustCheckpointID("f3a4b5c6d1e2")
-
-	err := store.WriteCommitted(ctx, WriteCommittedOptions{
-		CheckpointID: cpA,
-		SessionID:    "session-acc-A",
-		Strategy:     "manual-commit",
-		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"from":"A"}`),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	err = store.WriteCommitted(ctx, WriteCommittedOptions{
-		CheckpointID: cpB,
-		SessionID:    "session-acc-B",
-		Strategy:     "manual-commit",
-		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"from":"B"}`),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	gen := v2FullGeneration(t, repo)
-	assert.Len(t, gen.Checkpoints, 2)
-	assert.Equal(t, []id.CheckpointID{cpA, cpB}, gen.Checkpoints)
-	assert.True(t, gen.NewestCheckpointAt.After(gen.OldestCheckpointAt) || gen.NewestCheckpointAt.Equal(gen.OldestCheckpointAt))
-}
-
-func TestUpdateCommitted_DoesNotUpdateGenerationJSON(t *testing.T) {
-	t.Parallel()
-	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("a4b5c6d1e2f3")
@@ -248,106 +251,49 @@ func TestUpdateCommitted_DoesNotUpdateGenerationJSON(t *testing.T) {
 		SessionID:    "session-noupdate-gen",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"initial"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"initial"}`)),
 		Prompts:      []string{"first"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
 	require.NoError(t, err)
 
-	genBefore := v2FullGeneration(t, repo)
-	require.Len(t, genBefore.Checkpoints, 1)
-
-	// Update (stop-time finalization) — should NOT change generation.json
+	// Update (stop-time finalization)
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-noupdate-gen",
-		Transcript:   []byte(`{"type":"assistant","message":"finalized"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"finalized"}`)),
 		Prompts:      []string{"first", "second"},
 		Agent:        agent.AgentTypeClaudeCode,
 	})
 	require.NoError(t, err)
 
-	genAfter := v2FullGeneration(t, repo)
-	assert.Len(t, genAfter.Checkpoints, 1, "UpdateCommitted should not change checkpoint count")
-	assert.Equal(t, genBefore.Checkpoints, genAfter.Checkpoints)
-
-	// Verify the transcript was actually updated (sanity check)
+	// /full/current should still not have generation.json
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
-	assert.Contains(t, content, "finalized")
-}
-
-func TestWriteCommittedFull_GenerationJSON_SameCheckpointIdNotDuplicated(t *testing.T) {
-	t.Parallel()
-	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
-	ctx := context.Background()
-
-	cpID := id.MustCheckpointID("b5c6d1e2f3a4")
-
-	// Write same checkpoint twice (e.g., two sessions for the same commit)
-	for _, sessID := range []string{"session-dup-1", "session-dup-2"} {
-		err := store.WriteCommitted(ctx, WriteCommittedOptions{
-			CheckpointID: cpID,
-			SessionID:    sessID,
-			Strategy:     "manual-commit",
-			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(`{"from":"` + sessID + `"}`),
-			AuthorName:   "Test",
-			AuthorEmail:  "test@test.com",
-		})
-		require.NoError(t, err)
+	for _, entry := range fullTree.Entries {
+		assert.NotEqual(t, paths.GenerationFileName, entry.Name,
+			"/full/current should not contain generation.json after update")
 	}
 
-	gen := v2FullGeneration(t, repo)
-	// Same checkpoint ID written twice should only appear once in the array
-	assert.Len(t, gen.Checkpoints, 1)
-	assert.Equal(t, []id.CheckpointID{cpID}, gen.Checkpoints)
-}
-
-func TestWriteCommittedFull_GenerationJSON_PreservedInTree(t *testing.T) {
-	t.Parallel()
-	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
-	ctx := context.Background()
-
-	cpID := id.MustCheckpointID("c6d1e2f3a4b5")
-	err := store.WriteCommitted(ctx, WriteCommittedOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-tree-check",
-		Strategy:     "manual-commit",
-		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"check":"tree"}`),
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	// Read the /full/current tree and verify generation.json is at root
-	fullTree := v2FullTree(t, repo)
-	genContent := v2ReadFile(t, fullTree, paths.GenerationFileName)
-	var gen GenerationMetadata
-	require.NoError(t, json.Unmarshal([]byte(genContent), &gen))
-	assert.Len(t, gen.Checkpoints, 1)
-
-	// Verify checkpoint data is also present
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
-	assert.Contains(t, content, `"check":"tree"`)
+	// Verify the transcript was actually updated (sanity check)
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
+	assert.Contains(t, content, "finalized")
 }
 
 // createArchivedRef creates a dummy archived generation ref for testing.
 func createArchivedRef(t *testing.T, repo *git.Repository, number int) {
 	t.Helper()
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	// Build a minimal tree with just generation.json
+	now := time.Now().UTC()
 	gen := GenerationMetadata{
-		Checkpoints: []id.CheckpointID{id.MustCheckpointID("d00000000000")},
+		OldestCheckpointAt: now.Add(-time.Hour),
+		NewestCheckpointAt: now,
 	}
 	entries := make(map[string]object.TreeEntry)
 	require.NoError(t, store.writeGeneration(gen, entries))
-	treeHash, err := BuildTreeFromEntries(repo, entries)
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 
 	authorName, authorEmail := GetGitAuthorFromRepo(repo)
@@ -361,9 +307,9 @@ func createArchivedRef(t *testing.T, repo *git.Repository, number int) {
 func TestListArchivedGenerations_Empty(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Empty(t, archived)
 }
@@ -371,12 +317,12 @@ func TestListArchivedGenerations_Empty(t *testing.T) {
 func TestListArchivedGenerations_FindsArchived(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	createArchivedRef(t, repo, 1)
 	createArchivedRef(t, repo, 2)
 
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0000000000001", "0000000000002"}, archived)
 }
@@ -384,15 +330,15 @@ func TestListArchivedGenerations_FindsArchived(t *testing.T) {
 func TestListArchivedGenerations_ExcludesCurrent(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	// Create /full/current ref
-	require.NoError(t, store.ensureRef(plumbing.ReferenceName(paths.V2FullCurrentRefName)))
+	require.NoError(t, store.ensureRef(context.Background(), plumbing.ReferenceName(paths.V2FullCurrentRefName)))
 
 	// Create an archived ref
 	createArchivedRef(t, repo, 1)
 
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0000000000001"}, archived)
 }
@@ -400,7 +346,7 @@ func TestListArchivedGenerations_ExcludesCurrent(t *testing.T) {
 func TestNextGenerationNumber_NoArchives(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	next, err := store.nextGenerationNumber()
 	require.NoError(t, err)
@@ -410,7 +356,7 @@ func TestNextGenerationNumber_NoArchives(t *testing.T) {
 func TestNextGenerationNumber_WithExisting(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	createArchivedRef(t, repo, 1)
 	createArchivedRef(t, repo, 2)
@@ -433,7 +379,7 @@ func populateFullCurrent(t *testing.T, store *V2GitStore, n, offset int) []id.Ch
 			SessionID:    fmt.Sprintf("session-rot-%d", offset+i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})
@@ -445,7 +391,7 @@ func populateFullCurrent(t *testing.T, store *V2GitStore, n, offset int) []id.Ch
 func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	store.maxCheckpointsPerGeneration = 3
 
 	// Write 3 checkpoints — the 3rd triggers auto-rotation via writeCommittedFullTranscript
@@ -456,23 +402,25 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	archiveRef, err := repo.Reference(plumbing.ReferenceName(archiveRefName), true)
 	require.NoError(t, err, "archived ref should exist")
 
-	// Archived ref should contain all 3 checkpoints
+	// Archived ref should contain generation.json with timestamps
 	archiveCommit, err := repo.CommitObject(archiveRef.Hash())
 	require.NoError(t, err)
 	archiveGen, err := store.readGeneration(archiveCommit.TreeHash)
 	require.NoError(t, err)
-	assert.Len(t, archiveGen.Checkpoints, 3)
-	for i, cpID := range cpIDs {
-		assert.Equal(t, cpID, archiveGen.Checkpoints[i])
-	}
+	assert.False(t, archiveGen.OldestCheckpointAt.IsZero(), "archived generation should have oldest timestamp")
+	assert.False(t, archiveGen.NewestCheckpointAt.IsZero(), "archived generation should have newest timestamp")
 
 	// Archived tree should contain the checkpoint data
 	archiveTree, err := archiveCommit.Tree()
 	require.NoError(t, err)
 	for _, cpID := range cpIDs {
-		_, treeErr := archiveTree.File(cpID.Path() + "/0/" + paths.TranscriptFileName)
+		_, treeErr := archiveTree.File(cpID.Path() + "/0/" + paths.V2RawTranscriptFileName)
 		require.NoError(t, treeErr, "archived tree should contain transcript for %s", cpID)
 	}
+
+	// Archived tree should also contain generation.json
+	_, genErr := archiveTree.File(paths.GenerationFileName)
+	require.NoError(t, genErr, "archived tree should contain generation.json")
 
 	// --- Verify fresh /full/current ---
 	fullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
@@ -483,22 +431,16 @@ func TestRotateGeneration_ArchivesCurrentAndCreatesNewOrphan(t *testing.T) {
 	// Fresh commit should be an orphan (no parents)
 	assert.Empty(t, freshCommit.ParentHashes, "fresh /full/current should be an orphan commit")
 
-	// Fresh tree should contain only generation.json (no shard directories)
+	// Fresh tree should be empty (no generation.json, no shard directories)
 	freshTree, err := freshCommit.Tree()
 	require.NoError(t, err)
-	assert.Len(t, freshTree.Entries, 1, "fresh tree should contain only generation.json")
-	assert.Equal(t, paths.GenerationFileName, freshTree.Entries[0].Name)
-
-	// Seed generation.json should have empty checkpoints
-	freshGen, err := store.readGeneration(freshCommit.TreeHash)
-	require.NoError(t, err)
-	assert.Empty(t, freshGen.Checkpoints)
+	assert.Empty(t, freshTree.Entries, "fresh tree should be empty (no generation.json)")
 }
 
 func TestRotateGeneration_SequentialNumbering(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	store.maxCheckpointsPerGeneration = 2
 	ctx := context.Background()
 
@@ -511,15 +453,71 @@ func TestRotateGeneration_SequentialNumbering(t *testing.T) {
 	require.NoError(t, store.rotateGeneration(ctx))
 
 	// Verify both archived refs exist with correct generation numbers
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"0000000000001", "0000000000002"}, archived)
 
-	// Verify each archived ref has checkpoints
+	// Verify each archived ref has generation.json with timestamps
 	for _, name := range archived {
 		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + name)
 		gen, readErr := store.readGenerationFromRef(refName)
 		require.NoError(t, readErr)
-		assert.Len(t, gen.Checkpoints, 2, "archive %s should have 2 checkpoints", name)
+		assert.False(t, gen.OldestCheckpointAt.IsZero(), "archive %s should have oldest timestamp", name)
+		assert.False(t, gen.NewestCheckpointAt.IsZero(), "archive %s should have newest timestamp", name)
+
+		// Verify checkpoint count via tree walk
+		_, treeHash, refErr := store.GetRefState(refName)
+		require.NoError(t, refErr)
+		count, countErr := store.CountCheckpointsInTree(treeHash)
+		require.NoError(t, countErr)
+		assert.Equal(t, 2, count, "archive %s should have 2 checkpoints", name)
 	}
+}
+
+// Verify generation.json is correctly read from old format (with checkpoints field).
+// This ensures backward compatibility when reading archived generations created
+// before the Checkpoints field was removed.
+func TestReadGeneration_BackwardCompatible(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+
+	// Simulate old format with a checkpoints field
+	oldJSON := `{
+		"checkpoints": ["aabbccddeeff", "112233445566"],
+		"oldest_checkpoint_at": "2026-03-25T11:00:00Z",
+		"newest_checkpoint_at": "2026-03-25T12:00:00Z"
+	}`
+	blobHash, err := CreateBlobFromContent(repo, []byte(oldJSON))
+	require.NoError(t, err)
+
+	entries := map[string]object.TreeEntry{
+		paths.GenerationFileName: {
+			Name: paths.GenerationFileName,
+			Mode: 0o100644,
+			Hash: blobHash,
+		},
+	}
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
+	require.NoError(t, err)
+
+	// Should parse without error, ignoring the unknown checkpoints field
+	gen, err := store.readGeneration(treeHash)
+	require.NoError(t, err)
+
+	expected := time.Date(2026, 3, 25, 12, 0, 0, 0, time.UTC)
+	assert.True(t, gen.NewestCheckpointAt.Equal(expected))
+}
+
+// Verify backward-compatible JSON encoding: old data with "checkpoints" key
+// should still parse (JSON ignores unknown fields by default).
+func TestGenerationMetadata_JSONBackwardCompat(t *testing.T) {
+	t.Parallel()
+
+	oldJSON := `{"checkpoints":["aabbccddeeff"],"oldest_checkpoint_at":"2026-01-01T00:00:00Z","newest_checkpoint_at":"2026-02-01T00:00:00Z"}`
+	var gen GenerationMetadata
+	err := json.Unmarshal([]byte(oldJSON), &gen)
+	require.NoError(t, err)
+	assert.False(t, gen.OldestCheckpointAt.IsZero())
+	assert.False(t, gen.NewestCheckpointAt.IsZero())
 }

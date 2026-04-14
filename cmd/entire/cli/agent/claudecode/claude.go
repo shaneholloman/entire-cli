@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -27,11 +28,13 @@ func init() {
 // ClaudeCodeAgent implements the Agent interface for Claude Code.
 //
 //nolint:revive // ClaudeCodeAgent is clearer than Agent in this context
-type ClaudeCodeAgent struct{}
+type ClaudeCodeAgent struct {
+	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
+}
 
 // NewClaudeCodeAgent creates a new Claude Code agent instance.
 func NewClaudeCodeAgent() agent.Agent {
-	return &ClaudeCodeAgent{}
+	return &ClaudeCodeAgent{CommandRunner: exec.CommandContext}
 }
 
 // Name returns the agent registry key.
@@ -102,6 +105,17 @@ func (c *ClaudeCodeAgent) GetSessionDir(repoPath string) (string, error) {
 
 	projectDir := SanitizePathForClaude(repoPath)
 	return filepath.Join(homeDir, ".claude", "projects", projectDir), nil
+}
+
+// GetSessionBaseDir returns the base directory containing per-project session subdirectories.
+// Unlike GetSessionDir, this does NOT use ENTIRE_TEST_CLAUDE_PROJECT_DIR because the
+// test override points to a specific project dir, not the base containing all projects.
+func (c *ClaudeCodeAgent) GetSessionBaseDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".claude", "projects"), nil
 }
 
 // ReadSession reads a session from Claude's storage (JSONL transcript file).

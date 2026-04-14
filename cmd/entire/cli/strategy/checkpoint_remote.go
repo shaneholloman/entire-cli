@@ -86,7 +86,6 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 		return ps
 	}
 
-	// Parse the push remote URL once for both fork detection and URL derivation
 	pushInfo, err := parseGitRemoteURL(pushRemoteURL)
 	if err != nil {
 		logging.Warn(ctx, "checkpoint-remote: could not parse push remote URL",
@@ -96,7 +95,8 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 		return ps
 	}
 
-	// Fork detection: compare owners
+	// Fork detection: don't push to a checkpoint repo owned by someone else.
+	// This is push-specific — reading (resume) skips this check.
 	checkpointOwner := config.Owner()
 	if pushInfo.owner != "" && checkpointOwner != "" && !strings.EqualFold(pushInfo.owner, checkpointOwner) {
 		logging.Debug(ctx, "checkpoint-remote: push remote owner differs from checkpoint remote owner, skipping (fork detected)",
@@ -129,7 +129,46 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 		)
 	}
 
+	// Also fetch v2 /main ref if push_v2_refs is enabled
+	if s.IsPushV2RefsEnabled() {
+		if err := fetchV2MainRefIfMissing(ctx, checkpointURL); err != nil {
+			logging.Warn(ctx, "checkpoint-remote: failed to fetch v2 /main ref",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+
 	return ps
+}
+
+// ResolveCheckpointURL returns the checkpoint remote URL if configured, or empty string
+// if not configured or derivation fails. Uses the push remote's protocol for URL construction.
+func ResolveCheckpointURL(ctx context.Context, pushRemoteName string) string {
+	s, err := settings.Load(ctx)
+	if err != nil {
+		return ""
+	}
+	config := s.GetCheckpointRemote()
+	if config == nil {
+		return ""
+	}
+	pushRemoteURL, err := getRemoteURL(ctx, pushRemoteName)
+	if err != nil {
+		logging.Debug(ctx, "checkpoint-remote: could not get push remote URL for v2 resolution",
+			slog.String("remote", pushRemoteName),
+			slog.String("error", err.Error()),
+		)
+		return ""
+	}
+	url, err := deriveCheckpointURL(pushRemoteURL, config)
+	if err != nil {
+		logging.Debug(ctx, "checkpoint-remote: could not derive v2 checkpoint URL",
+			slog.String("repo", config.Repo),
+			slog.String("error", err.Error()),
+		)
+		return ""
+	}
+	return url
 }
 
 // ResolveRemoteRepo returns the host, owner, and repo name for the given git remote.
@@ -145,6 +184,11 @@ func ResolveRemoteRepo(ctx context.Context, remoteName string) (host, owner, rep
 		return "", "", "", fmt.Errorf("parse remote URL: %w", err)
 	}
 	return info.host, info.owner, info.repo, nil
+}
+
+// OriginURL returns the configured URL for the origin remote.
+func OriginURL(ctx context.Context) (string, error) {
+	return getRemoteURL(ctx, "origin")
 }
 
 // gitRemoteInfo holds parsed components of a git remote URL.
@@ -168,7 +212,7 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 		// Split on the first ":"
 		parts := strings.SplitN(rawURL, ":", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid SSH URL: %s", redactURL(rawURL))
+			return nil, fmt.Errorf("invalid SSH URL: %s", RedactURL(rawURL))
 		}
 		hostPart := parts[0] // e.g., "git@github.com"
 		pathPart := parts[1] // e.g., "org/repo.git"
@@ -189,12 +233,12 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 	// URL format: https://github.com/org/repo.git or ssh://git@github.com/org/repo.git
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("invalid URL: %s", RedactURL(rawURL))
 	}
 
 	protocol := u.Scheme
 	if protocol == "" {
-		return nil, fmt.Errorf("no protocol in URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("no protocol in URL: %s", RedactURL(rawURL))
 	}
 	host := u.Hostname()
 
@@ -262,9 +306,9 @@ func getRemoteURL(ctx context.Context, remoteName string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// redactURL removes credentials from a URL for safe logging.
+// RedactURL removes credentials from a URL for safe logging.
 // Handles both HTTPS URLs with embedded credentials and general URLs.
-func redactURL(rawURL string) string {
+func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		// For non-URL formats (SSH SCP), just return the host portion
@@ -282,57 +326,163 @@ func redactURL(rawURL string) string {
 	return u.Scheme + "://" + host + path
 }
 
-// fetchMetadataBranchIfMissing fetches the metadata branch from a URL only if it doesn't exist locally.
-// This avoids network calls on every push — once the branch exists locally, this is a no-op.
-// Fetch failures are silently swallowed (returns nil): the push will handle creating the
-// branch on the remote. Only fatal errors (opening repo, creating local branch) are returned.
-func fetchMetadataBranchIfMissing(ctx context.Context, remoteURL string) error {
+// ResolveCheckpointRemoteURL resolves the checkpoint remote URL from settings.
+// Returns (url, true, nil) if a checkpoint_remote is configured and resolved successfully,
+// ("", false, nil) if no checkpoint_remote is configured, or ("", true, err) if configured
+// but resolution failed (e.g., missing origin remote, unparseable URL).
+// Unlike resolvePushSettings, this skips fork detection (reading is always allowed)
+// and has no side effects (no fetching).
+func ResolveCheckpointRemoteURL(ctx context.Context) (string, bool, error) {
+	s, err := settings.Load(ctx)
+	if err != nil {
+		return "", false, nil //nolint:nilerr // settings load failure means "can't determine config" — treat as not configured
+	}
+
+	config := s.GetCheckpointRemote()
+	if config == nil {
+		return "", false, nil
+	}
+
+	remoteURL, err := getRemoteURL(ctx, "origin")
+	if err != nil {
+		return "", true, fmt.Errorf("could not get origin remote URL: %w", err)
+	}
+
+	remoteInfo, err := parseGitRemoteURL(remoteURL)
+	if err != nil {
+		return "", true, fmt.Errorf("could not parse origin remote URL: %w", err)
+	}
+
+	checkpointURL, err := deriveCheckpointURLFromInfo(remoteInfo, config)
+	if err != nil {
+		return "", true, fmt.Errorf("could not derive checkpoint URL: %w", err)
+	}
+
+	return checkpointURL, true, nil
+}
+
+// FetchMetadataBranch fetches the metadata branch from the checkpoint remote URL
+// and updates the local branch. Unlike fetchMetadataBranchIfMissing, this always
+// fetches regardless of whether the branch exists locally (for resume scenarios
+// where the local branch may be stale).
+func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 	branchName := paths.MetadataBranchName
+
+	fetchCtx, cancel := context.WithTimeout(ctx, checkpointRemoteFetchTimeout)
+	defer cancel()
+
+	tmpRef := "refs/entire-fetch-tmp/" + branchName
+	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
+	fetchArgs := AppendFetchFilterArgs(fetchCtx, []string{"fetch", "--no-tags", remoteURL, refSpec})
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, fetchArgs...)
+	// Merge GIT_TERMINAL_PROMPT=0 into whatever env CheckpointGitCommand set.
+	// If the token was injected, cmd.Env is already populated; otherwise use os.Environ().
+	if fetchCmd.Env == nil {
+		fetchCmd.Env = os.Environ()
+	}
+	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
+	output, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
+		// Include redacted output for diagnostics without leaking credentials.
+		// Git stderr may echo the URL with embedded credentials, so replace it.
+		redactedURL := RedactURL(remoteURL)
+		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
+		if msg != "" {
+			return fmt.Errorf("fetch from %s failed: %s: %w", redactedURL, msg, fetchErr)
+		}
+		return fmt.Errorf("fetch from %s failed: %w", redactedURL, fetchErr)
+	}
 
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	// Check if branch already exists locally - if so, nothing to do
-	branchRef := plumbing.NewBranchReferenceName(branchName)
-	if _, err := repo.Reference(branchRef, true); err == nil {
-		return nil // Branch exists locally, skip fetch
-	}
-
-	// Branch doesn't exist locally - try to fetch it from the URL.
-	// Fetch to a temp ref to avoid polluting the remote-tracking namespace.
-	fetchCtx, cancel := context.WithTimeout(ctx, checkpointRemoteFetchTimeout)
-	defer cancel()
-
-	tmpRef := "refs/entire-fetch-tmp/" + branchName
-	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
-	fetchCmd := exec.CommandContext(fetchCtx, "git", "fetch", "--no-tags", remoteURL, refSpec)
-	fetchCmd.Stdin = nil
-	fetchCmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0", // Prevent interactive auth prompts
-	)
-	if err := fetchCmd.Run(); err != nil {
-		// Fetch failed - remote may be unreachable or branch doesn't exist there yet.
-		// Not fatal: push will create it on the remote when it succeeds.
-		return nil
-	}
-
-	// Fetch succeeded - create local branch from the fetched ref
 	fetchedRef, err := repo.Reference(plumbing.ReferenceName(tmpRef), true)
 	if err != nil {
-		// Fetch succeeded but ref not found - branch may not exist on remote
-		return nil
+		return fmt.Errorf("branch not found after fetch: %w", err)
 	}
 
+	branchRef := plumbing.NewBranchReferenceName(branchName)
 	newRef := plumbing.NewHashReference(branchRef, fetchedRef.Hash())
 	if err := repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to create local branch from fetched ref: %w", err)
 	}
 
-	// Clean up the temp ref (best-effort, not critical if it fails)
 	_ = repo.Storer.RemoveReference(plumbing.ReferenceName(tmpRef)) //nolint:errcheck // cleanup is best-effort
 
+	return nil
+}
+
+// FetchV2MainFromURL fetches the v2 /main ref from a remote URL and updates the local ref.
+// Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
+func FetchV2MainFromURL(ctx context.Context, remoteURL string) error {
+	fetchCtx, cancel := context.WithTimeout(ctx, checkpointRemoteFetchTimeout)
+	defer cancel()
+
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+	fetchArgs := AppendFetchFilterArgs(fetchCtx, []string{"fetch", "--no-tags", remoteURL, refSpec})
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, fetchArgs...)
+	if fetchCmd.Env == nil {
+		fetchCmd.Env = os.Environ()
+	}
+	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
+	output, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
+		redactedURL := RedactURL(remoteURL)
+		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
+		if msg != "" {
+			return fmt.Errorf("fetch v2 /main from %s failed: %s: %w", redactedURL, msg, fetchErr)
+		}
+		return fmt.Errorf("fetch v2 /main from %s failed: %w", redactedURL, fetchErr)
+	}
+
+	return nil
+}
+
+// fetchMetadataBranchIfMissing fetches the metadata branch from a URL only if it doesn't exist locally.
+// This avoids network calls on every push — once the branch exists locally, this is a no-op.
+// Fetch failures are silently swallowed (returns nil): the push will handle creating the
+// branch on the remote. Only fatal errors (opening repo, creating local branch) are returned.
+func fetchMetadataBranchIfMissing(ctx context.Context, remoteURL string) error {
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Check if branch already exists locally - if so, nothing to do
+	branchRef := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	if _, err := repo.Reference(branchRef, true); err == nil {
+		return nil // Branch exists locally, skip fetch
+	}
+
+	// Branch doesn't exist locally - try to fetch it from the URL.
+	// Fetch failures are not fatal: push will create it on the remote when it succeeds.
+	if err := FetchMetadataBranch(ctx, remoteURL); err != nil {
+		return nil //nolint:nilerr // Fetch failure is expected when remote is unreachable or branch doesn't exist yet
+	}
+
 	logging.Info(ctx, "checkpoint-remote: fetched metadata branch from URL")
+	return nil
+}
+
+// fetchV2MainRefIfMissing fetches the v2 /main ref from a URL only if it doesn't
+// exist locally. Delegates to FetchV2MainFromURL for the actual fetch.
+func fetchV2MainRefIfMissing(ctx context.Context, remoteURL string) error {
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	if _, err := repo.Reference(refName, true); err == nil {
+		return nil // Ref exists locally, skip fetch
+	}
+
+	if err := FetchV2MainFromURL(ctx, remoteURL); err != nil {
+		return nil //nolint:nilerr // Fetch failure is not fatal — ref may not exist on remote yet
+	}
+
+	logging.Info(ctx, "checkpoint-remote: fetched v2 /main ref from URL")
 	return nil
 }

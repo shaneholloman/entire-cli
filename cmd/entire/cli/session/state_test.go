@@ -77,36 +77,66 @@ func TestState_NormalizeAfterLoad(t *testing.T) {
 		assert.Equal(t, 200, state.CheckpointTranscriptStart)
 		assert.Equal(t, 0, state.TranscriptLinesAtStart)
 	})
+
+	t.Run("leaves_CompactTranscriptStart_zero_when_missing", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			CheckpointTranscriptStart: 120,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.Equal(t, 0, state.CompactTranscriptStart)
+	})
+
+	t.Run("preserves_existing_CompactTranscriptStart", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			CheckpointTranscriptStart: 120,
+			CompactTranscriptStart:    45,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.Equal(t, 45, state.CompactTranscriptStart)
+	})
 }
 
 func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 	tests := []struct {
-		name     string
-		json     string
-		wantCTS  int // CheckpointTranscriptStart
-		wantStep int // StepCount
+		name        string
+		json        string
+		wantCTS     int // CheckpointTranscriptStart
+		wantCompact int // CompactTranscriptStart
+		wantStep    int // StepCount
 	}{
 		{
-			name:     "migrates old condensed_transcript_lines",
-			json:     `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
-			wantCTS:  42,
-			wantStep: 5,
+			name:        "migrates old condensed_transcript_lines",
+			json:        `{"session_id":"s1","condensed_transcript_lines":42,"checkpoint_count":5}`,
+			wantCTS:     42,
+			wantCompact: 0,
+			wantStep:    5,
 		},
 		{
-			name:    "migrates old transcript_lines_at_start",
-			json:    `{"session_id":"s1","transcript_lines_at_start":75}`,
-			wantCTS: 75,
+			name:        "migrates old transcript_lines_at_start",
+			json:        `{"session_id":"s1","transcript_lines_at_start":75}`,
+			wantCTS:     75,
+			wantCompact: 0,
 		},
 		{
-			name:    "preserves new field over old",
-			json:    `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
-			wantCTS: 50,
+			name:        "preserves new field over old",
+			json:        `{"session_id":"s1","condensed_transcript_lines":10,"checkpoint_transcript_start":50}`,
+			wantCTS:     50,
+			wantCompact: 0,
 		},
 		{
-			name:     "handles clean new format",
-			json:     `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
-			wantCTS:  25,
-			wantStep: 3,
+			name:        "handles clean new format",
+			json:        `{"session_id":"s1","checkpoint_transcript_start":25,"checkpoint_count":3}`,
+			wantCTS:     25,
+			wantCompact: 0,
+			wantStep:    3,
+		},
+		{
+			name:        "preserves explicit compact_transcript_start",
+			json:        `{"session_id":"s1","checkpoint_transcript_start":25,"compact_transcript_start":9}`,
+			wantCTS:     25,
+			wantCompact: 9,
 		},
 	}
 
@@ -117,6 +147,7 @@ func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
 			state.NormalizeAfterLoad(context.Background())
 
 			assert.Equal(t, tt.wantCTS, state.CheckpointTranscriptStart)
+			assert.Equal(t, tt.wantCompact, state.CompactTranscriptStart)
 			assert.Equal(t, tt.wantStep, state.StepCount)
 			assert.Equal(t, 0, state.CondensedTranscriptLines, "deprecated field should be cleared")
 			assert.Equal(t, 0, state.TranscriptLinesAtStart, "deprecated field should be cleared")

@@ -627,6 +627,28 @@ func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 	return tree, nil
 }
 
+// GetV2MetadataBranchTree returns the tree object at the tip of the v2 /main ref.
+// The v2 /main ref uses the same sharded checkpoint layout as v1, so
+// ReadLatestSessionPromptFromCommittedTree works with either tree.
+func GetV2MetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	ref, err := repo.Reference(refName, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main reference: %w", err)
+	}
+
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main commit: %w", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get v2 /main tree: %w", err)
+	}
+	return tree, nil
+}
+
 // ExtractFirstPrompt extracts and truncates the first meaningful prompt from prompt content.
 // Prompts are separated by "\n\n---\n\n". Skips empty prompts and separator-only content.
 // Returns empty string if no valid prompt is found.
@@ -689,22 +711,45 @@ func ReadAgentTypeFromTree(tree *object.Tree, checkpointPath string) types.Agent
 		}
 	}
 
-	// Fall back to detecting agent from config files (shadow branches don't have metadata.json).
-	// Order: Gemini (most specific check), Claude (established default), OpenCode (newest/preview).
+	// Fall back to detecting agent from config markers (shadow branches don't have metadata.json).
+	// Multiple agent config markers may coexist when users configure multiple agents via
+	// `entire configure`. Only return a specific agent type when exactly one agent config
+	// marker (directory or file) is present; otherwise return Unknown since we can't
+	// determine which agent created the checkpoint.
+	var detected types.AgentType
+	detectedCount := 0
+
 	if _, err := tree.File(".gemini/settings.json"); err == nil {
-		return agent.AgentTypeGemini
+		detected = agent.AgentTypeGemini
+		detectedCount++
 	}
 	if _, err := tree.Tree(".claude"); err == nil {
-		return agent.AgentTypeClaudeCode
+		detected = agent.AgentTypeClaudeCode
+		detectedCount++
 	}
-	// OpenCode: .opencode directory or opencode.json config
 	if _, err := tree.Tree(".opencode"); err == nil {
-		return agent.AgentTypeOpenCode
+		detected = agent.AgentTypeOpenCode
+		detectedCount++
+	} else if _, err := tree.File("opencode.json"); err == nil {
+		detected = agent.AgentTypeOpenCode
+		detectedCount++
 	}
-	if _, err := tree.File("opencode.json"); err == nil {
-		return agent.AgentTypeOpenCode
+	if _, err := tree.Tree(".codex"); err == nil {
+		detected = agent.AgentTypeCodex
+		detectedCount++
+	}
+	if _, err := tree.Tree(".cursor"); err == nil {
+		detected = agent.AgentTypeCursor
+		detectedCount++
+	}
+	if _, err := tree.Tree(".factory"); err == nil {
+		detected = agent.AgentTypeFactoryAIDroid
+		detectedCount++
 	}
 
+	if detectedCount == 1 {
+		return detected
+	}
 	return agent.AgentTypeUnknown
 }
 

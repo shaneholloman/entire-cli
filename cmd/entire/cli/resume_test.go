@@ -630,7 +630,7 @@ func TestCheckRemoteMetadata_MetadataExistsOnRemote(t *testing.T) {
 
 	// Call checkRemoteMetadata - should find metadata on the remote tree and
 	// attempt to resume, but fail because the test checkpoint has no agent field.
-	err = checkRemoteMetadata(context.Background(), checkpointID)
+	err = checkRemoteMetadata(context.Background(), os.Stdout, os.Stderr, checkpointID)
 	if err == nil {
 		t.Error("checkRemoteMetadata() should return error when agent is missing from metadata")
 	} else if !strings.Contains(err.Error(), "failed to resolve agent") {
@@ -652,7 +652,7 @@ func TestCheckRemoteMetadata_NoRemoteMetadataBranch(t *testing.T) {
 	// Don't create any remote ref - simulating no remote entire/checkpoints/v1
 
 	// Call checkRemoteMetadata - should handle gracefully (no remote branch)
-	err := checkRemoteMetadata(context.Background(), id.MustCheckpointID("aaa111bbb222"))
+	err := checkRemoteMetadata(context.Background(), os.Stdout, os.Stderr, id.MustCheckpointID("aaa111bbb222"))
 	if err != nil {
 		t.Errorf("checkRemoteMetadata() returned error when no remote branch: %v", err)
 	}
@@ -687,7 +687,7 @@ func TestCheckRemoteMetadata_CheckpointNotOnRemote(t *testing.T) {
 	}
 
 	// Call checkRemoteMetadata with a DIFFERENT checkpoint ID (not on remote)
-	err = checkRemoteMetadata(context.Background(), id.MustCheckpointID("abcd12345678"))
+	err = checkRemoteMetadata(context.Background(), os.Stdout, os.Stderr, id.MustCheckpointID("abcd12345678"))
 	if err != nil {
 		t.Errorf("checkRemoteMetadata() returned error for missing checkpoint: %v", err)
 	}
@@ -772,6 +772,39 @@ func TestDisplayRestoredSessions_SingleSessionOutput(t *testing.T) {
 		t.Fatalf("displayRestoredSessions() missing continuation header, got: %q", got)
 	}
 	wantCommand := "  " + ag.FormatResumeCommand(session.SessionID) + "  # Implement auth\n"
+	if !strings.Contains(got, wantCommand) {
+		t.Fatalf("displayRestoredSessions() missing command %q in %q", wantCommand, got)
+	}
+}
+
+func TestDisplayRestoredSessions_CodexShowsResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	session := strategy.RestoredSession{
+		SessionID: "019d6d29-8cf7-7fe3-adc9-8c3e4d9d5603",
+		Agent:     "Codex",
+		Prompt:    "Can you take a look at the go code",
+		CreatedAt: time.Date(2026, time.April, 8, 18, 46, 0, 0, time.UTC),
+	}
+
+	ag, err := strategy.ResolveAgentForRewind(session.Agent)
+	if err != nil {
+		t.Fatalf("ResolveAgentForRewind() error = %v", err)
+	}
+
+	var output bytes.Buffer
+	if err := displayRestoredSessions(&output, []strategy.RestoredSession{session}); err != nil {
+		t.Fatalf("displayRestoredSessions() error = %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "✓ Restored session 019d6d29-8cf7-7fe3-adc9-8c3e4d9d5603.\n") {
+		t.Fatalf("displayRestoredSessions() missing session header, got: %q", got)
+	}
+	if !strings.Contains(got, "\nTo continue this session, run:\n") {
+		t.Fatalf("displayRestoredSessions() missing continuation header, got: %q", got)
+	}
+	wantCommand := "  " + ag.FormatResumeCommand(session.SessionID) + "  # Can you take a look at the go code\n"
 	if !strings.Contains(got, wantCommand) {
 		t.Fatalf("displayRestoredSessions() missing command %q in %q", wantCommand, got)
 	}

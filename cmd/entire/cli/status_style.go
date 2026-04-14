@@ -20,13 +20,14 @@ type statusStyles struct {
 	width        int
 
 	// Styles
-	green lipgloss.Style
-	red   lipgloss.Style
-	gray  lipgloss.Style
-	bold  lipgloss.Style
-	dim   lipgloss.Style
-	agent lipgloss.Style // amber/orange for agent names
-	cyan  lipgloss.Style
+	green  lipgloss.Style
+	red    lipgloss.Style
+	gray   lipgloss.Style
+	bold   lipgloss.Style
+	dim    lipgloss.Style
+	agent  lipgloss.Style // amber/orange for agent names
+	cyan   lipgloss.Style
+	yellow lipgloss.Style // yellow for stale warnings
 }
 
 // newStatusStyles creates styles appropriate for the output writer.
@@ -47,6 +48,7 @@ func newStatusStyles(w io.Writer) statusStyles {
 		s.dim = lipgloss.NewStyle().Faint(true)
 		s.agent = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 		s.cyan = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+		s.yellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	}
 
 	return s
@@ -60,15 +62,20 @@ func (s statusStyles) render(style lipgloss.Style, text string) string {
 	return style.Render(text)
 }
 
+// isTerminalWriter returns true if the writer is connected to a terminal.
+func isTerminalWriter(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		return term.IsTerminal(int(f.Fd())) //nolint:gosec // G115: uintptr->int is safe for fd
+	}
+	return false
+}
+
 // shouldUseColor returns true if the writer supports color output.
 func shouldUseColor(w io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
-	if f, ok := w.(*os.File); ok {
-		return term.IsTerminal(int(f.Fd())) //nolint:gosec // G115: uintptr->int is safe for fd
-	}
-	return false
+	return isTerminalWriter(w)
 }
 
 // getTerminalWidth returns the terminal width, capped at 80 with a fallback of 60.

@@ -28,6 +28,10 @@ const (
 	// StaleSessionThreshold is the duration after which an ended session is considered stale
 	// and will be automatically deleted during load/list operations.
 	StaleSessionThreshold = 7 * 24 * time.Hour
+
+	// StuckActiveThreshold is the duration after which an ACTIVE session with no
+	// interaction is considered stuck (used by "entire doctor" and "entire status").
+	StuckActiveThreshold = 1 * time.Hour
 )
 
 // State represents the state of an active session.
@@ -105,6 +109,11 @@ type State struct {
 	// against this value without reading the full transcript content.
 	CheckpointTranscriptSize int64 `json:"checkpoint_transcript_size,omitempty"`
 
+	// CompactTranscriptStart is the transcript.jsonl line offset where the current
+	// checkpoint cycle began. It parallels CheckpointTranscriptStart (full.jsonl)
+	// and is updated after each condensation.
+	CompactTranscriptStart int `json:"compact_transcript_start,omitempty"`
+
 	// Deprecated: CondensedTranscriptLines is replaced by CheckpointTranscriptStart.
 	// Kept for backward compatibility with existing state files.
 	// Use NormalizeAfterLoad() to migrate.
@@ -127,6 +136,10 @@ type State struct {
 	// and the session phase is ENDED. Cleared on session reactivation (ENDED →
 	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
 	FullyCondensed bool `json:"fully_condensed,omitempty"`
+
+	// AttachedManually indicates this session was imported via `entire attach` rather
+	// than being captured by hooks during normal agent execution.
+	AttachedManually bool `json:"attached_manually,omitempty"`
 
 	// AgentType identifies the agent that created this session (e.g., "Claude Code", "Gemini CLI", "Cursor")
 	AgentType types.AgentType `json:"agent_type,omitempty"`
@@ -194,6 +207,11 @@ type PromptAttribution struct {
 	// This enables distinguishing user self-modifications from agent modifications.
 	// See docs/architecture/attribution.md for details.
 	UserAddedPerFile map[string]int `json:"user_added_per_file,omitempty"`
+
+	// UserRemovedPerFile tracks per-file user removals for accurate agent deletion attribution.
+	// Without this, global user removals would be subtracted from agent-file-only removals,
+	// incorrectly reducing agent deletion credit when users delete lines in non-agent files.
+	UserRemovedPerFile map[string]int `json:"user_removed_per_file,omitempty"`
 }
 
 // NormalizeAfterLoad applies backward-compatible migrations to state loaded from disk.
@@ -240,6 +258,20 @@ func (s *State) NormalizeAfterLoad(ctx context.Context) {
 // IsStale returns true when a session hasn't seen interaction for longer than
 // StaleSessionThreshold. Falls back to StartedAt when LastInteractionTime is
 // nil (sessions created before interaction tracking was added).
+// IsStuckActive returns true if the session is in ACTIVE phase but has not had
+// any interaction for longer than StuckActiveThreshold. Falls back to StartedAt
+// when LastInteractionTime is nil, so brand-new sessions are not falsely flagged.
+func (s *State) IsStuckActive() bool {
+	if !s.Phase.IsActive() {
+		return false
+	}
+	ref := s.LastInteractionTime
+	if ref == nil {
+		ref = &s.StartedAt
+	}
+	return time.Since(*ref) > StuckActiveThreshold
+}
+
 func (s *State) IsStale() bool {
 	var since time.Duration
 	if s.LastInteractionTime != nil {

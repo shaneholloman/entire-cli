@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +67,7 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	Git(t, dir, "config", "user.name", "E2E Test")
 	Git(t, dir, "config", "user.email", "e2e@test.local")
 	Git(t, dir, "config", "core.pager", "cat")
+	Git(t, dir, "config", "core.autocrlf", "true")
 	Git(t, dir, "commit", "--allow-empty", "-m", "initial commit")
 
 	// External agents need external_agents enabled in settings before enable,
@@ -81,6 +84,9 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	}
 
 	entire.Enable(t, dir, agent.EntireAgent())
+	if agent.Name() == "gemini-cli" {
+		setupGeminiTestHome(t, dir)
+	}
 	if agent.Name() == "factoryai-droid" {
 		if err := configureDroidRepoSettings(dir); err != nil {
 			t.Fatalf("configure droid repo settings: %v", err)
@@ -145,6 +151,68 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	})
 
 	return state
+}
+
+func setupGeminiTestHome(t *testing.T, repoDir string) {
+	t.Helper()
+
+	homeDir := geminiTestHomeDir(repoDir)
+	t.Cleanup(func() {
+		if err := os.RemoveAll(homeDir); err != nil {
+			t.Errorf("remove gemini test home: %v", err)
+		}
+	})
+
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	if err := os.MkdirAll(filepath.Join(geminiDir, "acknowledgments"), 0o755); err != nil {
+		t.Fatalf("create gemini test home: %v", err)
+	}
+
+	config := `{"security":{"auth":{"selectedType":"gemini-api-key"}}}`
+	if err := os.WriteFile(filepath.Join(geminiDir, "settings.json"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write gemini settings: %v", err)
+	}
+
+	agentFile := filepath.Join(repoDir, ".gemini", "agents", "entire-search.md")
+	content, err := os.ReadFile(agentFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		t.Fatalf("read gemini agent file: %v", err)
+	}
+
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+
+	ackPath := filepath.Join(geminiDir, "acknowledgments", "agents.json")
+	acks := map[string]map[string]string{}
+	if data, readErr := os.ReadFile(ackPath); readErr == nil {
+		if err := json.Unmarshal(data, &acks); err != nil {
+			t.Fatalf("parse gemini acknowledgments: %v", err)
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("read gemini acknowledgments: %v", readErr)
+	}
+
+	if acks[repoDir] == nil {
+		acks[repoDir] = map[string]string{}
+	}
+	acks[repoDir]["entire-search"] = hash
+
+	out, err := json.MarshalIndent(acks, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal gemini acknowledgments: %v", err)
+	}
+	out = append(out, '\n')
+
+	if err := os.WriteFile(ackPath, out, 0o644); err != nil {
+		t.Fatalf("write gemini acknowledgments: %v", err)
+	}
+}
+
+func geminiTestHomeDir(repoDir string) string {
+	return filepath.Join(filepath.Dir(repoDir), filepath.Base(repoDir)+"-gemini-home")
 }
 
 func configureDroidRepoSettings(repoDir string) error {

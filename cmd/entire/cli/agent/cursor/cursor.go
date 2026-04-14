@@ -108,6 +108,17 @@ func (c *CursorAgent) GetSessionDir(repoPath string) (string, error) {
 	return filepath.Join(homeDir, ".cursor", "projects", projectDir, "agent-transcripts"), nil
 }
 
+// GetSessionBaseDir returns the base directory containing per-project session subdirectories.
+// Unlike GetSessionDir, this does NOT use test overrides because the override
+// points to a specific project dir, not the base containing all projects.
+func (c *CursorAgent) GetSessionBaseDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+	return filepath.Join(homeDir, ".cursor", "projects"), nil
+}
+
 // ReadSession reads a session from Cursor's storage (JSONL transcript file).
 // Note: ModifiedFiles is left empty because Cursor's transcript does not contain
 // tool_use blocks for file detection. TranscriptAnalyzer extracts prompts and
@@ -137,14 +148,24 @@ func (c *CursorAgent) ReadSession(input *agent.HookInput) (*agent.AgentSession, 
 // or until the timeout expires.
 func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) error {
 	const (
-		maxWait      = 3 * time.Second
+		maxWait      = 5 * time.Second
 		pollInterval = 50 * time.Millisecond
 	)
 
 	logCtx := logging.WithComponent(ctx, "agent.cursor")
 
-	deadline := time.Now().Add(maxWait)
+	start := time.Now()
+	deadline := start.Add(maxWait)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	effectiveTimeout := deadline.Sub(start)
+
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("context ended while waiting for transcript: %w", err)
+		}
+
 		info, err := os.Stat(sessionRef)
 		if err == nil {
 			if info.Size() > 0 {
@@ -156,11 +177,24 @@ func (c *CursorAgent) PrepareTranscript(ctx context.Context, sessionRef string) 
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("failed to stat transcript %q: %w", sessionRef, err)
 		}
-		time.Sleep(pollInterval)
+
+		wait := pollInterval
+		if remaining := time.Until(deadline); remaining < wait {
+			wait = remaining
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fmt.Errorf("context ended while waiting for transcript: %w", ctx.Err())
+		case <-timer.C:
+		}
 	}
 
 	logging.Warn(logCtx, "transcript file not ready within timeout, proceeding",
-		slog.Duration("timeout", maxWait),
+		slog.Duration("timeout", effectiveTimeout),
 		slog.String("path", sessionRef),
 	)
 	return nil

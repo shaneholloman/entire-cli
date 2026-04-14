@@ -145,6 +145,18 @@ func LoadFromFile(filePath string) (*EntireSettings, error) {
 	return loadFromFile(filePath)
 }
 
+// LoadFromBytes parses settings from raw JSON bytes without merging local overrides.
+// Use this when you have settings content from a non-file source (e.g., git show).
+func LoadFromBytes(data []byte) (*EntireSettings, error) {
+	s := &EntireSettings{Enabled: true}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(s); err != nil {
+		return nil, fmt.Errorf("parsing settings: %w", err)
+	}
+	return s, nil
+}
+
 // loadFromFile loads settings from a specific file path.
 // Returns default settings if the file doesn't exist.
 func loadFromFile(filePath string) (*EntireSettings, error) {
@@ -410,6 +422,28 @@ func IsCheckpointsV2Enabled(ctx context.Context) bool {
 	return settings.IsCheckpointsV2Enabled()
 }
 
+// IsPushV2RefsEnabled checks if pushing v2 refs is enabled in settings.
+// Returns false by default if settings cannot be loaded or flags are missing.
+func IsPushV2RefsEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.IsPushV2RefsEnabled()
+}
+
+// IsFilteredFetchesEnabled checks if filtered fetches should be used.
+// When enabled, filtered fetches always resolve remote names to URLs first so
+// git does not persist promisor settings onto named remotes in local config.
+// Returns false by default.
+func IsFilteredFetchesEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.IsFilteredFetchesEnabled()
+}
+
 // IsSummarizeEnabled checks if auto-summarize is enabled in settings.
 // Returns false by default if settings cannot be loaded or the key is missing.
 func IsSummarizeEnabled(ctx context.Context) bool {
@@ -486,6 +520,30 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 		return false
 	}
 	val, ok := s.StrategyOptions["checkpoints_v2"].(bool)
+	return ok && val
+}
+
+// IsPushV2RefsEnabled checks if pushing v2 refs is enabled.
+// Requires both checkpoints_v2 and push_v2_refs to be true.
+func (s *EntireSettings) IsPushV2RefsEnabled() bool {
+	if !s.IsCheckpointsV2Enabled() {
+		return false
+	}
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["push_v2_refs"].(bool)
+	return ok && val
+}
+
+// IsFilteredFetchesEnabled checks if fetches should use --filter=blob:none.
+// When enabled, filtered fetches always use resolved URLs rather than remote
+// names to avoid persisting promisor settings onto named remotes.
+func (s *EntireSettings) IsFilteredFetchesEnabled() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["filtered_fetches"].(bool)
 	return ok && val
 }
 

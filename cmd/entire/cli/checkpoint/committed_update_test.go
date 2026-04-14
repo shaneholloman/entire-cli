@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
@@ -51,7 +52,7 @@ func setupRepoForUpdate(t *testing.T) (*git.Repository, *GitStore, id.Checkpoint
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte("provisional transcript line 1\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("provisional transcript line 1\n")),
 		Prompts:      []string{"initial prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -72,7 +73,7 @@ func TestUpdateCommitted_ReplacesTranscript(t *testing.T) {
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   fullTranscript,
+		Transcript:   redact.AlreadyRedacted(fullTranscript),
 	})
 	if err != nil {
 		t.Fatalf("UpdateCommitted() error = %v", err)
@@ -121,7 +122,7 @@ func TestUpdateCommitted_ReplacesAllFieldsTogether(t *testing.T) {
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   fullTranscript,
+		Transcript:   redact.AlreadyRedacted(fullTranscript),
 		Prompts:      []string{"final prompt"},
 	})
 	if err != nil {
@@ -148,7 +149,7 @@ func TestUpdateCommitted_NonexistentCheckpoint(t *testing.T) {
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: id.MustCheckpointID("deadbeef1234"),
 		SessionID:    "session-001",
-		Transcript:   []byte("should fail"),
+		Transcript:   redact.AlreadyRedacted([]byte("should fail")),
 	})
 	if err == nil {
 		t.Fatal("expected error for nonexistent checkpoint, got nil")
@@ -169,7 +170,7 @@ func TestUpdateCommitted_PreservesMetadata(t *testing.T) {
 	err = store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   []byte("updated transcript\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("updated transcript\n")),
 	})
 	if err != nil {
 		t.Fatalf("UpdateCommitted() error = %v", err)
@@ -199,7 +200,7 @@ func TestUpdateCommitted_MultipleCheckpoints(t *testing.T) {
 		CheckpointID: cpID2,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte("provisional cp2\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("provisional cp2\n")),
 		Prompts:      []string{"cp2 prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -215,7 +216,7 @@ func TestUpdateCommitted_MultipleCheckpoints(t *testing.T) {
 		err = store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 			CheckpointID: cpID,
 			SessionID:    "session-001",
-			Transcript:   fullTranscript,
+			Transcript:   redact.AlreadyRedacted(fullTranscript),
 			Prompts:      []string{"final prompt 1", "final prompt 2"},
 		})
 		if err != nil {
@@ -243,7 +244,7 @@ func TestUpdateCommitted_UpdatesContentHash(t *testing.T) {
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   []byte("new full transcript content\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("new full transcript content\n")),
 	})
 	if err != nil {
 		t.Fatalf("UpdateCommitted() error = %v", err)
@@ -285,7 +286,7 @@ func TestUpdateCommitted_EmptyCheckpointID(t *testing.T) {
 
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		SessionID:  "session-001",
-		Transcript: []byte("should fail"),
+		Transcript: redact.AlreadyRedacted([]byte("should fail")),
 	})
 	if err == nil {
 		t.Fatal("expected error for empty checkpoint ID, got nil")
@@ -301,7 +302,7 @@ func TestUpdateCommitted_FallsBackToLatestSession(t *testing.T) {
 	err := store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "nonexistent-session",
-		Transcript:   fullTranscript,
+		Transcript:   redact.AlreadyRedacted(fullTranscript),
 	})
 	if err != nil {
 		t.Fatalf("UpdateCommitted() error = %v", err)
@@ -330,7 +331,7 @@ func TestUpdateCommitted_SummaryPreserved(t *testing.T) {
 	err = store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   []byte("updated\n"),
+		Transcript:   redact.AlreadyRedacted([]byte("updated\n")),
 	})
 	if err != nil {
 		t.Fatalf("UpdateCommitted() error = %v", err)
@@ -488,7 +489,7 @@ func TestUpdateCommitted_UsesCorrectAuthor(t *testing.T) {
 				CheckpointID: cpID,
 				SessionID:    "session-001",
 				Strategy:     "manual-commit",
-				Transcript:   []byte("provisional\n"),
+				Transcript:   redact.AlreadyRedacted([]byte("provisional\n")),
 				AuthorName:   tt.wantName,
 				AuthorEmail:  tt.wantEmail,
 			})
@@ -500,7 +501,7 @@ func TestUpdateCommitted_UsesCorrectAuthor(t *testing.T) {
 			err = store.UpdateCommitted(context.Background(), UpdateCommittedOptions{
 				CheckpointID: cpID,
 				SessionID:    "session-001",
-				Transcript:   []byte("full transcript\n"),
+				Transcript:   redact.AlreadyRedacted([]byte("full transcript\n")),
 			})
 			if err != nil {
 				t.Fatalf("UpdateCommitted() error = %v", err)

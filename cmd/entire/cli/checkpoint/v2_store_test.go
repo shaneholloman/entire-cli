@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,18 +25,12 @@ func initTestRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	dir := t.TempDir()
 
-	repo, err := git.PlainInit(dir, false)
-	require.NoError(t, err)
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "README.md", "init")
+	testutil.GitAdd(t, dir, "README.md")
+	testutil.GitCommit(t, dir, "initial")
 
-	wt, err := repo.Worktree()
-	require.NoError(t, err)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("init"), 0o644))
-	_, err = wt.Add("README.md")
-	require.NoError(t, err)
-	_, err = wt.Commit("initial", &git.CommitOptions{
-		Author: &object.Signature{Name: "Test", Email: "test@test.com"},
-	})
+	repo, err := git.PlainOpen(dir)
 	require.NoError(t, err)
 
 	return repo
@@ -45,7 +39,7 @@ func initTestRepo(t *testing.T) *git.Repository {
 func TestNewV2GitStore(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	require.NotNil(t, store)
 	require.Equal(t, repo, store.repo)
 }
@@ -53,7 +47,7 @@ func TestNewV2GitStore(t *testing.T) {
 func TestV2GitStore_EnsureRef_CreatesNewRef(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
 
@@ -62,7 +56,7 @@ func TestV2GitStore_EnsureRef_CreatesNewRef(t *testing.T) {
 	require.Error(t, err)
 
 	// Ensure creates it
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
 	// Ref should now exist and point to a valid commit with an empty tree
 	ref, err := repo.Reference(refName, true)
@@ -79,16 +73,16 @@ func TestV2GitStore_EnsureRef_CreatesNewRef(t *testing.T) {
 func TestV2GitStore_EnsureRef_Idempotent(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
 
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 	ref1, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 
 	// Second call should be a no-op — same commit hash
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 	ref2, err := repo.Reference(refName, true)
 	require.NoError(t, err)
 	require.Equal(t, ref1.Hash(), ref2.Hash())
@@ -97,13 +91,13 @@ func TestV2GitStore_EnsureRef_Idempotent(t *testing.T) {
 func TestV2GitStore_EnsureRef_DifferentRefs(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	mainRef := plumbing.ReferenceName(paths.V2MainRefName)
 	fullRef := plumbing.ReferenceName(paths.V2FullCurrentRefName)
 
-	require.NoError(t, store.ensureRef(mainRef))
-	require.NoError(t, store.ensureRef(fullRef))
+	require.NoError(t, store.ensureRef(context.Background(), mainRef))
+	require.NoError(t, store.ensureRef(context.Background(), fullRef))
 
 	// Both should exist independently
 	_, err := repo.Reference(mainRef, true)
@@ -115,12 +109,12 @@ func TestV2GitStore_EnsureRef_DifferentRefs(t *testing.T) {
 func TestV2GitStore_GetRefState_ReturnsParentAndTree(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
-	parentHash, treeHash, err := store.getRefState(refName)
+	parentHash, treeHash, err := store.GetRefState(refName)
 	require.NoError(t, err)
 	require.NotEqual(t, plumbing.ZeroHash, parentHash, "parent hash should be non-zero")
 	// Tree hash can be zero hash for empty tree or a valid hash — just verify no error
@@ -130,22 +124,22 @@ func TestV2GitStore_GetRefState_ReturnsParentAndTree(t *testing.T) {
 func TestV2GitStore_GetRefState_ErrorsOnMissingRef(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName("refs/entire/nonexistent")
-	_, _, err := store.getRefState(refName)
+	_, _, err := store.GetRefState(refName)
 	require.Error(t, err)
 }
 
 func TestV2GitStore_UpdateRef_CreatesCommit(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 
 	refName := plumbing.ReferenceName(paths.V2MainRefName)
-	require.NoError(t, store.ensureRef(refName))
+	require.NoError(t, store.ensureRef(context.Background(), refName))
 
-	parentHash, treeHash, err := store.getRefState(refName)
+	parentHash, treeHash, err := store.GetRefState(refName)
 	require.NoError(t, err)
 
 	// Build a tree with one file
@@ -155,7 +149,7 @@ func TestV2GitStore_UpdateRef_CreatesCommit(t *testing.T) {
 	entries := map[string]object.TreeEntry{
 		"test.txt": {Name: "test.txt", Mode: 0o100644, Hash: blobHash},
 	}
-	newTreeHash, err := BuildTreeFromEntries(repo, entries)
+	newTreeHash, err := BuildTreeFromEntries(context.Background(), repo, entries)
 	require.NoError(t, err)
 	require.NotEqual(t, treeHash, newTreeHash)
 
@@ -200,7 +194,7 @@ func v2ReadFile(t *testing.T, tree *object.Tree, path string) string {
 func TestV2GitStore_WriteCommittedMain_WritesMetadata(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
@@ -209,7 +203,7 @@ func TestV2GitStore_WriteCommittedMain_WritesMetadata(t *testing.T) {
 		SessionID:    "test-session-001",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"human","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -238,7 +232,7 @@ func TestV2GitStore_WriteCommittedMain_WritesMetadata(t *testing.T) {
 func TestV2GitStore_WriteCommittedMain_WritesPrompts(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("b2c3d4e5f6a1")
@@ -246,7 +240,7 @@ func TestV2GitStore_WriteCommittedMain_WritesPrompts(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}`)),
 		Prompts:      []string{"do the thing", "also this"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -261,17 +255,17 @@ func TestV2GitStore_WriteCommittedMain_WritesPrompts(t *testing.T) {
 	assert.Contains(t, promptContent, "do the thing")
 	assert.Contains(t, promptContent, "also this")
 
-	// content_hash.txt should NOT be on /main — it lives on /full/current
+	// raw_transcript_hash.txt should NOT be on /main — it lives on /full/current
 	mainSessionTree, err := tree.Tree(cpPath + "/0")
 	require.NoError(t, err)
-	_, err = mainSessionTree.File(paths.ContentHashFileName)
-	assert.Error(t, err, "content_hash.txt should not be on /main ref")
+	_, err = mainSessionTree.File(paths.V2RawTranscriptHashFileName)
+	assert.Error(t, err, "raw_transcript_hash.txt should not be on /main ref")
 }
 
 func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("c3d4e5f6a1b2")
@@ -279,7 +273,7 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-003",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}` + "\n" + `{"line":"two"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}` + "\n" + `{"line":"two"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -289,7 +283,7 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 	tree := v2MainTree(t, repo)
 	cpPath := cpID.Path()
 
-	// full.jsonl should NOT be in the /main tree
+	// raw_transcript should NOT be in the /main tree
 	cpTree, err := tree.Tree(cpPath)
 	require.NoError(t, err)
 
@@ -297,17 +291,174 @@ func TestV2GitStore_WriteCommittedMain_ExcludesTranscript(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, entry := range sessionTree.Entries {
-		assert.NotEqual(t, paths.TranscriptFileName, entry.Name,
-			"raw transcript (full.jsonl) must not be on /main ref")
-		assert.False(t, strings.HasPrefix(entry.Name, paths.TranscriptFileName+"."),
+		assert.NotEqual(t, paths.V2RawTranscriptFileName, entry.Name,
+			"raw transcript (raw_transcript) must not be on /main ref")
+		assert.False(t, strings.HasPrefix(entry.Name, paths.V2RawTranscriptFileName+"."),
 			"transcript chunks must not be on /main ref")
 	}
+}
+
+func TestV2GitStore_WriteCommittedMain_WritesCompactTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	compactData := []byte(`{"v":1,"agent":"claude-code","cli_version":"0.1.0","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello"}`)
+
+	cpID := id.MustCheckpointID("d4e5f6a1b2c3")
+	_, err := store.writeCommittedMain(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "test-session-compact",
+		Strategy:          "manual-commit",
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
+		CompactTranscript: compactData,
+		Prompts:           []string{"hello"},
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	})
+	require.NoError(t, err)
+
+	tree := v2MainTree(t, repo)
+	cpPath := cpID.Path()
+
+	// transcript.jsonl should exist on /main
+	transcriptContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.CompactTranscriptFileName)
+	assert.Equal(t, string(compactData), transcriptContent)
+
+	// transcript_hash.txt should exist on /main
+	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.CompactTranscriptHashFileName)
+	assert.True(t, strings.HasPrefix(hashContent, "sha256:"),
+		"transcript_hash.txt should be a sha256 hash")
+
+	// SessionFilePaths should repurpose transcript/content_hash for compact artifacts
+	summaryContent := v2ReadFile(t, tree, cpPath+"/"+paths.MetadataFileName)
+	var summary CheckpointSummary
+	require.NoError(t, json.Unmarshal([]byte(summaryContent), &summary))
+	require.Len(t, summary.Sessions, 1)
+	assert.Contains(t, summary.Sessions[0].Transcript, paths.CompactTranscriptFileName)
+	assert.Contains(t, summary.Sessions[0].ContentHash, paths.CompactTranscriptHashFileName)
+}
+
+func TestV2GitStore_WriteCommittedMain_NoCompactTranscript_SkipsGracefully(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("e5f6a1b2c3d4")
+	_, err := store.writeCommittedMain(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "test-session-no-compact",
+		Strategy:          "manual-commit",
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
+		CompactTranscript: nil,
+		Prompts:           []string{"hello"},
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	})
+	require.NoError(t, err)
+
+	tree := v2MainTree(t, repo)
+	cpPath := cpID.Path()
+
+	// metadata.json and prompt.txt should still exist
+	_ = v2ReadFile(t, tree, cpPath+"/0/"+paths.MetadataFileName)
+	_ = v2ReadFile(t, tree, cpPath+"/0/"+paths.PromptFileName)
+
+	// transcript.jsonl should NOT exist
+	sessionTree, err := tree.Tree(cpPath + "/0")
+	require.NoError(t, err)
+	_, err = sessionTree.File(paths.CompactTranscriptFileName)
+	assert.Error(t, err, "transcript.jsonl should not exist when CompactTranscript is nil")
+}
+
+func TestV2GitStore_WriteCommittedMain_UsesCompactTranscriptStart(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a1b2c3d4e5f7")
+	compactData := []byte("{\"v\":1,\"type\":\"user\",\"content\":\"hello\"}\n{\"v\":1,\"type\":\"assistant\",\"content\":\"hi\"}\n")
+
+	_, err := store.writeCommittedMain(ctx, WriteCommittedOptions{
+		CheckpointID:              cpID,
+		SessionID:                 "test-session-compact-start",
+		Strategy:                  "manual-commit",
+		Transcript:                redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
+		CompactTranscript:         compactData,
+		Prompts:                   []string{"hello"},
+		AuthorName:                "Test",
+		AuthorEmail:               "test@test.com",
+		CheckpointTranscriptStart: 42, // raw_transcript offset (must not be used in v2 metadata)
+		CompactTranscriptStart:    15, // transcript.jsonl offset (must be used in v2 metadata)
+	})
+	require.NoError(t, err)
+
+	tree := v2MainTree(t, repo)
+	cpPath := cpID.Path()
+
+	// Read session metadata from /main
+	metadataContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.MetadataFileName)
+	var metadata CommittedMetadata
+	require.NoError(t, json.Unmarshal([]byte(metadataContent), &metadata))
+
+	// v2 should store the compact offset, not the full transcript offset.
+	assert.Equal(t, 15, metadata.CheckpointTranscriptStart,
+		"v2 /main metadata should use CompactTranscriptStart for checkpoint_transcript_start")
+}
+
+func TestV2GitStore_UpdateCommitted_WritesCompactTranscript(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("f6a1b2c3d4e5")
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "test-session-update-compact",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello"}`)),
+		Prompts:      []string{"hello"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	compactData := []byte(`{"v":1,"agent":"claude-code","cli_version":"0.1.0","type":"user","content":"hello"}`)
+	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "test-session-update-compact",
+		Transcript:        redact.AlreadyRedacted([]byte(`{"type":"human","message":"hello updated"}`)),
+		CompactTranscript: compactData,
+		Agent:             "Claude Code",
+	})
+	require.NoError(t, err)
+
+	tree := v2MainTree(t, repo)
+	cpPath := cpID.Path()
+
+	transcriptContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.CompactTranscriptFileName)
+	assert.Equal(t, string(compactData), transcriptContent)
+
+	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.CompactTranscriptHashFileName)
+	assert.True(t, strings.HasPrefix(hashContent, "sha256:"))
+
+	// Root summary paths should stay in sync after UpdateCommitted
+	summaryContent := v2ReadFile(t, tree, cpPath+"/"+paths.MetadataFileName)
+	var summary CheckpointSummary
+	require.NoError(t, json.Unmarshal([]byte(summaryContent), &summary))
+	require.Len(t, summary.Sessions, 1)
+	assert.Contains(t, summary.Sessions[0].Transcript, paths.CompactTranscriptFileName)
+	assert.Contains(t, summary.Sessions[0].ContentHash, paths.CompactTranscriptHashFileName)
 }
 
 func TestV2GitStore_WriteCommittedMain_MultiSession(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("e5f6a1b2c3d4")
@@ -317,7 +468,7 @@ func TestV2GitStore_WriteCommittedMain_MultiSession(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"line":"a"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"line":"a"}`)),
 		CheckpointsCount: 3,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -329,7 +480,7 @@ func TestV2GitStore_WriteCommittedMain_MultiSession(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-B",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"line":"b"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"line":"b"}`)),
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -366,7 +517,7 @@ func v2FullTree(t *testing.T, repo *git.Repository) *object.Tree {
 func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("f1a2b3c4d5e6")
@@ -376,7 +527,7 @@ func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-full-001",
 		Strategy:     "manual-commit",
-		Transcript:   transcript,
+		Transcript:   redact.AlreadyRedacted(transcript),
 		Agent:        agent.AgentTypeClaudeCode,
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -387,7 +538,7 @@ func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 	cpPath := cpID.Path()
 
 	// Transcript should exist at session subdirectory 0/
-	content := v2ReadFile(t, tree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, tree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, `"type":"human"`)
 	assert.Contains(t, content, `"type":"assistant"`)
 }
@@ -395,7 +546,7 @@ func TestV2GitStore_WriteCommittedFull_WritesTranscript(t *testing.T) {
 func TestV2GitStore_WriteCommittedFull_ExcludesMetadata(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("a2b3c4d5e6f1")
@@ -403,7 +554,7 @@ func TestV2GitStore_WriteCommittedFull_ExcludesMetadata(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-full-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"line":"one"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"line":"one"}`)),
 		Prompts:      []string{"hello"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -426,15 +577,15 @@ func TestV2GitStore_WriteCommittedFull_ExcludesMetadata(t *testing.T) {
 			"prompt.txt must not be on /full/current ref")
 	}
 
-	// content_hash.txt SHOULD be on /full/current (co-located with the transcript it hashes)
-	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.ContentHashFileName)
+	// raw_transcript_hash.txt SHOULD be on /full/current (co-located with the transcript it hashes)
+	hashContent := v2ReadFile(t, tree, cpPath+"/0/"+paths.V2RawTranscriptHashFileName)
 	assert.True(t, strings.HasPrefix(hashContent, "sha256:"), "content hash should be sha256 prefixed")
 }
 
 func TestV2GitStore_WriteCommittedFull_NoTranscript_Noop(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("b3c4d5e6f1a2")
@@ -462,7 +613,7 @@ func TestV2GitStore_WriteCommittedFull_NoTranscript_Noop(t *testing.T) {
 func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpA := id.MustCheckpointID("c4d5e6f1a2b3")
@@ -473,7 +624,7 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 		CheckpointID: cpA,
 		SessionID:    "session-A",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"A"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"A"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}, 0)
@@ -484,7 +635,7 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 		CheckpointID: cpB,
 		SessionID:    "session-B",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"B"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"B"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}, 0)
@@ -493,17 +644,17 @@ func TestV2GitStore_WriteCommittedFullTranscript_AccumulatesCheckpoints(t *testi
 	tree := v2FullTree(t, repo)
 
 	// Both checkpoints should be present
-	contentA := v2ReadFile(t, tree, cpA.Path()+"/0/"+paths.TranscriptFileName)
+	contentA := v2ReadFile(t, tree, cpA.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentA, `"from":"A"`)
 
-	contentB := v2ReadFile(t, tree, cpB.Path()+"/0/"+paths.TranscriptFileName)
+	contentB := v2ReadFile(t, tree, cpB.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentB, `"from":"B"`)
 }
 
 func TestV2GitStore_WriteCommitted_WritesBothRefs(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("aa11bb22cc33")
@@ -512,7 +663,7 @@ func TestV2GitStore_WriteCommitted_WritesBothRefs(t *testing.T) {
 		SessionID:    "test-session-both",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		Prompts:      []string{"hi there"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -530,22 +681,22 @@ func TestV2GitStore_WriteCommitted_WritesBothRefs(t *testing.T) {
 	mainSessionTree, err := mainTree.Tree(cpPath + "/0")
 	require.NoError(t, err)
 	for _, entry := range mainSessionTree.Entries {
-		assert.NotEqual(t, paths.TranscriptFileName, entry.Name)
-		assert.NotEqual(t, paths.ContentHashFileName, entry.Name)
+		assert.NotEqual(t, paths.V2RawTranscriptFileName, entry.Name)
+		assert.NotEqual(t, paths.V2RawTranscriptHashFileName, entry.Name)
 	}
 
 	// /full/current ref should have transcript + content hash
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, `"type":"assistant"`)
-	hashContent := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.ContentHashFileName)
+	hashContent := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptHashFileName)
 	assert.True(t, strings.HasPrefix(hashContent, "sha256:"))
 }
 
 func TestV2GitStore_WriteCommitted_NoTranscript_OnlyWritesMain(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("bb22cc33dd44")
@@ -570,7 +721,7 @@ func TestV2GitStore_WriteCommitted_NoTranscript_OnlyWritesMain(t *testing.T) {
 func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("cc33dd44ee55")
@@ -580,7 +731,7 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"from":"X"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"from":"X"}`)),
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -592,7 +743,7 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 		CheckpointID:     cpID,
 		SessionID:        "session-Y",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"from":"Y"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"from":"Y"}`)),
 		CheckpointsCount: 3,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@test.com",
@@ -610,14 +761,14 @@ func TestV2GitStore_WriteCommitted_MultiSession_ConsistentIndex(t *testing.T) {
 
 	// /full/current should have session Y (latest write replaces)
 	fullTree := v2FullTree(t, repo)
-	contentY := v2ReadFile(t, fullTree, cpPath+"/1/"+paths.TranscriptFileName)
+	contentY := v2ReadFile(t, fullTree, cpPath+"/1/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, contentY, `"from":"Y"`)
 }
 
 func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("ff11aa22bb33")
@@ -628,7 +779,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 		SessionID:    "test-session-update",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"type":"assistant","message":"initial"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"initial"}`)),
 		Prompts:      []string{"first prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -639,7 +790,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "test-session-update",
-		Transcript:   []byte(`{"type":"assistant","message":"finalized"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"finalized"}`)),
 		Prompts:      []string{"first prompt", "second prompt"},
 		Agent:        agent.AgentTypeClaudeCode,
 	})
@@ -654,7 +805,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 
 	// /full/current should have finalized transcript
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpPath+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "finalized")
 	assert.NotContains(t, content, "initial")
 }
@@ -662,7 +813,7 @@ func TestV2GitStore_UpdateCommitted_UpdatesBothRefs(t *testing.T) {
 func TestV2GitStore_UpdateCommitted_NoTranscript_OnlyUpdatesMain(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("aa33bb44cc55")
@@ -672,7 +823,7 @@ func TestV2GitStore_UpdateCommitted_NoTranscript_OnlyUpdatesMain(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-noupdate",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"assistant","message":"original"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"original"}`)),
 		Prompts:      []string{"old prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -695,14 +846,14 @@ func TestV2GitStore_UpdateCommitted_NoTranscript_OnlyUpdatesMain(t *testing.T) {
 
 	// /full/current should still have original transcript (not replaced)
 	fullTree := v2FullTree(t, repo)
-	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.TranscriptFileName)
+	content := v2ReadFile(t, fullTree, cpID.Path()+"/0/"+paths.V2RawTranscriptFileName)
 	assert.Contains(t, content, "original")
 }
 
 func TestV2GitStore_UpdateCommitted_CheckpointNotFound(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("bb44cc55dd66")
@@ -711,7 +862,7 @@ func TestV2GitStore_UpdateCommitted_CheckpointNotFound(t *testing.T) {
 	err := store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "nonexistent",
-		Transcript:   []byte(`{"type":"assistant","message":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"hello"}`)),
 		Agent:        agent.AgentTypeClaudeCode,
 	})
 	require.Error(t, err)
@@ -720,7 +871,7 @@ func TestV2GitStore_UpdateCommitted_CheckpointNotFound(t *testing.T) {
 func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	store.maxCheckpointsPerGeneration = 3 // Low threshold for testing
 	ctx := context.Background()
 
@@ -732,7 +883,7 @@ func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 			SessionID:    fmt.Sprintf("session-rot-%d", i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})
@@ -740,19 +891,23 @@ func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 	}
 
 	// Verify an archived generation exists
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Len(t, archived, 1, "one archived generation should exist after rotation")
 
-	// Verify /full/current is now a fresh generation
-	gen, err := store.readGenerationFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	// Verify /full/current is now a fresh generation (empty tree, no generation.json)
+	_, freshTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
 	require.NoError(t, err)
-	assert.Empty(t, gen.Checkpoints, "fresh /full/current should have no checkpoints")
+	freshCount, err := store.CountCheckpointsInTree(freshTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 0, freshCount, "fresh /full/current should have no checkpoints")
 
 	// Verify the archived generation has 3 checkpoints
-	archiveGen, err := store.readGenerationFromRef(plumbing.ReferenceName(paths.V2FullRefPrefix + archived[0]))
+	_, archiveTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullRefPrefix + archived[0]))
 	require.NoError(t, err)
-	assert.Len(t, archiveGen.Checkpoints, 3)
+	archiveCount, err := store.CountCheckpointsInTree(archiveTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 3, archiveCount)
 
 	// Write a 4th checkpoint — should land on the fresh /full/current
 	cpID4 := id.MustCheckpointID("000000000004")
@@ -761,22 +916,23 @@ func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {
 		SessionID:    "session-rot-3",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte(`{"cp":3}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"cp":3}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
 	require.NoError(t, err)
 
-	gen, err = store.readGenerationFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	_, newTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
 	require.NoError(t, err)
-	assert.Len(t, gen.Checkpoints, 1, "new checkpoint should be on fresh generation")
-	assert.Equal(t, cpID4, gen.Checkpoints[0])
+	newCount, err := store.CountCheckpointsInTree(newTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 1, newCount, "new checkpoint should be on fresh generation")
 }
 
 func TestWriteCommitted_NoRotationBelowThreshold(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
+	store := NewV2GitStore(repo, "origin")
 	store.maxCheckpointsPerGeneration = 5
 	ctx := context.Background()
 
@@ -788,7 +944,7 @@ func TestWriteCommitted_NoRotationBelowThreshold(t *testing.T) {
 			SessionID:    fmt.Sprintf("session-norot-%d", i),
 			Strategy:     "manual-commit",
 			Agent:        agent.AgentTypeClaudeCode,
-			Transcript:   []byte(fmt.Sprintf(`{"cp":%d}`, i)),
+			Transcript:   redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"cp":%d}`, i))),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})
@@ -796,11 +952,13 @@ func TestWriteCommitted_NoRotationBelowThreshold(t *testing.T) {
 	}
 
 	// No rotation should have occurred
-	archived, err := store.listArchivedGenerations()
+	archived, err := store.ListArchivedGenerations()
 	require.NoError(t, err)
 	assert.Empty(t, archived, "no archived generations should exist below threshold")
 
-	gen, err := store.readGenerationFromRef(plumbing.ReferenceName(paths.V2FullCurrentRefName))
+	_, noRotTreeHash, err := store.GetRefState(plumbing.ReferenceName(paths.V2FullCurrentRefName))
 	require.NoError(t, err)
-	assert.Len(t, gen.Checkpoints, 3)
+	noRotCount, err := store.CountCheckpointsInTree(noRotTreeHash)
+	require.NoError(t, err)
+	assert.Equal(t, 3, noRotCount)
 }

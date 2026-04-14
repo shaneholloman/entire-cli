@@ -8,12 +8,14 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6/plumbing"
 )
@@ -211,8 +213,9 @@ type WriteCommittedOptions struct {
 	// Branch is the branch name where the checkpoint was created (empty if detached HEAD)
 	Branch string
 
-	// Transcript is the session transcript content (full.jsonl)
-	Transcript []byte
+	// Transcript is the session transcript content (full.jsonl).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains user prompts from the session
 	Prompts []string
@@ -272,6 +275,11 @@ type WriteCommittedOptions struct {
 	// CheckpointTranscriptStart is written to both CommittedMetadata.CheckpointTranscriptStart
 	// and the deprecated CommittedMetadata.TranscriptLinesAtStart for backward compatibility.
 
+	// CompactTranscriptStart is the transcript.jsonl line offset at checkpoint start.
+	// V2 /main writes this to checkpoint_transcript_start; v1 continues to use
+	// CheckpointTranscriptStart (full.jsonl).
+	CompactTranscriptStart int
+
 	// TokenUsage contains the token usage for this checkpoint
 	TokenUsage *agent.TokenUsage
 
@@ -282,6 +290,12 @@ type WriteCommittedOptions struct {
 	// comparing checkpoint tree (agent work) to committed tree (may include human edits)
 	InitialAttribution *InitialAttribution
 
+	// PromptAttributionsJSON is the raw PromptAttributions data, JSON-encoded.
+	// Persisted for diagnostic purposes — shows exactly which prompt recorded
+	// which "user" lines, enabling root cause analysis of attribution bugs.
+	// Uses json.RawMessage to avoid importing session package.
+	PromptAttributionsJSON json.RawMessage
+
 	// Summary is an optional AI-generated summary for this checkpoint.
 	// This field may be nil when:
 	//   - summarization is disabled in settings
@@ -289,6 +303,11 @@ type WriteCommittedOptions struct {
 	//   - the transcript was empty or too short to summarize
 	//   - the checkpoint predates the summarization feature
 	Summary *Summary
+
+	// CompactTranscript is the Entire Transcript Format (transcript.jsonl) bytes.
+	// Written to v2 /main ref alongside metadata. May be nil if compaction
+	// was not performed (unknown agent, compaction error, empty transcript).
+	CompactTranscript []byte
 }
 
 // UpdateCommittedOptions contains options for updating an existing committed checkpoint.
@@ -302,14 +321,19 @@ type UpdateCommittedOptions struct {
 	// SessionID identifies which session slot to update within the checkpoint
 	SessionID string
 
-	// Transcript is the full session transcript (replaces existing)
-	Transcript []byte
+	// Transcript is the full session transcript (replaces existing).
+	// Must be pre-redacted (via redact.JSONLBytes or redact.AlreadyRedacted for trusted sources).
+	Transcript redact.RedactedBytes
 
 	// Prompts contains all user prompts (replaces existing)
 	Prompts []string
 
 	// Agent identifies the agent type (needed for transcript chunking)
 	Agent types.AgentType
+
+	// CompactTranscript is the updated Entire Transcript Format bytes.
+	// If non-nil, replaces the existing transcript.jsonl on v2 /main.
+	CompactTranscript []byte
 }
 
 // CommittedInfo contains summary information about a committed checkpoint.
@@ -371,8 +395,9 @@ type CommittedMetadata struct {
 	// Agent identifies the agent that created this checkpoint (e.g., "Claude Code", "Cursor")
 	Agent types.AgentType `json:"agent,omitempty"`
 
-	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514")
-	Model string `json:"model,omitempty"`
+	// Model is the LLM model used during the session (e.g., "claude-sonnet-4-20250514").
+	// Always written to metadata (empty string when unknown) so consumers can rely on the field's presence.
+	Model string `json:"model"`
 
 	// TurnID correlates checkpoints from the same agent turn.
 	// When a turn's work spans multiple commits, each gets its own checkpoint
@@ -402,6 +427,10 @@ type CommittedMetadata struct {
 
 	// InitialAttribution is line-level attribution calculated at commit time
 	InitialAttribution *InitialAttribution `json:"initial_attribution,omitempty"`
+
+	// PromptAttributions is the raw per-prompt attribution data used to compute InitialAttribution.
+	// Diagnostic field — shows which prompt recorded which "user" lines.
+	PromptAttributions json.RawMessage `json:"prompt_attributions,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.
@@ -419,8 +448,8 @@ func (m CommittedMetadata) GetTranscriptStart() int {
 // Used in CheckpointSummary.Sessions to map session IDs to their file locations.
 type SessionFilePaths struct {
 	Metadata    string `json:"metadata"`
-	Transcript  string `json:"transcript"`
-	ContentHash string `json:"content_hash"`
+	Transcript  string `json:"transcript,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
 	Prompt      string `json:"prompt"`
 }
 
@@ -443,14 +472,15 @@ type SessionFilePaths struct {
 //
 //nolint:revive // Named CheckpointSummary to avoid conflict with existing Summary struct
 type CheckpointSummary struct {
-	CLIVersion       string             `json:"cli_version,omitempty"`
-	CheckpointID     id.CheckpointID    `json:"checkpoint_id"`
-	Strategy         string             `json:"strategy"`
-	Branch           string             `json:"branch,omitempty"`
-	CheckpointsCount int                `json:"checkpoints_count"`
-	FilesTouched     []string           `json:"files_touched"`
-	Sessions         []SessionFilePaths `json:"sessions"`
-	TokenUsage       *agent.TokenUsage  `json:"token_usage,omitempty"`
+	CLIVersion          string              `json:"cli_version,omitempty"`
+	CheckpointID        id.CheckpointID     `json:"checkpoint_id"`
+	Strategy            string              `json:"strategy"`
+	Branch              string              `json:"branch,omitempty"`
+	CheckpointsCount    int                 `json:"checkpoints_count"`
+	FilesTouched        []string            `json:"files_touched"`
+	Sessions            []SessionFilePaths  `json:"sessions"`
+	TokenUsage          *agent.TokenUsage   `json:"token_usage,omitempty"`
+	CombinedAttribution *InitialAttribution `json:"combined_attribution,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report
@@ -492,23 +522,21 @@ type CodeLearning struct {
 // against the committed tree (may include human edits).
 //
 // Attribution Metrics:
-//   - TotalCommitted measures "net additions" (lines added that remain in the commit)
-//   - AgentPercentage represents "of the new code added, what percentage came from the agent"
-//   - Deletion work is tracked separately in HumanRemoved (not included in percentage)
-//
-// Deletion-Only Commits:
-// For commits with only deletions (no additions), TotalCommitted will be 0 and
-// AgentPercentage will be 0. This is by design - the percentage metric is only
-// meaningful for commits that add code. Deletion contributions are captured in
-// the HumanRemoved field but don't affect the attribution percentage.
+//   - TotalCommitted keeps the historical "net additions" view for compatibility
+//   - TotalLinesChanged measures total committed line changes (adds + modifies + removes)
+//   - AgentPercentage represents "of the lines changed in this commit, what percentage came from the agent"
+//   - AgentRemoved tracks committed deletions performed by the agent
 type InitialAttribution struct {
-	CalculatedAt    time.Time `json:"calculated_at"`
-	AgentLines      int       `json:"agent_lines"`      // Lines added by agent (base → shadow diff)
-	HumanAdded      int       `json:"human_added"`      // Lines added by human (excluding modifications)
-	HumanModified   int       `json:"human_modified"`   // Lines modified by human (estimate: min(added, removed))
-	HumanRemoved    int       `json:"human_removed"`    // Lines removed by human (excluding modifications)
-	TotalCommitted  int       `json:"total_committed"`  // Net additions in commit (agent + human new lines, not total file size)
-	AgentPercentage float64   `json:"agent_percentage"` // agent_lines / total_committed * 100 (0 for deletion-only commits)
+	CalculatedAt      time.Time `json:"calculated_at"`
+	AgentLines        int       `json:"agent_lines"`              // Lines added by agent that remain in the commit
+	AgentRemoved      int       `json:"agent_removed"`            // Lines removed by agent that remain removed in the commit
+	HumanAdded        int       `json:"human_added"`              // Lines added by human (excluding modifications)
+	HumanModified     int       `json:"human_modified"`           // Lines modified by human (estimate: min(added, removed))
+	HumanRemoved      int       `json:"human_removed"`            // Lines removed by human (excluding modifications)
+	TotalCommitted    int       `json:"total_committed"`          // Net additions in commit (legacy additions-focused metric)
+	TotalLinesChanged int       `json:"total_lines_changed"`      // Total committed line changes (adds + modifies + removes)
+	AgentPercentage   float64   `json:"agent_percentage"`         // (agent_lines + agent_removed) / total_lines_changed * 100
+	MetricVersion     int       `json:"metric_version,omitempty"` // 0/absent = legacy (additions-only %), 2 = changed-lines %
 }
 
 // Info provides summary information for listing checkpoints.

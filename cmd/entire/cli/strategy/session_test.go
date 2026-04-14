@@ -174,6 +174,9 @@ func TestManualCommitStrategyGetAdditionalSessions(t *testing.T) {
 }
 
 func TestListSessionsFunctionsWithoutRepo(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
 	// Without a git repo, these will fail - just verifying they're callable
 	_, err := ListSessions(context.Background())
 	if err != nil {
@@ -447,7 +450,7 @@ func createTestMultiSessionCheckpoint(t *testing.T, repo *git.Repository, checkp
 	}
 
 	// Build tree
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		t.Fatalf("failed to build tree: %v", err)
 	}
@@ -563,7 +566,7 @@ func createTestMetadataBranchWithPrompt(t *testing.T, repo *git.Repository, sess
 	}
 
 	// Build tree
-	treeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
 	if err != nil {
 		t.Fatalf("failed to build tree: %v", err)
 	}

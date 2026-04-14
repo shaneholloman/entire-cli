@@ -3,7 +3,6 @@ package claudecode
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,7 +20,12 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 		model = "haiku"
 	}
 
-	cmd := exec.CommandContext(ctx, claudePath,
+	commandRunner := c.CommandRunner
+	if commandRunner == nil {
+		commandRunner = exec.CommandContext
+	}
+
+	cmd := commandRunner(ctx, claudePath,
 		"--print", "--output-format", "json",
 		"--model", model, "--setting-sources", "")
 
@@ -36,6 +40,12 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return "", context.Canceled
+		}
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
 			return "", fmt.Errorf("claude CLI not found: %w", err)
@@ -47,15 +57,12 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 		return "", fmt.Errorf("failed to run claude CLI: %w", err)
 	}
 
-	// Parse the {"result": "..."} envelope
-	var response struct {
-		Result string `json:"result"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+	result, err := parseGenerateTextResponse(stdout.Bytes())
+	if err != nil {
 		return "", fmt.Errorf("failed to parse claude CLI response: %w", err)
 	}
 
-	return response.Result, nil
+	return result, nil
 }
 
 // stripGitEnv returns a copy of env with all GIT_* variables removed.
