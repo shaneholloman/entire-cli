@@ -511,7 +511,7 @@ func checkV2GenerationHealth(cmd *cobra.Command, repo *git.Repository) error {
 
 		_, treeHash, refErr := v2Store.GetRefState(refName)
 		if refErr != nil {
-			warnings = append(warnings, fmt.Sprintf("generation %s: cannot read ref", genName))
+			warnings = append(warnings, fmt.Sprintf("generation %s: cannot read ref: %v", genName, refErr))
 			continue
 		}
 
