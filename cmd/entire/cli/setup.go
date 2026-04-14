@@ -1510,82 +1510,82 @@ func promptTelemetryConsent(settings *EntireSettings, telemetryFlag bool) error 
 }
 
 func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, promptFn func() (bool, error)) (bool, error) {
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		return false, nil
-	}
+	repoRoot, rootErr := paths.WorktreeRoot(ctx)
+	if rootErr == nil {
+		vercelJSONPath := filepath.Join(repoRoot, "vercel.json")
+		hasVercelJSON := false
+		if _, err := os.Stat(vercelJSONPath); err == nil {
+			hasVercelJSON = true
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check vercel.json: %v\n", err)
+			return false, nil
+		}
 
-	vercelJSONPath := filepath.Join(repoRoot, "vercel.json")
-	hasVercelJSON := false
-	if _, err := os.Stat(vercelJSONPath); err == nil {
-		hasVercelJSON = true
-	} else if !os.IsNotExist(err) {
-		fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check vercel.json: %v\n", err)
-		return false, nil
-	}
-
-	hasVercelProject := hasVercelJSON
-	if !hasVercelProject {
-		for _, path := range []string{
-			filepath.Join(repoRoot, ".vercel"),
-			filepath.Join(repoRoot, "vercel.ts"),
-		} {
-			if _, err := os.Stat(path); err == nil {
-				hasVercelProject = true
-				break
-			} else if !os.IsNotExist(err) {
-				fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check %s: %v\n", path, err)
-				return false, nil
+		hasVercelProject := hasVercelJSON
+		if !hasVercelProject {
+			for _, path := range []string{
+				filepath.Join(repoRoot, ".vercel"),
+				filepath.Join(repoRoot, "vercel.ts"),
+			} {
+				if _, err := os.Stat(path); err == nil {
+					hasVercelProject = true
+					break
+				} else if !os.IsNotExist(err) {
+					fmt.Fprintf(w, "Note: Skipping Vercel deployment update: could not check %s: %v\n", path, err)
+					return false, nil
+				}
 			}
 		}
-	}
 
-	if !hasVercelProject {
-		return false, nil
-	}
+		if !hasVercelProject {
+			return false, nil
+		}
 
-	projectSettingsPath := filepath.Join(repoRoot, settings.EntireSettingsFile)
-	projectSettings, err := settings.LoadFromFile(projectSettingsPath)
-	if err != nil {
-		return false, fmt.Errorf("load project settings: %w", err)
-	}
-	if projectSettings.Vercel {
-		return false, nil
-	}
+		projectSettingsPath := filepath.Join(repoRoot, settings.EntireSettingsFile)
+		projectSettings, err := settings.LoadFromFile(projectSettingsPath)
+		if err != nil {
+			return false, fmt.Errorf("load project settings: %w", err)
+		}
+		if projectSettings.Vercel {
+			return false, nil
+		}
 
-	if config, alreadyDisabled, loadErr := vercelconfig.Load(vercelJSONPath, hasVercelJSON); loadErr == nil &&
-		config != nil && alreadyDisabled {
+		if config, alreadyDisabled, loadErr := vercelconfig.Load(vercelJSONPath, hasVercelJSON); loadErr == nil &&
+			config != nil && alreadyDisabled {
+			projectSettings.Vercel = true
+			if err := settings.Save(ctx, projectSettings); err != nil {
+				return false, fmt.Errorf("save project settings: %w", err)
+			}
+			fmt.Fprintf(w, "✓ Updated %s to manage Vercel deployment blocking on `%s`\n", configDisplayProject, vercelconfig.BranchPattern)
+			return true, nil
+		}
+
+		if promptFn == nil {
+			if !canPromptInteractively() {
+				fmt.Fprintf(w, "Note: Vercel detected. Run `entire configure` interactively to disable deployments for `%s` branches.\n", vercelconfig.BranchPattern)
+				return false, nil
+			}
+			promptFn = promptVercelDeploymentDisable
+		}
+
+		disableDeployments, err := promptFn()
+		if err != nil {
+			return false, fmt.Errorf("vercel prompt: %w", err)
+		}
+		if !disableDeployments {
+			return false, nil
+		}
+
 		projectSettings.Vercel = true
 		if err := settings.Save(ctx, projectSettings); err != nil {
 			return false, fmt.Errorf("save project settings: %w", err)
 		}
+
 		fmt.Fprintf(w, "✓ Updated %s to manage Vercel deployment blocking on `%s`\n", configDisplayProject, vercelconfig.BranchPattern)
 		return true, nil
 	}
 
-	if promptFn == nil {
-		if !canPromptInteractively() {
-			fmt.Fprintf(w, "Note: Vercel detected. Run `entire configure` interactively to disable deployments for `%s` branches.\n", vercelconfig.BranchPattern)
-			return false, nil
-		}
-		promptFn = promptVercelDeploymentDisable
-	}
-
-	disableDeployments, err := promptFn()
-	if err != nil {
-		return false, fmt.Errorf("vercel prompt: %w", err)
-	}
-	if !disableDeployments {
-		return false, nil
-	}
-
-	projectSettings.Vercel = true
-	if err := settings.Save(ctx, projectSettings); err != nil {
-		return false, fmt.Errorf("save project settings: %w", err)
-	}
-
-	fmt.Fprintf(w, "✓ Updated %s to manage Vercel deployment blocking on `%s`\n", configDisplayProject, vercelconfig.BranchPattern)
-	return true, nil
+	return false, nil
 }
 
 func promptVercelDeploymentDisable() (bool, error) {
@@ -1602,7 +1602,7 @@ func promptVercelDeploymentDisable() (bool, error) {
 	)
 
 	if err := form.Run(); err != nil {
-		return false, err
+		return false, fmt.Errorf("run vercel deployment disable form: %w", err)
 	}
 
 	return disableDeployments, nil

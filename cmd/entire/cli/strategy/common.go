@@ -420,31 +420,34 @@ func EnsureMetadataBranch(repo *git.Repository) error {
 }
 
 func maybeAddVercelConfigToMetadataBranch(repo *git.Repository, rootTreeHash plumbing.Hash) (plumbing.Hash, error) {
-	worktree, err := repo.Worktree()
-	if err != nil {
-		return rootTreeHash, nil
+	worktree, worktreeErr := repo.Worktree()
+	if worktreeErr == nil {
+		projectSettings, settingsErr := settings.LoadFromRepoRoot(worktree.Filesystem.Root())
+		if settingsErr == nil && projectSettings.Vercel {
+			config := map[string]any{}
+			vercelconfig.MergeDeploymentDisabled(config)
+			output, err := vercelconfig.Marshal(config)
+			if err != nil {
+				return plumbing.ZeroHash, fmt.Errorf("marshal %s: %w", vercelconfig.FileName, err)
+			}
+
+			blobHash, err := checkpoint.CreateBlobFromContent(repo, output)
+			if err != nil {
+				return plumbing.ZeroHash, fmt.Errorf("create %s blob: %w", vercelconfig.FileName, err)
+			}
+
+			newTreeHash, err := checkpoint.UpdateSubtree(repo, rootTreeHash, nil, []object.TreeEntry{
+				{Name: vercelconfig.FileName, Mode: filemode.Regular, Hash: blobHash},
+			}, checkpoint.UpdateSubtreeOptions{MergeMode: checkpoint.MergeKeepExisting})
+			if err != nil {
+				return plumbing.ZeroHash, fmt.Errorf("update metadata subtree with %s: %w", vercelconfig.FileName, err)
+			}
+
+			return newTreeHash, nil
+		}
 	}
 
-	projectSettings, err := settings.LoadFromRepoRoot(worktree.Filesystem.Root())
-	if err != nil || !projectSettings.Vercel {
-		return rootTreeHash, nil
-	}
-
-	config := map[string]any{}
-	vercelconfig.MergeDeploymentDisabled(config)
-	output, err := vercelconfig.Marshal(config)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	blobHash, err := checkpoint.CreateBlobFromContent(repo, output)
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("create %s blob: %w", vercelconfig.FileName, err)
-	}
-
-	return checkpoint.UpdateSubtree(repo, rootTreeHash, nil, []object.TreeEntry{
-		{Name: vercelconfig.FileName, Mode: filemode.Regular, Hash: blobHash},
-	}, checkpoint.UpdateSubtreeOptions{MergeMode: checkpoint.MergeKeepExisting})
+	return rootTreeHash, nil
 }
 
 // isEmptyMetadataBranch returns true if the branch ref points to a commit with an empty tree.
