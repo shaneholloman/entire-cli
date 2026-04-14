@@ -91,6 +91,13 @@ func enableUsesSetupFlow(cmd *cobra.Command, agentName string) bool {
 		cmd.Flags().Changed("telemetry")
 }
 
+func enableNeedsAgentManagement(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed("force") ||
+		cmd.Flags().Changed("local-dev") ||
+		cmd.Flags().Changed("absolute-git-hook-path") ||
+		cmd.Flags().Changed("telemetry")
+}
+
 // updateStrategyOptions applies strategy flags to settings without re-running agent setup.
 // Loads and writes only the target file to avoid leaking settings between layers.
 func updateStrategyOptions(ctx context.Context, w io.Writer, opts EnableOptions) error {
@@ -352,12 +359,21 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 		fmt.Fprintln(w, "No changes made.")
 		return nil
 	}
-	var installedAgents []agent.Agent
-	for _, ag := range append(addedAgents, reinstalledAgents...) {
+	var successfullyAddedAgents []agent.Agent
+	for _, ag := range addedAgents {
 		if _, err := setupAgentHooks(ctx, w, ag, opts.LocalDev, opts.ForceHooks); err != nil {
 			errs = append(errs, fmt.Errorf("failed to setup %s hooks: %w", ag.Type(), err))
 		} else {
-			installedAgents = append(installedAgents, ag)
+			successfullyAddedAgents = append(successfullyAddedAgents, ag)
+		}
+	}
+
+	var successfullyReinstalledAgents []agent.Agent
+	for _, ag := range reinstalledAgents {
+		if _, err := setupAgentHooks(ctx, w, ag, opts.LocalDev, opts.ForceHooks); err != nil {
+			errs = append(errs, fmt.Errorf("failed to setup %s hooks: %w", ag.Type(), err))
+		} else {
+			successfullyReinstalledAgents = append(successfullyReinstalledAgents, ag)
 		}
 	}
 
@@ -377,7 +393,7 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 	}
 
 	// Auto-enable external_agents setting if any new agent is external.
-	for _, ag := range installedAgents {
+	for _, ag := range append(successfullyAddedAgents, successfullyReinstalledAgents...) {
 		if external.IsExternal(ag) {
 			s, loadErr := LoadEntireSettings(ctx)
 			if loadErr != nil {
@@ -400,15 +416,22 @@ func applyAgentChanges(ctx context.Context, w io.Writer, selectedAgentNames []st
 	}
 
 	// Print summary of what succeeded
-	if len(installedAgents) > 0 {
-		names := make([]string, 0, len(installedAgents))
-		for _, ag := range installedAgents {
+	if len(successfullyAddedAgents) > 0 {
+		names := make([]string, 0, len(successfullyAddedAgents))
+		for _, ag := range successfullyAddedAgents {
 			names = append(names, string(ag.Type()))
 		}
 		fmt.Fprintf(w, "✓ Added agents: %s\n", strings.Join(names, ", "))
 	}
+	if len(successfullyReinstalledAgents) > 0 {
+		names := make([]string, 0, len(successfullyReinstalledAgents))
+		for _, ag := range successfullyReinstalledAgents {
+			names = append(names, string(ag.Type()))
+		}
+		fmt.Fprintf(w, "✓ Reinstalled agents: %s\n", strings.Join(names, ", "))
+	}
 	if len(uninstalledAgents) > 0 {
-		if len(installedAgents) == 0 && len(addedAgents) == 0 && len(removedAgents) == len(installedNames) {
+		if len(successfullyAddedAgents) == 0 && len(successfullyReinstalledAgents) == 0 && len(addedAgents) == 0 && len(removedAgents) == len(installedNames) {
 			fmt.Fprintln(w, "All agents have been removed.")
 		} else {
 			names := make([]string, 0, len(uninstalledAgents))
@@ -562,23 +585,24 @@ If Entire is already configured but disabled, this re-enables it.`,
 			// Any setup-mutating flags should behave like `configure` on repos that
 			// are already set up. Bare `enable` remains the lightweight re-enable path.
 			if settings.IsSetUpAny(ctx) {
-				if enableUsesSetupFlow(cmd, agentName) {
+				usedSetupFlow := enableUsesSetupFlow(cmd, agentName)
+				if usedSetupFlow {
 					if hasStrategyFlags(cmd) {
-						return updateStrategyOptions(ctx, cmd.OutOrStdout(), opts)
+						if err := updateStrategyOptions(ctx, cmd.OutOrStdout(), opts); err != nil {
+							return err
+						}
 					}
-					return runManageAgents(ctx, cmd.OutOrStdout(), opts, nil)
+					if enableNeedsAgentManagement(cmd) {
+						if err := runManageAgents(ctx, cmd.OutOrStdout(), opts, nil); err != nil {
+							return err
+						}
+					}
 				}
 
-				updatedStrategy := hasStrategyFlags(cmd)
-				if updatedStrategy {
-					if err := updateStrategyOptions(ctx, cmd.OutOrStdout(), opts); err != nil {
-						return err
-					}
-				}
 				enabled, err := IsEnabled(ctx)
 				if err == nil && enabled {
 					w := cmd.OutOrStdout()
-					if !updatedStrategy {
+					if !usedSetupFlow {
 						fmt.Fprintln(w, "Entire is already enabled.")
 					}
 					printEnabledStatus(ctx, w)

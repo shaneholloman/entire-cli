@@ -1014,6 +1014,92 @@ func TestEnableCmd_ForceOnConfiguredRepo_UsesConfigureFlow(t *testing.T) {
 	}
 }
 
+func TestEnableCmd_ForceOnConfiguredDisabledRepo_Reenables(t *testing.T) {
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
+
+	cmd := newEnableCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("enable --force error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Cannot show agent selection in non-interactive mode.") {
+		t.Fatalf("expected enable --force to route through manage agents before enabling, got: %s", output)
+	}
+	if !strings.Contains(output, "Entire is now enabled.") {
+		t.Fatalf("expected enable --force to still enable the repo, got: %s", output)
+	}
+
+	enabled, err := IsEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("IsEnabled() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected repo to be enabled after enable --force")
+	}
+}
+
+func TestEnableCmd_ForceAndStrategyFlagsOnConfiguredDisabledRepo_ReenablesAndUpdatesSettings(t *testing.T) {
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
+
+	cmd := newEnableCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--force", "--checkpoint-remote", "github:org/repo", "--skip-push-sessions"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("enable with force and strategy flags error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Settings updated") {
+		t.Fatalf("expected strategy flags to be applied, got: %s", output)
+	}
+	if !strings.Contains(output, "Cannot show agent selection in non-interactive mode.") {
+		t.Fatalf("expected force handling to still reach manage agents, got: %s", output)
+	}
+	if !strings.Contains(output, "Entire is now enabled.") {
+		t.Fatalf("expected repo to be enabled after updating settings, got: %s", output)
+	}
+
+	enabled, err := IsEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("IsEnabled() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected repo to be enabled after enable with strategy flags")
+	}
+
+	s, err := LoadEntireSettings(context.Background())
+	if err != nil {
+		t.Fatalf("LoadEntireSettings() error = %v", err)
+	}
+	if got := s.StrategyOptions["push_sessions"]; got != false {
+		t.Fatalf("push_sessions = %v, want false", got)
+	}
+	checkpointRemote, ok := s.StrategyOptions["checkpoint_remote"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("checkpoint_remote = %#v, want map", s.StrategyOptions["checkpoint_remote"])
+	}
+	if checkpointRemote["provider"] != "github" || checkpointRemote["repo"] != "org/repo" {
+		t.Fatalf("checkpoint_remote = %#v, want github/org/repo", checkpointRemote)
+	}
+}
+
 // Tests for canPromptInteractively
 
 func TestCanPromptInteractively_EnvVar_True(t *testing.T) {
@@ -1731,6 +1817,31 @@ func TestManageAgents_ForceReinstallsSelectedAgentHooks(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "No changes made.") {
 		t.Errorf("Force reinstall should not be treated as no-op, got: %s", buf.String())
+	}
+}
+
+func TestManageAgents_ForceReportsReinstalledAgentsSeparately(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{ForceHooks: true}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "Reinstalled agents") {
+		t.Errorf("Expected force reinstall summary to mention reinstalled agents, got: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "Added agents") {
+		t.Errorf("Force reinstall should not be reported as added agents, got: %s", buf.String())
 	}
 }
 
