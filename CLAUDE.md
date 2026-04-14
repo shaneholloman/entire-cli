@@ -140,6 +140,8 @@ t.Chdir(tmpDir)                                 // redirect CWD-based git resolu
 mise run fmt && mise run lint
 ```
 
+`mise run fmt` can rewrite files. Treat `mise run fmt && mise run lint` as a single verification sequence: if formatting changes anything, run lint again on the formatted tree rather than assuming a previous lint result still applies.
+
 ### Before Every Commit (REQUIRED)
 
 **CI will fail if you skip these steps:**
@@ -157,6 +159,8 @@ mise run test:ci  # Run all tests (unit + integration)
 ```
 
 `mise run check` runs the three commands above.
+
+Safety note: do not treat a clean `mise run lint` result as final unless it was run after the most recent `mise run fmt` pass.
 
 **Common CI failures from skipping this:**
 
