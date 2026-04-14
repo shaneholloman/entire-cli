@@ -242,15 +242,22 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		}
 	}
 
-	// If not found locally, fetch metadata branch from remote and retry.
+	// If not found locally, fetch metadata from remote and retry.
 	// This handles the case where we're looking at a checkpoint from another
 	// collaborator's PR whose metadata hasn't been fetched yet.
 	// Try origin first (fast treeless fetch, ~1-2s), then checkpoint_remote
-	// if configured and origin didn't have it.
+	// if configured and origin didn't have it. Fetch both v1 and v2 refs.
 	if len(matches) == 0 {
 		fetched := FetchMetadataTreeOnly(ctx) == nil
 		if !fetched {
 			fetched = FetchMetadataFromCheckpointRemote(ctx) == nil
+		}
+		if preferCheckpointsV2 {
+			v2Fetched := FetchV2MainTreeOnly(ctx) == nil
+			if !v2Fetched {
+				v2Fetched = FetchV2MetadataFromCheckpointRemote(ctx) == nil
+			}
+			fetched = fetched || v2Fetched
 		}
 		if fetched {
 			if freshRepo, repoErr := openRepository(ctx); repoErr == nil {
