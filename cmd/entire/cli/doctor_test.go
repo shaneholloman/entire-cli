@@ -457,7 +457,7 @@ func TestCheckV2CheckpointCounts_FullExceedsMain(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2CheckpointCounts(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "INCONSISTENT")
 }
 
@@ -579,7 +579,7 @@ func TestCheckV2GenerationHealth_MissingGenerationJSON(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "WARNING")
 	assert.Contains(t, stdout.String(), "missing generation.json")
 }
@@ -600,7 +600,7 @@ func TestCheckV2GenerationHealth_InvalidTimestamps(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "WARNING")
 	assert.Contains(t, stdout.String(), "invalid timestamps")
 }
@@ -620,7 +620,7 @@ func TestCheckV2GenerationHealth_PartialTimestamp_MissingNewest(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "WARNING")
 	assert.Contains(t, stdout.String(), "incomplete generation.json")
 }
@@ -640,7 +640,7 @@ func TestCheckV2GenerationHealth_PartialTimestamp_MissingOldest(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "WARNING")
 	assert.Contains(t, stdout.String(), "incomplete generation.json")
 }
@@ -661,7 +661,7 @@ func TestCheckV2GenerationHealth_EmptyGeneration(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "WARNING")
 	assert.Contains(t, stdout.String(), "empty")
 }
@@ -688,7 +688,7 @@ func TestCheckV2GenerationHealth_SequenceGap(t *testing.T) {
 	cmd, stdout, _ := newTestCmd(t)
 
 	err = checkV2GenerationHealth(cmd, repo)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, stdout.String(), "INFO")
 	assert.Contains(t, stdout.String(), "gap")
 }

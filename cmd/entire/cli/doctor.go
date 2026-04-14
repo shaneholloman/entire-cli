@@ -549,10 +549,10 @@ func checkV2GenerationHealth(cmd *cobra.Command, repo *git.Repository) error {
 		for _, warning := range warnings {
 			fmt.Fprintf(w, "  %s\n", warning)
 		}
-	} else {
-		fmt.Fprintf(w, "✓ v2 generations: OK (%d archived)\n", len(archived))
+		return fmt.Errorf("v2 generation health: %d issue(s) found", len(warnings))
 	}
 
+	fmt.Fprintf(w, "✓ v2 generations: OK (%d archived)\n", len(archived))
 	return nil
 }
 
@@ -597,10 +597,10 @@ func checkV2CheckpointCounts(cmd *cobra.Command, repo *git.Repository) error {
 
 	if fullCount > mainCount {
 		fmt.Fprintf(w, "v2 checkpoint counts: INCONSISTENT — /full/current has %d checkpoints but /main has only %d\n", fullCount, mainCount)
-	} else {
-		fmt.Fprintf(w, "✓ v2 checkpoint counts: OK (main: %d, full/current: %d)\n", mainCount, fullCount)
+		return fmt.Errorf("v2 checkpoint counts inconsistent: /full/current (%d) exceeds /main (%d)", fullCount, mainCount)
 	}
 
+	fmt.Fprintf(w, "✓ v2 checkpoint counts: OK (main: %d, full/current: %d)\n", mainCount, fullCount)
 	return nil
 }
 
