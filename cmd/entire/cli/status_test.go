@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/object"
@@ -581,6 +583,128 @@ func TestWriteActiveSessions_EndedSessionsExcluded(t *testing.T) {
 	// Should produce no output when all sessions are ended
 	if buf.Len() != 0 {
 		t.Errorf("Expected empty output with only ended sessions, got: %s", buf.String())
+	}
+}
+
+func TestWriteActiveSessions_ReconcilesKnownCheckpointAfterReset(t *testing.T) {
+	setupTestRepo(t)
+
+	repoDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
+	testutil.WriteFile(t, repoDir, "tracked.txt", "checkpoint")
+	testutil.GitAdd(t, repoDir, "tracked.txt")
+	testutil.GitCommit(t, repoDir, "checkpoint commit\n\nEntire-Checkpoint: abc123def456")
+	checkpointCommit := testutil.GetHeadHash(t, repoDir)
+
+	testutil.WriteFile(t, repoDir, "tracked.txt", "checkpoint\nfollow-up")
+	testutil.GitAdd(t, repoDir, "tracked.txt")
+	testutil.GitCommit(t, repoDir, "follow-up commit")
+	followUpCommit := testutil.GetHeadHash(t, repoDir)
+
+	cmd := exec.CommandContext(context.Background(), "git", "reset", "--hard", checkpointCommit)
+	cmd.Dir = repoDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard failed: %v\nOutput: %s", err, output)
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatalf("NewStateStore() error = %v", err)
+	}
+
+	now := time.Now()
+	state := &session.State{
+		SessionID:             "reset-reconcile-session",
+		WorktreePath:          repoDir,
+		StartedAt:             now.Add(-10 * time.Minute),
+		BaseCommit:            followUpCommit,
+		AttributionBaseCommit: followUpCommit,
+		LastCheckpointID:      "abc123def456",
+	}
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	var buf bytes.Buffer
+	sty := newStatusStyles(&buf)
+	writeActiveSessions(context.Background(), &buf, sty)
+
+	reloaded, err := store.Load(context.Background(), state.SessionID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reloaded.BaseCommit != checkpointCommit {
+		t.Fatalf("BaseCommit = %q, want %q", reloaded.BaseCommit, checkpointCommit)
+	}
+	if reloaded.AttributionBaseCommit != checkpointCommit {
+		t.Fatalf("AttributionBaseCommit = %q, want %q", reloaded.AttributionBaseCommit, checkpointCommit)
+	}
+
+	if strings.Contains(buf.String(), "tracking diverged from current HEAD") {
+		t.Fatalf("expected no divergence warning after safe reset reconciliation, got: %s", buf.String())
+	}
+}
+
+func TestWriteActiveSessions_WarnsWhenResetDivergesWithoutKnownCheckpoint(t *testing.T) {
+	setupTestRepo(t)
+
+	repoDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+
+	testutil.WriteFile(t, repoDir, "tracked.txt", "base")
+	testutil.GitAdd(t, repoDir, "tracked.txt")
+	testutil.GitCommit(t, repoDir, "base commit")
+	baseCommit := testutil.GetHeadHash(t, repoDir)
+
+	testutil.WriteFile(t, repoDir, "tracked.txt", "base\nfollow-up")
+	testutil.GitAdd(t, repoDir, "tracked.txt")
+	testutil.GitCommit(t, repoDir, "follow-up commit")
+	followUpCommit := testutil.GetHeadHash(t, repoDir)
+
+	cmd := exec.CommandContext(context.Background(), "git", "reset", "--hard", baseCommit)
+	cmd.Dir = repoDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git reset --hard failed: %v\nOutput: %s", err, output)
+	}
+
+	store, err := session.NewStateStore(context.Background())
+	if err != nil {
+		t.Fatalf("NewStateStore() error = %v", err)
+	}
+
+	now := time.Now()
+	state := &session.State{
+		SessionID:             "reset-warning-session",
+		WorktreePath:          repoDir,
+		StartedAt:             now.Add(-10 * time.Minute),
+		BaseCommit:            followUpCommit,
+		AttributionBaseCommit: followUpCommit,
+		LastCheckpointID:      "abc123def456",
+	}
+	if err := store.Save(context.Background(), state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	var buf bytes.Buffer
+	sty := newStatusStyles(&buf)
+	writeActiveSessions(context.Background(), &buf, sty)
+
+	reloaded, err := store.Load(context.Background(), state.SessionID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if reloaded.BaseCommit != followUpCommit {
+		t.Fatalf("BaseCommit = %q, want unchanged %q", reloaded.BaseCommit, followUpCommit)
+	}
+	if !strings.Contains(buf.String(), "tracking diverged from current HEAD after git history movement") {
+		t.Fatalf("expected divergence warning, got: %s", buf.String())
 	}
 }
 

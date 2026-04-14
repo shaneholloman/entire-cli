@@ -18,9 +18,16 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
+	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
+	"github.com/go-git/go-git/v6"
 	"github.com/spf13/cobra"
 )
+
+type headLinkage struct {
+	commitHash   string
+	checkpointID string
+}
 
 func newStatusCmd() *cobra.Command {
 	var detailed bool
@@ -244,6 +251,12 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 		return
 	}
 
+	repoRoot, head, headErr := currentHeadLinkage(ctx)
+	divergenceWarnings := make(map[string]string)
+	if headErr == nil && repoRoot != "" && head.commitHash != "" {
+		divergenceWarnings = reconcileActiveSessionHeadDivergence(ctx, store, active, repoRoot, head)
+	}
+
 	// Group by worktree path
 	groups := make(map[string]*worktreeGroup)
 	for _, s := range active {
@@ -342,6 +355,9 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 			} else {
 				fmt.Fprintln(w, sty.render(sty.dim, statsLine))
 			}
+			if warning := divergenceWarnings[st.SessionID]; warning != "" {
+				fmt.Fprintf(w, "%s %s\n", sty.render(sty.yellow, "!"), sty.render(sty.yellow, warning))
+			}
 			fmt.Fprintln(w)
 		}
 	}
@@ -426,4 +442,78 @@ func resolveWorktreeBranchGit(ctx context.Context, worktreePath string) string {
 		return strings.TrimPrefix(ref, "refs/heads/")
 	}
 	return detachedHEADDisplay
+}
+
+func currentHeadLinkage(ctx context.Context) (string, headLinkage, error) {
+	repoRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return "", headLinkage{}, fmt.Errorf("resolve worktree root: %w", err)
+	}
+
+	repo, err := git.PlainOpen(repoRoot)
+	if err != nil {
+		return "", headLinkage{}, fmt.Errorf("open repo: %w", err)
+	}
+
+	headRef, err := repo.Head()
+	if err != nil {
+		return "", headLinkage{}, fmt.Errorf("resolve HEAD: %w", err)
+	}
+
+	commit, err := repo.CommitObject(headRef.Hash())
+	if err != nil {
+		return "", headLinkage{}, fmt.Errorf("load HEAD commit: %w", err)
+	}
+
+	head := headLinkage{commitHash: headRef.Hash().String()}
+	if checkpointIDs := trailers.ParseAllCheckpoints(commit.Message); len(checkpointIDs) > 0 {
+		head.checkpointID = checkpointIDs[0].String()
+	}
+
+	return repoRoot, head, nil
+}
+
+func reconcileActiveSessionHeadDivergence(
+	ctx context.Context,
+	store *session.StateStore,
+	active []*session.State,
+	repoRoot string,
+	head headLinkage,
+) map[string]string {
+	warnings := make(map[string]string)
+	normalizedRepoRoot := normalizeWorktreePath(repoRoot)
+
+	for _, st := range active {
+		if normalizeWorktreePath(st.WorktreePath) != normalizedRepoRoot || st.BaseCommit == "" || st.BaseCommit == head.commitHash {
+			continue
+		}
+
+		if !st.LastCheckpointID.IsEmpty() && head.checkpointID != "" && st.LastCheckpointID.String() == head.checkpointID {
+			st.BaseCommit = head.commitHash
+			st.AttributionBaseCommit = head.commitHash
+			if err := store.Save(ctx, st); err != nil {
+				warnings[st.SessionID] = "tracking diverged from current HEAD; failed to refresh local linkage state"
+			}
+			continue
+		}
+
+		if head.checkpointID != "" {
+			warnings[st.SessionID] = "tracking diverged from current HEAD; HEAD links to checkpoint " + head.checkpointID
+			continue
+		}
+
+		warnings[st.SessionID] = "tracking diverged from current HEAD after git history movement"
+	}
+
+	return warnings
+}
+
+func normalizeWorktreePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(path)
 }
