@@ -208,9 +208,17 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 		return err
 	}
 
-	// Clear existing transcript entries at this session path before writing new ones
+	// Clear existing transcript artifacts for this session path before writing new ones.
+	// Preserve non-transcript metadata under the same session (e.g., tasks/*).
+	rawTranscriptPath := sessionPath + paths.V2RawTranscriptFileName
+	rawHashPath := sessionPath + paths.V2RawTranscriptHashFileName
 	for key := range entries {
-		if strings.HasPrefix(key, sessionPath) {
+		switch {
+		case key == rawTranscriptPath:
+			delete(entries, key)
+		case strings.HasPrefix(key, rawTranscriptPath+"."):
+			delete(entries, key)
+		case key == rawHashPath:
 			delete(entries, key)
 		}
 	}
