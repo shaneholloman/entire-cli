@@ -478,34 +478,14 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
 	}
 
-	// Create or fast-forward the local branch so reads via the local ref pick up
-	// newly-fetched data. CRITICAL: never force-rewind an existing local ref —
-	// doing so orphans locally-committed-but-unpushed checkpoint commits (which
-	// can then be garbage-collected). Update only when we can prove the current
-	// local hash is an ancestor of the remote hash.
-	localRefName := plumbing.NewBranchReferenceName(branchName)
-	currentLocal, localErr := repo.Reference(localRefName, true)
-	if localErr == nil && currentLocal.Hash() == remoteRef.Hash() {
-		return nil
-	}
-
-	if localErr == nil {
-		// If remote's commit is reachable by walking back from local, local is
-		// already at or ahead of remote — leaving it alone is the safe choice.
-		// IsAncestorOf walks from local (which has full history), so shallow
-		// fetches don't affect this check.
-		if strategy.IsAncestorOf(ctx, repo, remoteRef.Hash(), currentLocal.Hash()) {
-			return nil
-		}
-	}
-
-	localRef := plumbing.NewHashReference(localRefName, remoteRef.Hash())
-	if err := repo.Storer.SetReference(localRef); err != nil {
-		return fmt.Errorf("failed to create local %s branch: %w", branchName, err)
-	}
-
-	return nil
+	return safelyAdvanceLocalRef(ctx, repo, plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
 }
+
+// v2MainFetchTmpRef is the temporary ref that FetchV2Main* functions use to
+// land fetched hashes before safely updating the local ref. Writing directly
+// to refs/entire/checkpoints/v2/main via `+refspec` would force-overwrite
+// locally-ahead commits.
+const v2MainFetchTmpRef = "refs/entire-fetch-tmp/v2-main"
 
 // FetchV2MainTreeOnly fetches the tip of the v2 /main ref from origin with
 // --depth=1 --filter=blob:none, downloading only the latest commit and its
@@ -520,7 +500,7 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 		return fmt.Errorf("failed to resolve fetch target: %w", err)
 	}
 
-	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, v2MainFetchTmpRef)
 
 	fetchArgs := strategy.AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", "--depth=1", fetchTarget, refSpec})
 	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
@@ -531,7 +511,7 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 		return formatFilteredFetchError("failed to treeless-fetch v2 /main", fetchTarget, output, fetchErr)
 	}
 
-	return nil
+	return applyV2MainFromTmpRef(ctx)
 }
 
 // FetchV2MainRef fetches the v2 /main ref from origin.
@@ -547,7 +527,7 @@ func FetchV2MainRef(ctx context.Context) error {
 		return fmt.Errorf("failed to resolve fetch target: %w", err)
 	}
 
-	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
+	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, v2MainFetchTmpRef)
 
 	fetchArgs := strategy.AppendFetchFilterArgs(ctx, []string{"fetch", "--no-tags", fetchTarget, refSpec})
 	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, fetchArgs...)
@@ -558,6 +538,56 @@ func FetchV2MainRef(ctx context.Context) error {
 		return formatFilteredFetchError("failed to fetch v2 /main", fetchTarget, output, fetchErr)
 	}
 
+	return applyV2MainFromTmpRef(ctx)
+}
+
+// applyV2MainFromTmpRef promotes v2MainFetchTmpRef to the real V2MainRefName
+// (with safe ancestry check), then removes the tmp ref.
+func applyV2MainFromTmpRef(ctx context.Context) error {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	tmpRefName := plumbing.ReferenceName(v2MainFetchTmpRef)
+	tmpRef, err := repo.Reference(tmpRefName, true)
+	if err != nil {
+		return fmt.Errorf("v2 /main not found after fetch (tmp ref %s missing): %w", v2MainFetchTmpRef, err)
+	}
+	fetchedHash := tmpRef.Hash()
+
+	if err := safelyAdvanceLocalRef(ctx, repo, plumbing.ReferenceName(paths.V2MainRefName), fetchedHash); err != nil {
+		return err
+	}
+
+	_ = repo.Storer.RemoveReference(tmpRefName) //nolint:errcheck // cleanup is best-effort
+	return nil
+}
+
+// safelyAdvanceLocalRef updates localRefName to point at targetHash, but only
+// when doing so cannot rewind a locally-ahead ref. Specifically, when a local
+// ref exists and targetHash is reachable by walking back from the local hash,
+// the local ref is already at or ahead of the target — leaving it alone is
+// the safe choice. Otherwise (local missing, equal, or behind) the ref is
+// updated to targetHash.
+//
+// The ancestry check walks from the local ref (which has full history), so
+// callers that fetched with --depth=1 do not break the check.
+func safelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash) error {
+	currentLocal, localErr := repo.Reference(localRefName, true)
+	if localErr == nil {
+		if currentLocal.Hash() == targetHash {
+			return nil
+		}
+		if strategy.IsAncestorOf(ctx, repo, targetHash, currentLocal.Hash()) {
+			return nil
+		}
+	}
+
+	newRef := plumbing.NewHashReference(localRefName, targetHash)
+	if err := repo.Storer.SetReference(newRef); err != nil {
+		return fmt.Errorf("failed to update local ref %s: %w", localRefName, err)
+	}
 	return nil
 }
 
