@@ -60,7 +60,7 @@ func TestFactoryCommittedCheckpointExcludesPreExistingUntrackedFiles(t *testing.
 		testutil.WaitForFileExists(t, s.Dir, "docs/factory-prehook-worker.md", 10*time.Second)
 		taskPoint := waitForTaskRewindPoint(t, s.Dir, 15*time.Second)
 
-		s.Git(t, "add", ".")
+		s.Git(t, "add", "docs/factory-prehook-worker.md")
 		s.Git(t, "commit", "-m", "Add factory worker checkpoint regression fixtures")
 
 		testutil.WaitForCheckpoint(t, s, 30*time.Second)
