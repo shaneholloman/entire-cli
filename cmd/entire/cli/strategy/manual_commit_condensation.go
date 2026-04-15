@@ -422,17 +422,26 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 
 // buildSummaryGenerator returns a Generator based on the configured summary provider.
 // Returns nil if no provider is configured (GenerateFromTranscript falls back to ClaudeGenerator).
-func buildSummaryGenerator(ctx context.Context) *summarize.TextGeneratorAdapter {
+//
+// The return type is the summarize.Generator interface rather than the concrete
+// adapter pointer so callers can't accidentally hold a non-nil interface that
+// wraps a nil pointer (the classic Go nil-interface footgun).
+func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // intentional: return nil interface directly to avoid nil-pointer-wrapped-in-interface bug
 	s, err := settings.Load(ctx)
 	if err != nil {
-		logging.Debug(ctx, "could not load settings for summary provider", "error", err.Error())
+		// Warn (not Debug): this is the auto-summarize hot path on every commit.
+		// A settings-load failure silently downgrades the user's configured
+		// provider to the default, and Debug would hide that from operators.
+		logging.Warn(ctx, "could not load settings for summary provider, using default",
+			"error", err.Error())
 		return nil
 	}
 	if s.SummaryGeneration == nil || s.SummaryGeneration.Provider == "" {
 		return nil
 	}
 
-	ag, err := agent.Get(types.AgentName(s.SummaryGeneration.Provider))
+	providerName := types.AgentName(s.SummaryGeneration.Provider)
+	ag, err := agent.Get(providerName)
 	if err != nil {
 		logging.Warn(ctx, "configured summary provider not available, using default",
 			"provider", s.SummaryGeneration.Provider, "error", err.Error())
@@ -446,14 +455,9 @@ func buildSummaryGenerator(ctx context.Context) *summarize.TextGeneratorAdapter 
 		return nil
 	}
 
-	model := s.SummaryGeneration.Model
-	if types.AgentName(s.SummaryGeneration.Provider) == agent.AgentNameClaudeCode && model == "" {
-		model = summarize.DefaultModel
-	}
-
 	return &summarize.TextGeneratorAdapter{
 		TextGenerator: tg,
-		Model:         model,
+		Model:         summarize.ResolveModel(providerName, s.SummaryGeneration.Model),
 	}
 }
 

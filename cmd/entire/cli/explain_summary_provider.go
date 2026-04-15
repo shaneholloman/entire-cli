@@ -97,7 +97,15 @@ func listEnabledSummaryProviders(ctx context.Context) []checkpointSummaryProvide
 			continue
 		}
 		present, err := ag.DetectPresence(ctx)
-		if err != nil || !present {
+		if err != nil {
+			// Log at Debug so a broken install (e.g., permission error on the
+			// agent's config dir) doesn't silently masquerade as "not installed"
+			// without any trace.
+			logging.Debug(ctx, "summary provider presence detection failed, skipping",
+				"agent", string(name), "error", err.Error())
+			continue
+		}
+		if !present {
 			continue
 		}
 		providers = append(providers, checkpointSummaryProvider{
@@ -142,12 +150,8 @@ func buildCheckpointSummaryProvider(name types.AgentName, model string) (*checkp
 		return nil, fmt.Errorf("agent %s does not support summary generation", name)
 	}
 
-	effectiveModel := model
-	displayModel := model
-	if name == agent.AgentNameClaudeCode && effectiveModel == "" {
-		effectiveModel = summarize.DefaultModel
-		displayModel = summarize.DefaultModel
-	}
+	effectiveModel := summarize.ResolveModel(name, model)
+	displayModel := effectiveModel
 	if displayModel == "" {
 		displayModel = "provider default"
 	}
