@@ -11,19 +11,18 @@ import (
 var copilotCommandRunner = exec.CommandContext
 
 // GenerateText sends a prompt to the Copilot CLI and returns the raw text response.
+//
+// The prompt is piped via stdin rather than -p to avoid argv size limits.
+// --allow-all-tools is required for non-interactive mode; --disable-builtin-mcps
+// skips loading the GitHub MCP server that isn't needed for summary text
+// generation and reduces per-call input tokens.
 func (c *CopilotCLIAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
-	if err := agent.ValidateInlinePromptSize("copilot", prompt); err != nil {
-		return "", fmt.Errorf("copilot text generation failed: %w", err)
-	}
-
-	// --disable-builtin-mcps skips loading the GitHub MCP server, which isn't
-	// needed for summary text generation and reduces per-call input tokens.
-	args := []string{"-p", prompt, "--allow-all-tools", "--disable-builtin-mcps"}
+	args := []string{"--allow-all-tools", "--disable-builtin-mcps"}
 	if model != "" {
 		args = append(args, "--model", model)
 	}
 
-	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, copilotCommandRunner, "copilot", "copilot", args, "")
+	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, copilotCommandRunner, "copilot", "copilot", args, prompt)
 	if err != nil {
 		return "", fmt.Errorf("copilot text generation failed: %w", err)
 	}

@@ -10,11 +10,6 @@ import (
 	"strings"
 )
 
-// MaxInlinePromptBytes is the largest prompt we allow to be passed as a single
-// CLI argument. This stays well below common argv limits so long transcripts
-// fail predictably instead of hitting OS-dependent exec errors.
-const MaxInlinePromptBytes = 64 * 1024
-
 // TextCommandRunner matches exec.CommandContext and allows tests to inject a runner.
 type TextCommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 
@@ -67,20 +62,6 @@ func RunIsolatedTextGeneratorCLI(ctx context.Context, runner TextCommandRunner, 
 		return "", fmt.Errorf("%s CLI returned empty output", displayName)
 	}
 	return result, nil
-}
-
-// ValidateInlinePromptSize rejects prompts that are too large to safely pass as
-// a single CLI argument on providers that do not support stdin prompt input.
-func ValidateInlinePromptSize(displayName, prompt string) error {
-	if len(prompt) <= MaxInlinePromptBytes {
-		return nil
-	}
-	return fmt.Errorf(
-		"%s prompt too large for CLI argument transport (%d bytes > %d bytes); choose a summary provider that accepts stdin for large transcripts",
-		displayName,
-		len(prompt),
-		MaxInlinePromptBytes,
-	)
 }
 
 func StripGitEnv(env []string) []string {

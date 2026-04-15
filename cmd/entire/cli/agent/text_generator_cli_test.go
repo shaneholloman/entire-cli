@@ -186,24 +186,6 @@ func TestRunIsolatedTextGeneratorCLI_DeadlineExceededPreservesSentinel(t *testin
 	}
 }
 
-func TestValidateInlinePromptSize(t *testing.T) {
-	t.Parallel()
-
-	okPrompt := strings.Repeat("a", MaxInlinePromptBytes)
-	if err := ValidateInlinePromptSize("test", okPrompt); err != nil {
-		t.Fatalf("expected prompt at limit to pass, got %v", err)
-	}
-
-	tooLargePrompt := strings.Repeat("a", MaxInlinePromptBytes+1)
-	err := ValidateInlinePromptSize("test", tooLargePrompt)
-	if err == nil {
-		t.Fatal("expected oversized prompt error")
-	}
-	if !strings.Contains(err.Error(), "too large for CLI argument transport") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 func TestStripGitEnv(t *testing.T) {
 	t.Parallel()
 
