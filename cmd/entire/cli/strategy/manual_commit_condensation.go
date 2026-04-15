@@ -156,9 +156,9 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	// Best-effort transcript resolution fallback: if extraction found no transcript,
 	// try to resolve it from the agent's native storage using the session ID.
-	// This covers cases where TranscriptPath was never set (e.g., Codex subagent
-	// hooks don't include transcript_path) but the agent wrote a transcript to its
-	// own storage directory.
+	// This covers cases where TranscriptPath was never set (e.g., Codex hooks may
+	// send transcript_path as null) but the agent wrote a transcript to its own
+	// storage directory.
 	if len(sessionData.Transcript) == 0 && ag != nil {
 		if data, resolvedPath := resolveTranscriptFromAgentStorage(ctx, ag, state); len(data) > 0 {
 			sessionData.Transcript = data
@@ -396,7 +396,7 @@ func (s *ManualCommitStrategy) extractOrCreateSessionData(ctx context.Context, r
 	default:
 		// No shadow branch and no transcript path — create empty session data.
 		// This happens for sessions where the agent never set TranscriptPath
-		// (e.g., Codex subagent hooks omit it). The fallback resolution and
+		// (e.g., Codex hooks may send null transcript_path). The fallback resolution and
 		// skip gate in CondenseSession will attempt to locate the transcript
 		// via the agent's storage, or skip condensation if nothing is found.
 		logging.Warn(logging.WithComponent(ctx, "checkpoint"),

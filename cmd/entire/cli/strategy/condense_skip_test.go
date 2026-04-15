@@ -221,7 +221,7 @@ func TestTryAgentCommitFastPath_SkipsEmptySession(t *testing.T) {
 	commitMsgFile := filepath.Join(dir, "COMMIT_EDITMSG")
 	require.NoError(t, os.WriteFile(commitMsgFile, []byte("test commit\n"), 0o644))
 
-	// Empty session: no transcript path, no files, no step count (Codex subagent pattern)
+	// Empty session: no transcript path, no files, no step count (Codex companion pattern)
 	emptySession := &SessionState{
 		SessionID: "empty-codex-session",
 		AgentType: "Codex",
@@ -277,7 +277,7 @@ func TestTryAgentCommitFastPath_SkipsEmptyButAcceptsContentSession(t *testing.T)
 	commitMsgFile := filepath.Join(dir, "COMMIT_EDITMSG")
 	require.NoError(t, os.WriteFile(commitMsgFile, []byte("test commit\n"), 0o644))
 
-	// Two sessions: empty Codex subagent + Claude Code with content
+	// Two sessions: empty Codex companion + Claude Code with content
 	emptySession := &SessionState{
 		SessionID: "empty-codex-session",
 		AgentType: "Codex",
