@@ -382,11 +382,10 @@ func (s *ManualCommitStrategy) extractOrCreateSessionData(ctx context.Context, r
 	default:
 		// No shadow branch and no transcript path — create empty session data.
 		// This happens for sessions where the agent never set TranscriptPath
-		// (e.g., Codex hooks may send null transcript_path). The fallback resolution and
-		// skip gate in CondenseSession will attempt to locate the transcript
-		// via the agent's storage, or skip condensation if nothing is found.
+		// (e.g., Codex hooks may send null transcript_path). The skip gate in
+		// CondenseSession will skip condensation if nothing is found.
 		logging.Warn(logging.WithComponent(ctx, "checkpoint"),
-			"no shadow branch and no transcript path, attempting fallback resolution",
+			"no shadow branch and no transcript path, returning empty session data",
 			slog.String("session_id", state.SessionID),
 			slog.String("agent_type", string(state.AgentType)),
 		)
@@ -1077,10 +1076,13 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	}
 
 	if result.Skipped {
-		logging.Info(logCtx, "session condensation skipped (no transcript or files), state preserved",
+		// Nothing to condense. Mark fully condensed so entire doctor doesn't
+		// keep retrying this empty session on every invocation.
+		logging.Info(logCtx, "session condensation skipped (no transcript or files), marking fully condensed",
 			slog.String("session_id", sessionID),
 		)
-		return nil
+		state.FullyCondensed = true
+		return s.saveSessionState(ctx, state)
 	}
 
 	logging.Info(logCtx, "session condensed by ID",

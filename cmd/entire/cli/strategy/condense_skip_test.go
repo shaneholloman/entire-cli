@@ -115,14 +115,15 @@ func TestCondenseSessionByID_SkippedPreservesState(t *testing.T) {
 	require.NoError(t, s.saveSessionState(context.Background(), state))
 	originalStepCount := state.StepCount
 
-	// CondenseSessionByID should return nil (no error) but preserve state
+	// CondenseSessionByID should return nil (no error) and mark fully condensed
 	err = s.CondenseSessionByID(context.Background(), sessionID)
 	require.NoError(t, err)
 
-	// State should be preserved — not zeroed, not deleted
+	// State should be marked FullyCondensed so doctor doesn't retry
 	state, err = s.loadSessionState(context.Background(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, state, "session state should still exist after skipped condensation")
+	assert.True(t, state.FullyCondensed, "should be marked FullyCondensed when condensation is skipped")
 	assert.Equal(t, originalStepCount, state.StepCount, "StepCount should be preserved when condensation is skipped")
 	assert.Equal(t, session.PhaseIdle, state.Phase, "Phase should be preserved when condensation is skipped")
 }
