@@ -1945,6 +1945,7 @@ func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commi
 		// no tracked files, and no shadow branch data (StepCount == 0). These
 		// would produce a Skipped result in CondenseSession, leaving the
 		// Entire-Checkpoint trailer pointing to nothing on the metadata branch.
+		// NOTE: must stay in sync with the skip gate in CondenseSession.
 		if state.TranscriptPath == "" && len(state.FilesTouched) == 0 && state.StepCount == 0 {
 			logging.Debug(logCtx, "prepare-commit-msg: fast path skipping empty session",
 				slog.String("session_id", state.SessionID),
