@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tests in this file use t.Chdir and t.Setenv (process-global state),
+// Tests in this file use t.Chdir (process-global state),
 // so they cannot use t.Parallel().
 
 func TestCondenseSession_SkipsWhenNoTranscriptAndNoFiles(t *testing.T) {
