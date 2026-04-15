@@ -191,7 +191,7 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 		return fmt.Errorf("failed to build merged tree: %w", err)
 	}
 
-	mergeCommitHash, err := createMergeCommitCommon(repo, mergedTreeHash,
+	mergeCommitHash, err := createMergeCommitCommon(ctx, repo, mergedTreeHash,
 		[]plumbing.Hash{localRef.Hash(), remoteRef.Hash()},
 		"Merge remote "+shortRefName(refName))
 	if err != nil {
@@ -323,7 +323,7 @@ func handleRotationConflict(ctx context.Context, target, fetchTarget string, rep
 	}
 
 	// Create commit parented on archive's commit (fast-forward)
-	mergeCommitHash, err := createMergeCommitCommon(repo, mergedTreeHash,
+	mergeCommitHash, err := createMergeCommitCommon(ctx, repo, mergedTreeHash,
 		[]plumbing.Hash{archiveRef.Hash()},
 		"Merge local checkpoints into archived generation")
 	if err != nil {

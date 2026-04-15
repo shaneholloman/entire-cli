@@ -76,7 +76,7 @@ func TestListShadowBranches(t *testing.T) {
 
 	// Create initial commit so we have something to branch from
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestListShadowBranches_Empty(t *testing.T) {
 
 	// Create initial commit
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestDeleteShadowBranches(t *testing.T) {
 
 	// Create initial commit
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestDeleteShadowBranches_NonExistent(t *testing.T) {
 
 	// Create initial commit
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestListOrphanedSessionStates_RecentSessionNotOrphaned(t *testing.T) {
 
 	// Create initial commit
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestListOrphanedSessionStates_ShadowBranchMatching(t *testing.T) {
 
 	// Create initial commit
 	emptyTreeHash := plumbing.NewHash("4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-	commitHash, err := createCommit(repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
+	commitHash, err := createCommit(context.Background(), repo, emptyTreeHash, plumbing.ZeroHash, "initial commit", "test", "test@test.com")
 	if err != nil {
 		t.Fatalf("failed to create initial commit: %v", err)
 	}

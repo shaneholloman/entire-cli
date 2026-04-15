@@ -179,7 +179,7 @@ func (s *V2GitStore) updateCommittedMain(ctx context.Context, opts UpdateCommitt
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize checkpoint: %s\n", opts.CheckpointID)
-	if err := s.updateRef(refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail); err != nil {
+	if err := s.updateRef(ctx, refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail); err != nil {
 		return 0, err
 	}
 
@@ -270,7 +270,7 @@ func (s *V2GitStore) updateCommittedFullTranscript(ctx context.Context, opts Upd
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize checkpoint: %s\n", opts.CheckpointID)
-	return s.updateRef(refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	return s.updateRef(ctx, refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 }
 
 // writeCommittedMain writes metadata entries to the /main ref.
@@ -310,7 +310,7 @@ func (s *V2GitStore) writeCommittedMain(ctx context.Context, opts WriteCommitted
 	}
 
 	commitMsg := fmt.Sprintf("Checkpoint: %s\n", opts.CheckpointID)
-	if err := s.updateRef(refName, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail); err != nil {
+	if err := s.updateRef(ctx, refName, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail); err != nil {
 		return 0, err
 	}
 	return sessionIndex, nil
@@ -536,7 +536,7 @@ func (s *V2GitStore) writeCommittedFullTranscript(ctx context.Context, opts Writ
 	}
 
 	commitMsg := fmt.Sprintf("Checkpoint: %s\n", opts.CheckpointID)
-	if err := s.updateRef(refName, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail); err != nil {
+	if err := s.updateRef(ctx, refName, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail); err != nil {
 		return err
 	}
 
@@ -703,5 +703,5 @@ func (s *V2GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoi
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, metadata.SessionID)
-	return s.updateRef(refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	return s.updateRef(ctx, refName, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 }

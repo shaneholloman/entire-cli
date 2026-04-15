@@ -497,7 +497,7 @@ func isURL(target string) bool {
 }
 
 // createMergeCommitCommon creates a merge commit with multiple parents.
-func createMergeCommitCommon(repo *git.Repository, treeHash plumbing.Hash, parents []plumbing.Hash, message string) (plumbing.Hash, error) {
+func createMergeCommitCommon(ctx context.Context, repo *git.Repository, treeHash plumbing.Hash, parents []plumbing.Hash, message string) (plumbing.Hash, error) {
 	authorName, authorEmail := GetGitAuthorFromRepo(repo)
 	now := time.Now()
 	sig := object.Signature{
@@ -514,9 +514,7 @@ func createMergeCommitCommon(repo *git.Repository, treeHash plumbing.Hash, paren
 		Message:      message,
 	}
 
-	if err := checkpoint.SignCommitBestEffort(commit); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to sign commit: %w", err)
-	}
+	checkpoint.SignCommitBestEffort(ctx, commit)
 
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {

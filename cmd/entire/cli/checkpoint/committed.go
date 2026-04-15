@@ -23,6 +23,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
@@ -117,7 +118,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 	}
 
 	commitMsg := s.buildCommitMessage(opts, taskMetadataPath)
-	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
+	newCommitHash, err := s.createCommit(ctx, newTreeHash, parentHash, commitMsg, opts.AuthorName, opts.AuthorEmail)
 	if err != nil {
 		return err
 	}
@@ -526,7 +527,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Update checkpoint summary for %s", checkpointID)
-	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	newCommitHash, err := s.createCommit(ctx, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
 		return err
 	}
@@ -1237,7 +1238,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Update summary for checkpoint %s (session: %s)", checkpointID, existingMetadata.SessionID)
-	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	newCommitHash, err := s.createCommit(ctx, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
 		return err
 	}
@@ -1356,7 +1357,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize transcript for Checkpoint: %s", opts.CheckpointID)
-	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
+	newCommitHash, err := s.createCommit(ctx, newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
 		return err
 	}
@@ -1521,7 +1522,7 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitHash, err := s.createCommit(emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
+	commitHash, err := s.createCommit(ctx, emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
 	if err != nil {
 		return err
 	}
@@ -1743,7 +1744,7 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 
 // CreateCommit creates a git commit object with the given tree, parent, message, and author.
 // If parentHash is ZeroHash, the commit is created without a parent (orphan commit).
-func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
+func CreateCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) {
 	now := time.Now()
 	sig := object.Signature{
 		Name:  authorName,
@@ -1762,9 +1763,7 @@ func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	if err := SignCommitBestEffort(commit); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to sign commit: %w", err)
-	}
+	SignCommitBestEffort(ctx, commit)
 
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {
@@ -1780,38 +1779,46 @@ func CreateCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 }
 
 // SignCommitBestEffort signs the commit using the registered ObjectSigner plugin.
-// If no signer is registered, the commit is left unsigned and no error is returned.
-func SignCommitBestEffort(commit *object.Commit) error {
+// If no signer is registered, signing is disabled via settings, or signing fails,
+// the commit is left unsigned and the error is logged.
+func SignCommitBestEffort(ctx context.Context, commit *object.Commit) {
+	if !settings.IsSignCheckpointCommitsEnabled(ctx) {
+		return
+	}
+
 	if !plugin.Has(plugin.ObjectSigner()) {
-		return nil
+		return
 	}
 
 	signer, err := plugin.Get(plugin.ObjectSigner())
 	if err != nil {
-		return fmt.Errorf("getting object signer: %w", err)
+		logging.Warn(ctx, "failed to get object signer", slog.String("error", err.Error()))
+		return
 	}
 
 	if signer == nil {
-		return nil
+		return
 	}
 
 	encoded := &plumbing.MemoryObject{}
 	if err = commit.EncodeWithoutSignature(encoded); err != nil {
-		return fmt.Errorf("encoding commit for signing: %w", err)
+		logging.Warn(ctx, "failed to encode commit for signing", slog.String("error", err.Error()))
+		return
 	}
 
 	r, err := encoded.Reader()
 	if err != nil {
-		return fmt.Errorf("reading encoded commit: %w", err)
+		logging.Warn(ctx, "failed to read encoded commit", slog.String("error", err.Error()))
+		return
 	}
 
 	sig, err := signer.Sign(r)
 	if err != nil {
-		return fmt.Errorf("signing commit: %w", err)
+		logging.Warn(ctx, "failed to sign commit", slog.String("error", err.Error()))
+		return
 	}
 
 	commit.Signature = string(sig)
-	return nil
 }
 
 // readTranscriptFromTree reads a transcript from a git tree, handling both chunked and non-chunked formats.

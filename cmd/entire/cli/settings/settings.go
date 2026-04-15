@@ -37,7 +37,6 @@ const (
 
 // EntireSettings represents the .entire/settings.json configuration
 type EntireSettings struct {
-
 	// Enabled indicates whether Entire is active. When false, CLI commands
 	// show a disabled message and hooks exit silently. Defaults to true.
 	Enabled bool `json:"enabled"`
@@ -90,6 +89,10 @@ type EntireSettings struct {
 	// generate path; present so settings round-trip for a follow-up change
 	// that wires it into the deadline selection.
 	SummaryTimeoutSeconds int `json:"summary_timeout_seconds,omitempty"`
+
+	// SignCheckpointCommits controls whether checkpoint commits are signed.
+	// nil/true = sign (default), false = skip signing.
+	SignCheckpointCommits *bool `json:"sign_checkpoint_commits,omitempty"`
 
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
@@ -448,6 +451,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 		settings.SummaryTimeoutSeconds = st
 	}
 
+	// Override sign_checkpoint_commits if present
+	if signRaw, ok := raw["sign_checkpoint_commits"]; ok {
+		var sc bool
+		if err := json.Unmarshal(signRaw, &sc); err != nil {
+			return fmt.Errorf("parsing sign_checkpoint_commits field: %w", err)
+		}
+		settings.SignCheckpointCommits = &sc
+	}
+
 	return nil
 }
 
@@ -773,6 +785,22 @@ func IsExternalAgentsEnabled(ctx context.Context) bool {
 		return false
 	}
 	return s.ExternalAgents
+}
+
+// IsSignCheckpointCommitsEnabled returns true if checkpoint commits should be signed.
+// Defaults to true when the setting is not explicitly set.
+func (s *EntireSettings) IsSignCheckpointCommitsEnabled() bool {
+	return s.SignCheckpointCommits == nil || *s.SignCheckpointCommits
+}
+
+// IsSignCheckpointCommitsEnabled checks if checkpoint commit signing is enabled in settings.
+// Returns true by default if settings cannot be loaded or the key is missing.
+func IsSignCheckpointCommitsEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return true
+	}
+	return s.IsSignCheckpointCommitsEnabled()
 }
 
 // Save saves the settings to .entire/settings.json.

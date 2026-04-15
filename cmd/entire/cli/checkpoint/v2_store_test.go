@@ -155,7 +155,7 @@ func TestV2GitStore_UpdateRef_CreatesCommit(t *testing.T) {
 	require.NotEqual(t, treeHash, newTreeHash)
 
 	// Update the ref
-	require.NoError(t, store.updateRef(refName, newTreeHash, parentHash, "test commit", "Test", "test@test.com"))
+	require.NoError(t, store.updateRef(context.Background(), refName, newTreeHash, parentHash, "test commit", "Test", "test@test.com"))
 
 	// Verify the ref now points to a commit with our tree
 	ref, err := repo.Reference(refName, true)

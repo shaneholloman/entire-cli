@@ -1585,7 +1585,7 @@ func ExtractSessionIDFromCommit(commit *object.Commit) string {
 // See push_common.go and session_test.go for usage examples.
 
 // createCommit creates a commit object
-func createCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) { //nolint:unparam // already present in codebase
+func createCommit(ctx context.Context, repo *git.Repository, treeHash, parentHash plumbing.Hash, message, authorName, authorEmail string) (plumbing.Hash, error) { //nolint:unparam // already present in codebase
 	now := time.Now()
 	sig := object.Signature{
 		Name:  authorName,
@@ -1605,9 +1605,7 @@ func createCommit(repo *git.Repository, treeHash, parentHash plumbing.Hash, mess
 		commit.ParentHashes = []plumbing.Hash{parentHash}
 	}
 
-	if err := checkpoint.SignCommitBestEffort(commit); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("failed to sign commit: %w", err)
-	}
+	checkpoint.SignCommitBestEffort(ctx, commit)
 
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {
