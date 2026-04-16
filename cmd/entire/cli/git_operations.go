@@ -395,7 +395,7 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 // Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
 // which breaks HTTPS URLs that require authentication.
 func FetchMetadataBranch(ctx context.Context) error {
-	return fetchMetadataFromOrigin(ctx, false /* treeless */)
+	return fetchMetadataFromOrigin(ctx, false /* shallow */)
 }
 
 // FetchMetadataTreeOnly fetches the tip of the entire/checkpoints/v1 branch
@@ -404,14 +404,14 @@ func FetchMetadataBranch(ctx context.Context) error {
 // After this call, tree navigation via go-git works but blob reads will fail
 // for objects that weren't previously fetched.
 func FetchMetadataTreeOnly(ctx context.Context) error {
-	return fetchMetadataFromOrigin(ctx, true /* treeless */)
+	return fetchMetadataFromOrigin(ctx, true /* shallow */)
 }
 
 // fetchMetadataFromOrigin fetches the v1 metadata branch from origin into the
 // remote-tracking ref refs/remotes/origin/<branch>, then safely advances the
-// local branch to match. When treeless is true, --depth=1 is added so only
+// local branch to match. When shallow is true, --depth=1 is added so only
 // the tip is downloaded.
-func fetchMetadataFromOrigin(ctx context.Context, treeless bool) error {
+func fetchMetadataFromOrigin(ctx context.Context, shallow bool) error {
 	branchName := paths.MetadataBranchName
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -424,7 +424,7 @@ func fetchMetadataFromOrigin(ctx context.Context, treeless bool) error {
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 	args := []string{"fetch", "--no-tags"}
-	if treeless {
+	if shallow {
 		args = append(args, "--depth=1")
 	}
 	args = append(args, fetchTarget, refSpec)
@@ -458,7 +458,7 @@ func fetchMetadataFromOrigin(ctx context.Context, treeless bool) error {
 // tree objects (no blobs, no history).
 // Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
 func FetchV2MainTreeOnly(ctx context.Context) error {
-	return fetchV2MainFromOrigin(ctx, true /* treeless */)
+	return fetchV2MainFromOrigin(ctx, true /* shallow */)
 }
 
 // FetchV2MainRef fetches the v2 /main ref from origin.
@@ -466,13 +466,13 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 // v2 checkpoint reads handle transcript retrieval separately.
 // Uses explicit refspec since v2 refs are under refs/entire/, not refs/heads/.
 func FetchV2MainRef(ctx context.Context) error {
-	return fetchV2MainFromOrigin(ctx, false /* treeless */)
+	return fetchV2MainFromOrigin(ctx, false /* shallow */)
 }
 
 // fetchV2MainFromOrigin fetches the v2 /main ref from origin into the shared
 // staging ref, then promotes it via strategy.PromoteTmpRefSafely. When
-// treeless is true, --depth=1 is added so only the tip is downloaded.
-func fetchV2MainFromOrigin(ctx context.Context, treeless bool) error {
+// shallow is true, --depth=1 is added so only the tip is downloaded.
+func fetchV2MainFromOrigin(ctx context.Context, shallow bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -483,7 +483,7 @@ func fetchV2MainFromOrigin(ctx context.Context, treeless bool) error {
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, strategy.V2MainFetchTmpRef)
 	args := []string{"fetch", "--no-tags"}
-	if treeless {
+	if shallow {
 		args = append(args, "--depth=1")
 	}
 	args = append(args, fetchTarget, refSpec)
