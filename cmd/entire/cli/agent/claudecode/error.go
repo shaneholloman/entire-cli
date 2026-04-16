@@ -77,6 +77,11 @@ func classifyEnvelopeError(resultText string, apiStatus *int, exitCode int) *Cla
 		e.Kind = ClaudeErrorRateLimit
 	case e.APIStatus >= 400 && e.APIStatus < 500:
 		e.Kind = ClaudeErrorConfig
+	case e.APIStatus == 0 && hasAuthPhrase(resultText):
+		// No structured status (older CLI builds / internal errors) — fall
+		// back to the same phrase heuristic the stderr path uses so users
+		// still get auth-specific guidance.
+		e.Kind = ClaudeErrorAuth
 	default:
 		e.Kind = ClaudeErrorUnknown
 	}
@@ -93,13 +98,20 @@ func classifyStderrError(stderr string, exitCode int) *ClaudeError {
 		msg = msg[:stderrMessageMaxLen]
 	}
 	e := &ClaudeError{Message: msg, ExitCode: exitCode}
-	lower := strings.ToLower(msg)
-	for _, phrase := range authStderrPhrases {
-		if strings.Contains(lower, phrase) {
-			e.Kind = ClaudeErrorAuth
-			return e
-		}
+	if hasAuthPhrase(msg) {
+		e.Kind = ClaudeErrorAuth
+		return e
 	}
 	e.Kind = ClaudeErrorUnknown
 	return e
+}
+
+func hasAuthPhrase(s string) bool {
+	lower := strings.ToLower(s)
+	for _, phrase := range authStderrPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }

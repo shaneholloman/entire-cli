@@ -107,6 +107,8 @@ func TestClassifyEnvelopeError(t *testing.T) {
 		{"UnknownNoStatus", "something blew up", nil, 0, ClaudeErrorUnknown, 0, 0},
 		{"Unknown5xx", "upstream error", intPtr(503), 0, ClaudeErrorUnknown, 503, 0},
 		{"ExitCodePropagated", "internal error", intPtr(500), 2, ClaudeErrorUnknown, 500, 2},
+		{"AuthFromResultWhenStatusNil", "Invalid API key provided", nil, 0, ClaudeErrorAuth, 0, 0},
+		{"AuthFromResultCaseInsensitive", "User is NOT LOGGED IN to Claude", nil, 0, ClaudeErrorAuth, 0, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
