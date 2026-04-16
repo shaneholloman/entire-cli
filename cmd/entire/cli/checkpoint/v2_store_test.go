@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
@@ -866,6 +867,66 @@ func TestV2GitStore_UpdateCommitted_CheckpointNotFound(t *testing.T) {
 		Agent:        agent.AgentTypeClaudeCode,
 	})
 	require.Error(t, err)
+}
+
+func TestV2GitStore_UpdateCommitted_PreservesExistingTaskMetadataInFullCurrent(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewV2GitStore(repo, "origin")
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("cc55dd66ee77")
+
+	// Initial write creates checkpoint/session on both /main and /full/current.
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "test-session-task-preserve",
+		Strategy:     "manual-commit",
+		Agent:        agent.AgentTypeClaudeCode,
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"initial"}`)),
+		Prompts:      []string{"first prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	// Inject task metadata into /full/current to emulate condensation-time task copy.
+	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	parentHash, rootTreeHash, err := store.GetRefState(refName)
+	require.NoError(t, err)
+
+	taskPath := []string{string(cpID[:2]), string(cpID[2:]), "0", "tasks", "toolu_01TASK"}
+	checkpointJSON := []byte(`{"session_id":"test-session-task-preserve","tool_use_id":"toolu_01TASK"}`)
+	blobHash, err := CreateBlobFromContent(repo, checkpointJSON)
+	require.NoError(t, err)
+
+	newRootHash, err := UpdateSubtree(repo, rootTreeHash,
+		taskPath,
+		[]object.TreeEntry{{Name: "checkpoint.json", Mode: filemode.Regular, Hash: blobHash}},
+		UpdateSubtreeOptions{MergeMode: MergeKeepExisting},
+	)
+	require.NoError(t, err)
+
+	authorName, authorEmail := GetGitAuthorFromRepo(repo)
+	commitHash, err := CreateCommit(repo, newRootHash, parentHash,
+		fmt.Sprintf("Checkpoint: %s (task metadata)\n", cpID), authorName, authorEmail)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)))
+
+	// Finalize checkpoint with full transcript (the stop-time path).
+	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "test-session-task-preserve",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"assistant","message":"finalized"}`)),
+		Prompts:      []string{"first prompt", "second prompt"},
+		Agent:        agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	// Task metadata should still exist after UpdateCommitted.
+	fullTree := v2FullTree(t, repo)
+	_, err = fullTree.File(cpID.Path() + "/0/tasks/toolu_01TASK/checkpoint.json")
+	require.NoError(t, err, "task metadata should be preserved on /full/current during UpdateCommitted")
 }
 
 func TestWriteCommitted_TriggersRotationAtThreshold(t *testing.T) {

@@ -242,6 +242,39 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		}
 	}
 
+	// If not found locally, fetch metadata from remote and retry.
+	// This handles the case where we're looking at a checkpoint from another
+	// collaborator's PR whose metadata hasn't been fetched yet.
+	// Try origin first (fast treeless fetch, ~1-2s), then checkpoint_remote
+	// if configured and origin didn't have it. Fetch both v1 and v2 refs.
+	if len(matches) == 0 {
+		anyFetched := FetchMetadataTreeOnly(ctx) == nil
+		if !anyFetched {
+			anyFetched = FetchMetadataFromCheckpointRemote(ctx) == nil
+		}
+		if preferCheckpointsV2 {
+			v2Fetched := FetchV2MainTreeOnly(ctx) == nil
+			if !v2Fetched {
+				v2Fetched = FetchV2MetadataFromCheckpointRemote(ctx) == nil
+			}
+			anyFetched = anyFetched || v2Fetched
+		}
+		if anyFetched {
+			if freshRepo, repoErr := openRepository(ctx); repoErr == nil {
+				repo = freshRepo
+				v1Store = checkpoint.NewGitStore(repo)
+				v2Store = checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+				if freshCommitted, listErr := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2); listErr == nil {
+					for _, info := range freshCommitted {
+						if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
+							matches = append(matches, info.CheckpointID)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	var fullCheckpointID id.CheckpointID
 	switch len(matches) {
 	case 0:
