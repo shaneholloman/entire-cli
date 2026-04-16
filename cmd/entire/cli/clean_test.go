@@ -195,6 +195,39 @@ func createArchivedGenerationRef(t *testing.T, repo *git.Repository, generation 
 	}
 }
 
+func createArchivedGenerationRefWithoutMetadata(t *testing.T, repo *git.Repository, generation string) {
+	t.Helper()
+
+	transcriptBlobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(`{"transcript":"data"}`))
+	if err != nil {
+		t.Fatalf("failed to create transcript blob: %v", err)
+	}
+
+	entries := map[string]object.TreeEntry{
+		"aa/bbccddeeff/0/" + paths.TranscriptFileName: {
+			Name: paths.TranscriptFileName,
+			Mode: filemode.Regular,
+			Hash: transcriptBlobHash,
+		},
+	}
+
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, entries)
+	if err != nil {
+		t.Fatalf("failed to build archived generation tree: %v", err)
+	}
+
+	commitHash, err := checkpoint.CreateCommit(repo, treeHash, plumbing.ZeroHash, "archived generation without metadata", "test", "test@test.com")
+	if err != nil {
+		t.Fatalf("failed to create archived generation commit: %v", err)
+	}
+
+	refName := plumbing.ReferenceName(paths.V2FullRefPrefix + generation)
+	ref := plumbing.NewHashReference(refName, commitHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		t.Fatalf("failed to create archived generation ref %s: %v", refName, err)
+	}
+}
+
 // --- Default mode tests (current HEAD cleanup) ---
 
 func TestCleanCmd_DefaultMode_NothingToClean(t *testing.T) {
@@ -788,6 +821,97 @@ func TestCleanCmd_All_ForceDeletesEligibleV2Generations(t *testing.T) {
 	}
 	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true); err != nil {
 		t.Fatalf("v2 full current ref should remain: %v", err)
+	}
+}
+
+func TestCleanCmd_All_DryRunSkipsV2GenerationsWithinRetention(t *testing.T) {
+	repo, _ := setupCleanTestRepo(t)
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	repoRoot := wt.Filesystem.Root()
+
+	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {"checkpoints_v2": true, "full_transcript_generation_retention_days": 14}}`)
+	createArchivedGenerationRef(t, repo, "0000000000001", time.Now().AddDate(0, 0, -5), time.Now().AddDate(0, 0, -1))
+
+	cmd := newCleanCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--dry-run"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("clean --all --dry-run error = %v", err)
+	}
+
+	output := stdout.String()
+	if strings.Contains(output, "Archived v2 generations") {
+		t.Fatalf("did not expect archived v2 generation section for retained generation, got: %s", output)
+	}
+	if strings.Contains(output, "0000000000001") {
+		t.Fatalf("did not expect retained generation ref in output, got: %s", output)
+	}
+}
+
+func TestCleanCmd_All_ForceSkipsV2GenerationMissingMetadata(t *testing.T) {
+	repo, _ := setupCleanTestRepo(t)
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	repoRoot := wt.Filesystem.Root()
+
+	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {"checkpoints_v2": true, "full_transcript_generation_retention_days": 14}}`)
+	createArchivedGenerationRefWithoutMetadata(t, repo, "0000000000001")
+
+	cmd := newCleanCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("clean --all --force error = %v", err)
+	}
+
+	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000001"), true); err != nil {
+		t.Fatalf("archived generation ref with missing metadata should remain: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "missing generation.json") {
+		t.Fatalf("expected missing generation warning, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestCleanCmd_All_ForceSkipsV2GenerationWithInvalidTimestamps(t *testing.T) {
+	repo, _ := setupCleanTestRepo(t)
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	repoRoot := wt.Filesystem.Root()
+
+	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {"checkpoints_v2": true, "full_transcript_generation_retention_days": 14}}`)
+	createArchivedGenerationRef(t, repo, "0000000000001", time.Now().AddDate(0, 0, -1), time.Now().AddDate(0, 0, -20))
+
+	cmd := newCleanCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("clean --all --force error = %v", err)
+	}
+
+	if _, err := repo.Reference(plumbing.ReferenceName(paths.V2FullRefPrefix+"0000000000001"), true); err != nil {
+		t.Fatalf("archived generation ref with invalid timestamps should remain: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "invalid timestamps") {
+		t.Fatalf("expected invalid timestamp warning, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
