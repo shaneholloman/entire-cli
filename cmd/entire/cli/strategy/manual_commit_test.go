@@ -27,6 +27,8 @@ import (
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
 
+const testCheckpointsV2SettingsJSON = `{"enabled": true, "strategy": "manual-commit", "strategy_options": {"checkpoints_v2": true}}`
+
 // testTranscriptPromptResponse is a minimal transcript used across strategy tests.
 const testTranscriptPromptResponse = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
 
@@ -4202,8 +4204,7 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	// Enable checkpoints_v2 via settings
 	entireDir := filepath.Join(dir, ".entire")
 	require.NoError(t, os.MkdirAll(entireDir, 0o755))
-	settingsJSON := `{"enabled": true, "strategy": "manual-commit", "strategy_options": {"checkpoints_v2": true}}`
-	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(settingsJSON), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(testCheckpointsV2SettingsJSON), 0o644))
 
 	s := &ManualCommitStrategy{}
 	sessionID := "2025-01-15-test-v2-dual-write"
@@ -4293,6 +4294,91 @@ func TestCondenseSession_V2DualWrite(t *testing.T) {
 	require.NoError(t, err, "raw_transcript should exist on /full/current")
 }
 
+func TestCondenseSession_V2DualWrite_CopiesTaskMetadataToFullCurrent(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "main.go", "package main")
+	testutil.GitAdd(t, dir, "main.go")
+	testutil.GitCommit(t, dir, "Initial commit")
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	commitHash := testutil.GetHeadHash(t, dir)
+
+	t.Chdir(dir)
+
+	entireDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(testCheckpointsV2SettingsJSON), 0o644))
+
+	s := &ManualCommitStrategy{}
+	sessionID := "2025-01-15-test-v2-task-dual-write"
+
+	metadataDir := ".entire/metadata/" + sessionID
+	metadataDirAbs := filepath.Join(dir, metadataDir)
+	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
+
+	transcript := `{"type":"human","message":{"content":"hello"}}
+{"type":"assistant","message":{"content":"hi there"}}
+`
+	transcriptPath := filepath.Join(metadataDirAbs, paths.TranscriptFileName)
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(transcript), 0o644))
+
+	// Create shadow branch/session checkpoint data.
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:      sessionID,
+		ModifiedFiles:  []string{"main.go"},
+		MetadataDir:    metadataDir,
+		MetadataDirAbs: metadataDirAbs,
+		CommitMessage:  "Checkpoint 1",
+		AuthorName:     "Test",
+		AuthorEmail:    "test@test.com",
+	})
+	require.NoError(t, err)
+
+	subagentTranscriptPath := filepath.Join(metadataDirAbs, "subagent.jsonl")
+	require.NoError(t, os.WriteFile(subagentTranscriptPath, []byte("{\"type\":\"event\",\"message\":\"done\"}\n"), 0o644))
+
+	err = s.SaveTaskStep(context.Background(), TaskStepContext{
+		SessionID:              sessionID,
+		ToolUseID:              "toolu_01TASK",
+		AgentID:                "agent-01",
+		ModifiedFiles:          []string{"main.go"},
+		TranscriptPath:         transcriptPath,
+		SubagentTranscriptPath: subagentTranscriptPath,
+		CheckpointUUID:         "uuid-task-001",
+		AuthorName:             "Test",
+		AuthorEmail:            "test@test.com",
+		SubagentType:           "general",
+		TaskDescription:        "Implement task",
+		AgentType:              agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.TranscriptPath = transcriptPath
+	state.BaseCommit = commitHash[:7]
+	state.AgentType = agent.AgentTypeClaudeCode
+
+	checkpointID := id.MustCheckpointID("ab11cd22ef33")
+	result, err := s.CondenseSession(context.Background(), repo, checkpointID, state, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	v2FullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err, "v2 /full/current ref should exist")
+
+	v2FullCommit, err := repo.CommitObject(v2FullRef.Hash())
+	require.NoError(t, err)
+	v2FullTree, err := v2FullCommit.Tree()
+	require.NoError(t, err)
+
+	taskCheckpointPath := checkpointID.Path() + "/0/tasks/toolu_01TASK/checkpoint.json"
+	_, err = v2FullTree.File(taskCheckpointPath)
+	require.NoError(t, err, "task checkpoint metadata should be copied to v2 /full/current")
+}
+
 // TestCondenseSession_V2CompactTranscriptStart verifies v2 /main writes
 // checkpoint_transcript_start from compact transcript offset, not full.jsonl offset.
 func TestCondenseSession_V2CompactTranscriptStart(t *testing.T) {
@@ -4311,8 +4397,7 @@ func TestCondenseSession_V2CompactTranscriptStart(t *testing.T) {
 	// Enable checkpoints_v2 via settings
 	entireDir := filepath.Join(dir, ".entire")
 	require.NoError(t, os.MkdirAll(entireDir, 0o755))
-	settingsJSON := `{"enabled": true, "strategy": "manual-commit", "strategy_options": {"checkpoints_v2": true}}`
-	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(settingsJSON), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(testCheckpointsV2SettingsJSON), 0o644))
 
 	s := &ManualCommitStrategy{}
 	sessionID := "2025-01-15-test-v2-compact-start"

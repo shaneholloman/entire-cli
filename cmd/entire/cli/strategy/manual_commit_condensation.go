@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,33 +130,17 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// Errors are ignored; downstream readers handle missing transcripts gracefully.
 	resolveTranscriptPath(state) //nolint:errcheck,gosec // best-effort; downstream readers handle missing files
 
-	var sessionData *ExtractedSessionData
 	extractStart := time.Now()
 	_, extractSessionDataSpan := perf.Start(ctx, "extract_session_data")
+	var shadowHash plumbing.Hash
 	if hasShadowBranch {
-		var extractErr error
-		sessionData, extractErr = s.extractSessionData(ctx, repo, ref.Hash(), state.SessionID, state.FilesTouched, state.AgentType, state.TranscriptPath, state.CheckpointTranscriptStart, state.Phase.IsActive())
-		if extractErr != nil {
-			extractSessionDataSpan.RecordError(extractErr)
-			extractSessionDataSpan.End()
-			return nil, fmt.Errorf("failed to extract session data: %w", extractErr)
-		}
-	} else {
-		if state.TranscriptPath == "" {
-			extractSessionDataSpan.RecordError(errors.New("shadow branch not found and no live transcript available"))
-			extractSessionDataSpan.End()
-			return nil, errors.New("shadow branch not found and no live transcript available")
-		}
-		if state.Phase.IsActive() {
-			prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
-		}
-		var extractErr error
-		sessionData, extractErr = s.extractSessionDataFromLiveTranscript(ctx, state)
-		if extractErr != nil {
-			extractSessionDataSpan.RecordError(extractErr)
-			extractSessionDataSpan.End()
-			return nil, fmt.Errorf("failed to extract session data from live transcript: %w", extractErr)
-		}
+		shadowHash = ref.Hash()
+	}
+	sessionData, extractErr := s.extractOrCreateSessionData(ctx, repo, ag, shadowHash, hasShadowBranch, state)
+	if extractErr != nil {
+		extractSessionDataSpan.RecordError(extractErr)
+		extractSessionDataSpan.End()
+		return nil, extractErr
 	}
 	extractSessionDataSpan.End()
 	extractDuration := time.Since(extractStart)
@@ -166,6 +151,29 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// while keeping checkpoint metadata scoped to CheckpointTranscriptStart.
 	if backfillUsage := sessionStateBackfillTokenUsage(ctx, ag, state.AgentType, sessionData.Transcript, sessionData.TokenUsage); backfillUsage != nil {
 		state.TokenUsage = backfillUsage
+	}
+
+	// Skip gate: if there is no transcript AND no files touched, there is nothing
+	// meaningful to condense. Return early to avoid writing metadata-only stubs.
+	//
+	// This check MUST run before filterFilesTouched. That function's fallback
+	// assigns all committed files to sessions with empty FilesTouched (designed
+	// for mid-turn commits where SaveStep hasn't run yet). Without this ordering,
+	// genuinely empty sessions (no transcript, no shadow branch, no tracked files)
+	// would acquire committed files from the fallback and bypass this gate.
+	if len(sessionData.Transcript) == 0 && len(sessionData.FilesTouched) == 0 {
+		logging.Info(logCtx, "session skipped: no transcript or files to condense",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent_type", string(state.AgentType)),
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.Bool("has_shadow_branch", hasShadowBranch),
+			slog.String("transcript_path", state.TranscriptPath),
+		)
+		return &CondenseResult{
+			CheckpointID: checkpointID,
+			SessionID:    state.SessionID,
+			Skipped:      true,
+		}, nil
 	}
 
 	filterFilesTouched(sessionData, committedFiles)
@@ -259,6 +267,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	writeV2Start := time.Now()
 	writeV2Ctx, writeCommittedV2Span := perf.Start(ctx, "write_committed_v2")
 	writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+	writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	writeCommittedV2Span.End()
 	writeV2Duration := time.Since(writeV2Start)
 
@@ -351,6 +360,46 @@ func filterFilesTouched(sessionData *ExtractedSessionData, committedFiles map[st
 		// Entire's own metadata paths, so the checkpoint still reflects the
 		// files captured by this commit.
 		sessionData.FilesTouched = committedFilesExcludingMetadata(committedFiles)
+	}
+}
+
+// extractOrCreateSessionData tries to extract session data from the shadow branch,
+// live transcript, or creates empty session data as a fallback. The empty case is
+// handled by the skip gate in CondenseSession.
+func (s *ManualCommitStrategy) extractOrCreateSessionData(ctx context.Context, repo *git.Repository, ag agent.Agent, shadowHash plumbing.Hash, hasShadowBranch bool, state *SessionState) (*ExtractedSessionData, error) {
+	switch {
+	case hasShadowBranch:
+		// Shadow branch exists (from SaveStep commits) — extract transcript and
+		// metadata from the branch tree, preferring the live transcript if fresher.
+		data, err := s.extractSessionData(ctx, repo, shadowHash, state.SessionID, state.FilesTouched, state.AgentType, state.TranscriptPath, state.CheckpointTranscriptStart, state.Phase.IsActive())
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract session data: %w", err)
+		}
+		return data, nil
+	case state.TranscriptPath != "":
+		// No shadow branch but a live transcript path is known — read directly
+		// from disk. This handles mid-session commits before SaveStep runs.
+		if state.Phase.IsActive() {
+			prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
+		}
+		data, err := s.extractSessionDataFromLiveTranscript(ctx, state)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract session data from live transcript: %w", err)
+		}
+		return data, nil
+	default:
+		// No shadow branch and no transcript path — create empty session data.
+		// This happens for sessions where the agent never set TranscriptPath
+		// (e.g., Codex hooks may send null transcript_path). The skip gate in
+		// CondenseSession will skip condensation if nothing is found.
+		logging.Debug(logging.WithComponent(ctx, "checkpoint"),
+			"no shadow branch and no transcript path, returning empty session data",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent_type", string(state.AgentType)),
+		)
+		return &ExtractedSessionData{
+			FilesTouched: state.FilesTouched,
+		}, nil
 	}
 }
 
@@ -1034,6 +1083,16 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		return fmt.Errorf("failed to condense session: %w", err)
 	}
 
+	if result.Skipped {
+		// Nothing to condense. Mark fully condensed so entire doctor doesn't
+		// keep retrying this empty session on every invocation.
+		logging.Info(logCtx, "session condensation skipped (no transcript or files), marking fully condensed",
+			slog.String("session_id", sessionID),
+		)
+		state.FullyCondensed = true
+		return s.saveSessionState(ctx, state)
+	}
+
 	logging.Info(logCtx, "session condensed by ID",
 		slog.String("session_id", sessionID),
 		slog.String("checkpoint_id", result.CheckpointID.String()),
@@ -1148,6 +1207,16 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 			slog.String("error", err.Error()),
 		)
 		return nil // fail-open
+	}
+
+	if result.Skipped {
+		// No transcript or files — nothing to condense. Mark fully condensed
+		// so PostCommit doesn't keep retrying this empty session.
+		logging.Info(logCtx, "eager condense skipped (no transcript or files), marking fully condensed",
+			slog.String("session_id", sessionID),
+		)
+		state.FullyCondensed = true
+		return s.saveSessionState(ctx, state)
 	}
 
 	// Update state — keep Phase = ENDED (unlike CondenseSessionByID which sets IDLE)
@@ -1293,4 +1362,171 @@ func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts c
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+// writeTaskMetadataV2IfEnabled copies task metadata trees from the shadow branch
+// to v2 /full/current when dual-write is enabled.
+//
+// This mirrors migrate's task backfill behavior for newly created checkpoints so
+// task rewind artifacts (tasks/<tool-use-id>/...) are available in v2 immediately,
+// not only after running `entire migrate --checkpoints v2`.
+func writeTaskMetadataV2IfEnabled(
+	ctx context.Context,
+	repo *git.Repository,
+	checkpointID id.CheckpointID,
+	sessionID string,
+	shadowRef *plumbing.Reference,
+) {
+	if !settings.IsCheckpointsV2Enabled(ctx) || shadowRef == nil {
+		return
+	}
+
+	shadowCommit, err := repo.CommitObject(shadowRef.Hash())
+	if err != nil {
+		logging.Warn(ctx, "v2 dual-write task metadata copy skipped: failed to read shadow commit",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	shadowTree, err := shadowCommit.Tree()
+	if err != nil {
+		logging.Warn(ctx, "v2 dual-write task metadata copy skipped: failed to read shadow tree",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	tasksPath := paths.SessionMetadataDirFromSessionID(sessionID) + "/tasks"
+	tasksTree, err := shadowTree.Tree(tasksPath)
+	if err != nil {
+		return
+	}
+
+	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
+	sessionIndex, err := resolveV2SessionIndexForCheckpoint(repo, checkpointID, sessionID)
+	if err != nil {
+		logging.Warn(ctx, "v2 dual-write task metadata copy skipped: failed to resolve session index",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()),
+		)
+		return
+	}
+
+	if err := spliceTaskTreeToV2FullCurrent(repo, v2Store, checkpointID, sessionIndex, tasksTree.Hash); err != nil {
+		logging.Warn(ctx, "v2 dual-write task metadata copy failed",
+			slog.String("checkpoint_id", checkpointID.String()),
+			slog.String("session_id", sessionID),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+func resolveV2SessionIndexForCheckpoint(repo *git.Repository, checkpointID id.CheckpointID, sessionID string) (int, error) {
+	v2MainRef, err := repo.Reference(plumbing.ReferenceName(paths.V2MainRefName), true)
+	if err != nil {
+		return 0, fmt.Errorf("read v2 /main ref: %w", err)
+	}
+	v2MainCommit, err := repo.CommitObject(v2MainRef.Hash())
+	if err != nil {
+		return 0, fmt.Errorf("read v2 /main commit: %w", err)
+	}
+	v2MainTree, err := v2MainCommit.Tree()
+	if err != nil {
+		return 0, fmt.Errorf("read v2 /main tree: %w", err)
+	}
+
+	checkpointTree, err := v2MainTree.Tree(checkpointID.Path())
+	if err != nil {
+		return 0, fmt.Errorf("read checkpoint subtree on v2 /main: %w", err)
+	}
+
+	metadataFile, err := checkpointTree.File(paths.MetadataFileName)
+	if err != nil {
+		return 0, fmt.Errorf("read checkpoint summary metadata: %w", err)
+	}
+	metadataContent, err := metadataFile.Contents()
+	if err != nil {
+		return 0, fmt.Errorf("read checkpoint summary contents: %w", err)
+	}
+
+	var summary cpkg.CheckpointSummary
+	if err := json.Unmarshal([]byte(metadataContent), &summary); err != nil {
+		return 0, fmt.Errorf("parse checkpoint summary metadata: %w", err)
+	}
+
+	for i := range len(summary.Sessions) {
+		sessionTree, err := checkpointTree.Tree(strconv.Itoa(i))
+		if err != nil {
+			continue
+		}
+		sessionMetadataFile, err := sessionTree.File(paths.MetadataFileName)
+		if err != nil {
+			continue
+		}
+		sessionMetadataContent, err := sessionMetadataFile.Contents()
+		if err != nil {
+			continue
+		}
+
+		var sessionMeta cpkg.CommittedMetadata
+		if err := json.Unmarshal([]byte(sessionMetadataContent), &sessionMeta); err != nil {
+			continue
+		}
+		if sessionMeta.SessionID == sessionID {
+			return i, nil
+		}
+	}
+
+	return 0, fmt.Errorf("session %q not found in v2 checkpoint %s", sessionID, checkpointID)
+}
+
+func spliceTaskTreeToV2FullCurrent(
+	repo *git.Repository,
+	v2Store *cpkg.V2GitStore,
+	checkpointID id.CheckpointID,
+	sessionIndex int,
+	tasksTreeHash plumbing.Hash,
+) error {
+	refName := plumbing.ReferenceName(paths.V2FullCurrentRefName)
+	parentHash, rootTreeHash, err := v2Store.GetRefState(refName)
+	if err != nil {
+		return fmt.Errorf("get v2 /full/current ref state: %w", err)
+	}
+	incomingTasksTree, err := repo.TreeObject(tasksTreeHash)
+	if err != nil {
+		return fmt.Errorf("read task tree: %w", err)
+	}
+
+	shardPrefix := string(checkpointID[:2])
+	shardSuffix := string(checkpointID[2:])
+	sessionDir := strconv.Itoa(sessionIndex)
+
+	newRootHash, err := cpkg.UpdateSubtree(repo, rootTreeHash,
+		[]string{shardPrefix, shardSuffix, sessionDir, "tasks"},
+		incomingTasksTree.Entries,
+		cpkg.UpdateSubtreeOptions{MergeMode: cpkg.MergeKeepExisting},
+	)
+	if err != nil {
+		return fmt.Errorf("splice task tree into v2 /full/current: %w", err)
+	}
+
+	authorName, authorEmail := cpkg.GetGitAuthorFromRepo(repo)
+	commitHash, err := cpkg.CreateCommit(repo, newRootHash, parentHash,
+		fmt.Sprintf("Checkpoint: %s (task metadata)\n", checkpointID),
+		authorName, authorEmail)
+	if err != nil {
+		return fmt.Errorf("create v2 task metadata commit: %w", err)
+	}
+
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
+		return fmt.Errorf("update v2 /full/current ref: %w", err)
+	}
+
+	return nil
 }

@@ -1370,6 +1370,92 @@ func TestHandleTurnEnd_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestHandleTurnEnd_V2FullCurrent_PreservesTaskMetadata(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	// Enable checkpoints_v2 dual-write so PostCommit/HandleTurnEnd update v2 refs.
+	entireDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(testCheckpointsV2SettingsJSON), 0o644))
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-turn-end-v2-task-preserve"
+
+	metadataDir := ".entire/metadata/" + sessionID
+	metadataDirAbs := filepath.Join(dir, metadataDir)
+	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
+	transcriptPath := filepath.Join(metadataDirAbs, paths.TranscriptFileName)
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(testTranscriptPromptResponse), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte("agent modified content"), 0o644))
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:      sessionID,
+		ModifiedFiles:  []string{"test.txt"},
+		MetadataDir:    metadataDir,
+		MetadataDirAbs: metadataDirAbs,
+		CommitMessage:  "Checkpoint 1",
+		AuthorName:     "Test",
+		AuthorEmail:    "test@test.com",
+	})
+	require.NoError(t, err)
+
+	subagentTranscriptPath := filepath.Join(metadataDirAbs, "subagent.jsonl")
+	require.NoError(t, os.WriteFile(subagentTranscriptPath, []byte("{\"type\":\"event\",\"message\":\"done\"}\n"), 0o644))
+	err = s.SaveTaskStep(context.Background(), TaskStepContext{
+		SessionID:              sessionID,
+		ToolUseID:              "toolu_01TASK",
+		AgentID:                "agent-01",
+		ModifiedFiles:          []string{"test.txt"},
+		TranscriptPath:         transcriptPath,
+		SubagentTranscriptPath: subagentTranscriptPath,
+		CheckpointUUID:         "uuid-task-001",
+		AuthorName:             "Test",
+		AuthorEmail:            "test@test.com",
+		SubagentType:           "general",
+		TaskDescription:        "Implement task",
+		AgentType:              agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseActive
+	state.TurnCheckpointIDs = nil
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	cpID := "a1b2c3d4e5f6"
+	commitWithCheckpointTrailer(t, repo, dir, cpID)
+	require.NoError(t, s.PostCommit(context.Background()))
+
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, []string{cpID}, state.TurnCheckpointIDs)
+
+	fullTranscript := `{"type":"human","message":{"content":"final user prompt"}}
+{"type":"assistant","message":{"content":"final assistant response"}}
+`
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(fullTranscript), 0o644))
+	state.TranscriptPath = transcriptPath
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	require.NoError(t, s.HandleTurnEnd(context.Background(), state))
+
+	v2FullRef, err := repo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err)
+	v2FullCommit, err := repo.CommitObject(v2FullRef.Hash())
+	require.NoError(t, err)
+	v2FullTree, err := v2FullCommit.Tree()
+	require.NoError(t, err)
+
+	checkpointID := id.MustCheckpointID(cpID)
+	_, err = v2FullTree.File(checkpointID.Path() + "/0/tasks/toolu_01TASK/checkpoint.json")
+	require.NoError(t, err, "task metadata should be preserved after HandleTurnEnd finalization")
+}
+
 // setupSessionWithCheckpoint initializes a session and creates one checkpoint
 // on the shadow branch so there is content available for condensation.
 // Also modifies test.txt to "agent modified content" and includes it in the checkpoint,
