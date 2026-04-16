@@ -31,8 +31,7 @@ jobs:
 
       - name: Create nightly tag
         run: |
-          TAG=$(scripts/create-nightly-tag.sh)
-          EXIT_CODE=$?
+          TAG=$(scripts/create-nightly-tag.sh) && EXIT_CODE=0 || EXIT_CODE=$?
           if [ "$EXIT_CODE" -eq 2 ]; then
             echo "Skipping — no new nightly needed."
             exit 0

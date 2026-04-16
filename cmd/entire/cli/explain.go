@@ -508,13 +508,18 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 		return fmt.Errorf("checkpoint %s has no transcript content for this checkpoint (scoped)", checkpointID)
 	}
 
+	provider, err := resolveCheckpointSummaryProvider(ctx, w)
+	if err != nil {
+		return fmt.Errorf("failed to resolve summary provider: %w", err)
+	}
+
 	// Generate summary using shared helper
 	logging.Info(ctx, "generating checkpoint summary")
 	if errW != nil {
 		fmt.Fprintln(errW, "Generating checkpoint summary...")
 	}
 
-	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent)
+	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -546,10 +551,11 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 	}
 
 	fmt.Fprintln(w, "✓ Summary generated and saved")
+	fmt.Fprint(w, formatSummaryProviderDetails(provider))
 	return nil
 }
 
-func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType) (*checkpoint.Summary, error) {
+func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointSummaryTimeout)
 	timeoutDuration := checkpointSummaryTimeout
 	if deadline, ok := timeoutCtx.Deadline(); ok {
@@ -558,7 +564,7 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 	defer cancel()
 
 	// scopedTranscript is read from checkpoint storage, which redacts on write.
-	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, nil)
+	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, generator)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(timeoutCtx.Err(), context.Canceled) {
 			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
@@ -798,9 +804,7 @@ func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentT
 			return nil
 		}
 		return scoped
-	case agent.AgentTypeCodex:
-		return transcript.SliceFromLine(fullTranscript, startOffset)
-	case agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeUnknown:
+	case agent.AgentTypeCodex, agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeUnknown:
 		return transcript.SliceFromLine(fullTranscript, startOffset)
 	}
 	return transcript.SliceFromLine(fullTranscript, startOffset)

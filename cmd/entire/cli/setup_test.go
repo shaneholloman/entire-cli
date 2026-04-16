@@ -1102,35 +1102,6 @@ func TestEnableCmd_ForceAndStrategyFlagsOnConfiguredDisabledRepo_ReenablesAndUpd
 	}
 }
 
-// Tests for canPromptInteractively
-
-func TestCanPromptInteractively_EnvVar_True(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
-	t.Setenv("ENTIRE_TEST_TTY", "1")
-
-	if !canPromptInteractively() {
-		t.Error("canPromptInteractively() = false, want true when ENTIRE_TEST_TTY=1")
-	}
-}
-
-func TestCanPromptInteractively_EnvVar_False(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
-	t.Setenv("ENTIRE_TEST_TTY", "0")
-
-	if canPromptInteractively() {
-		t.Error("canPromptInteractively() = true, want false when ENTIRE_TEST_TTY=0")
-	}
-}
-
-func TestCanPromptInteractively_EnvVar_OtherValue(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
-	t.Setenv("ENTIRE_TEST_TTY", "yes") // Not "1", so should be false
-
-	if canPromptInteractively() {
-		t.Error("canPromptInteractively() = true, want false when ENTIRE_TEST_TTY is set but not '1'")
-	}
-}
-
 // Tests for detectOrSelectAgent
 
 func TestDetectOrSelectAgent_AgentDetected(t *testing.T) {
@@ -2319,5 +2290,209 @@ func TestConfigureCmd_CheckpointRemote_DoesNotLeakMergedSettings(t *testing.T) {
 	}
 	if _, exists := raw["log_level"]; exists {
 		t.Error("log_level from local settings leaked into project settings")
+	}
+}
+
+func stubCLIAvailable(t *testing.T) {
+	t.Helper()
+	orig := isSummaryCLIAvailable
+	isSummaryCLIAvailable = func(types.AgentName) bool { return true }
+	t.Cleanup(func() { isSummaryCLIAvailable = orig })
+}
+
+func TestConfigureCmd_SummarizeProvider_UpdatesProjectSettings(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	stubCLIAvailable(t)
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "codex", "--summarize-model", "gpt-5"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-provider failed: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Settings updated") {
+		t.Errorf("expected 'Settings updated' output, got: %s", stdout.String())
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "codex" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "codex")
+	}
+	if s.SummaryGeneration.Model != "gpt-5" {
+		t.Fatalf("summary model = %q, want %q", s.SummaryGeneration.Model, "gpt-5")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_WritesToLocalFile(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	stubCLIAvailable(t)
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--local", "--summarize-provider", "claude-code", "--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --local --summarize-provider failed: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "settings.local.json") {
+		t.Errorf("expected output to reference settings.local.json, got: %s", stdout.String())
+	}
+
+	localS, err := settings.LoadFromFile(EntireSettingsLocalFile)
+	if err != nil {
+		t.Fatalf("failed to load local settings: %v", err)
+	}
+	if localS.SummaryGeneration == nil {
+		t.Fatal("expected local summary_generation to be set")
+	}
+	if localS.SummaryGeneration.Provider != "claude-code" {
+		t.Fatalf("local summary provider = %q, want %q", localS.SummaryGeneration.Provider, "claude-code")
+	}
+
+	projectS, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load project settings: %v", err)
+	}
+	if projectS.SummaryGeneration != nil {
+		t.Fatal("summary_generation should not leak into project settings")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_InvalidProvider(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "opencode"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for unsupported summary provider")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_SwitchClearsStaleModel(t *testing.T) {
+	stubCLIAvailable(t)
+	setupTestRepo(t)
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code", "model": "sonnet"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "codex"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-provider codex failed: %v", err)
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "codex" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "codex")
+	}
+	if s.SummaryGeneration.Model != "" {
+		t.Fatalf("summary model = %q, want empty after provider switch", s.SummaryGeneration.Model)
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_RequiresProvider(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-model", "sonnet"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for summarize-model without provider")
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_LocalInheritsProviderFromProject(t *testing.T) {
+	setupTestRepo(t)
+	stubCLIAvailable(t)
+	// Project settings define the provider; local override only sets the model.
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--local", "--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --local --summarize-model failed: %v", err)
+	}
+
+	localS, err := settings.LoadFromFile(EntireSettingsLocalFile)
+	if err != nil {
+		t.Fatalf("failed to load local settings: %v", err)
+	}
+	if localS.SummaryGeneration == nil {
+		t.Fatal("expected local summary_generation to be set")
+	}
+	if localS.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("local summary model = %q, want %q", localS.SummaryGeneration.Model, "sonnet")
+	}
+
+	// Project settings must not be modified.
+	projectS, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load project settings: %v", err)
+	}
+	if projectS.SummaryGeneration.Model != "" {
+		t.Fatalf("project model = %q, should remain empty", projectS.SummaryGeneration.Model)
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_UsesExistingProvider(t *testing.T) {
+	setupTestRepo(t)
+	stubCLIAvailable(t)
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-model failed: %v", err)
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "claude-code" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "claude-code")
+	}
+	if s.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("summary model = %q, want %q", s.SummaryGeneration.Model, "sonnet")
 	}
 }

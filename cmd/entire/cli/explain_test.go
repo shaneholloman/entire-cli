@@ -130,7 +130,7 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -172,7 +172,7 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -220,7 +220,7 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode)
+	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}

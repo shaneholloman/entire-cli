@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -35,6 +36,8 @@ const (
 	agentFlagName            = "agent"
 	flagCheckpointRemote     = "checkpoint-remote"
 	flagSkipPushSessions     = "skip-push-sessions"
+	flagSummarizeModel       = "summarize-model"
+	flagSummarizeAgent       = "summarize-provider"
 	checkpointProviderGitHub = "github"
 )
 
@@ -76,6 +79,10 @@ func (opts *EnableOptions) applyStrategyOptions(settings *EntireSettings) {
 
 func hasStrategyFlags(cmd *cobra.Command) bool {
 	return cmd.Flags().Changed(flagCheckpointRemote) || cmd.Flags().Changed(flagSkipPushSessions)
+}
+
+func hasSummaryProviderFlags(cmd *cobra.Command) bool {
+	return cmd.Flags().Changed(flagSummarizeAgent) || cmd.Flags().Changed(flagSummarizeModel)
 }
 
 // enableUsesSetupFlow reports whether `entire enable` should delegate to the
@@ -123,6 +130,56 @@ func updateStrategyOptions(ctx context.Context, w io.Writer, opts EnableOptions)
 	}
 
 	opts.applyStrategyOptions(s)
+
+	if targetFile == settings.EntireSettingsLocalFile {
+		if err := SaveEntireSettingsLocal(ctx, s); err != nil {
+			return fmt.Errorf("failed to save settings: %w", err)
+		}
+	} else {
+		if err := SaveEntireSettings(ctx, s); err != nil {
+			return fmt.Errorf("failed to save settings: %w", err)
+		}
+	}
+
+	fmt.Fprintf(w, "✓ Settings updated (%s)\n", configDisplay)
+	return nil
+}
+
+func updateSummaryGenerationSettings(ctx context.Context, w io.Writer, provider, model string, opts EnableOptions) error {
+	if provider == "" && model == "" {
+		return errors.New("at least one of --summarize-provider or --summarize-model must be set")
+	}
+
+	targetFile, configDisplay := settingsTargetFile(ctx, opts.UseLocalSettings, opts.UseProjectSettings)
+	targetFileAbs, err := paths.AbsPath(ctx, targetFile)
+	if err != nil {
+		targetFileAbs = targetFile
+	}
+
+	s, err := settings.LoadFromFile(targetFileAbs)
+	if err != nil {
+		return fmt.Errorf("failed to load settings: %w", err)
+	}
+	if s.SummaryGeneration == nil {
+		s.SummaryGeneration = &settings.SummaryGenerationSettings{}
+	}
+
+	if provider != "" {
+		if err := validateSummaryProvider(provider); err != nil {
+			return err
+		}
+	}
+	if model != "" && provider == "" && s.SummaryGeneration.Provider == "" {
+		// The target file alone has no provider, but the merged runtime
+		// settings might (e.g. provider in project, model override in local).
+		// Check the full merged view before rejecting.
+		merged, mergeErr := settings.Load(ctx)
+		if mergeErr != nil || merged.SummaryGeneration == nil || merged.SummaryGeneration.Provider == "" {
+			return errors.New("--summarize-model requires an existing summary provider or --summarize-provider")
+		}
+	}
+
+	s.SummaryGeneration.SetProvider(provider, model)
 
 	if targetFile == settings.EntireSettingsLocalFile {
 		if err := SaveEntireSettingsLocal(ctx, s); err != nil {
@@ -244,7 +301,7 @@ func runManageAgents(ctx context.Context, w io.Writer, opts EnableOptions, selec
 	}
 
 	// Check if we can prompt interactively
-	if !canPromptInteractively() {
+	if !interactive.CanPromptInteractively() {
 		fmt.Fprintln(w, "Cannot show agent selection in non-interactive mode.")
 		fmt.Fprintln(w, "Use: entire configure --agent <name>")
 		return nil
@@ -481,6 +538,8 @@ func newSetupCmd() *cobra.Command {
 	var opts EnableOptions
 	var agentName string
 	var removeAgentName string
+	var summarizeProvider string
+	var summarizeModel string
 
 	cmd := &cobra.Command{
 		Use:   "configure",
@@ -524,9 +583,19 @@ Use --remove to remove a specific agent non-interactively:
 				return setupAgentHooksNonInteractive(ctx, cmd.OutOrStdout(), ag, opts)
 			}
 
-			// Settings-only mode: update strategy options without agent selection
-			if hasStrategyFlags(cmd) && settings.IsSetUpAny(ctx) {
-				return updateStrategyOptions(ctx, cmd.OutOrStdout(), opts)
+			// Settings-only mode: update strategy options / summary provider without agent selection
+			if settings.IsSetUpAny(ctx) && (hasStrategyFlags(cmd) || hasSummaryProviderFlags(cmd)) {
+				if hasStrategyFlags(cmd) {
+					if err := updateStrategyOptions(ctx, cmd.OutOrStdout(), opts); err != nil {
+						return err
+					}
+				}
+				if hasSummaryProviderFlags(cmd) {
+					if err := updateSummaryGenerationSettings(ctx, cmd.OutOrStdout(), summarizeProvider, summarizeModel, opts); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 
 			// If already set up, show agents and let user add more
@@ -548,6 +617,8 @@ Use --remove to remove a specific agent non-interactively:
 	cmd.Flags().BoolVarP(&opts.ForceHooks, "force", "f", false, "Force reinstall hooks (removes existing Entire hooks first)")
 	cmd.Flags().BoolVar(&opts.SkipPushSessions, flagSkipPushSessions, false, "Disable automatic pushing of session logs on git push")
 	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", "Checkpoint remote in provider:owner/repo format (e.g., github:org/checkpoints-repo)")
+	cmd.Flags().StringVar(&summarizeProvider, flagSummarizeAgent, "", "Set the provider used by explain --generate (e.g., claude-code, codex, gemini, cursor, copilot-cli)")
+	cmd.Flags().StringVar(&summarizeModel, flagSummarizeModel, "", "Set the model hint used by explain --generate")
 	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
 
@@ -1047,7 +1118,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	}
 
 	// Check if we can prompt interactively
-	if !canPromptInteractively() {
+	if !interactive.CanPromptInteractively() {
 		if hasInstalledHooks {
 			// Re-run without TTY — keep currently installed agents
 			agents := make([]agent.Agent, 0, len(installedAgentNames))
@@ -1170,23 +1241,6 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 
 func isBuiltInAgent(ag agent.Agent) bool {
 	return !external.IsExternal(ag)
-}
-
-// canPromptInteractively checks if we can show interactive prompts.
-// Returns false when running in CI, tests, or other non-interactive environments.
-func canPromptInteractively() bool {
-	// Check for test environment
-	if os.Getenv("ENTIRE_TEST_TTY") != "" {
-		return os.Getenv("ENTIRE_TEST_TTY") == "1"
-	}
-
-	// Check if /dev/tty is available
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	_ = tty.Close()
-	return true
 }
 
 // printAgentError writes an error message followed by available agents and usage.
@@ -1634,7 +1688,7 @@ func maybePromptVercelDeploymentDisable(ctx context.Context, w io.Writer, target
 		}
 
 		if promptFn == nil {
-			if !canPromptInteractively() {
+			if !interactive.CanPromptInteractively() {
 				fmt.Fprintf(w, "Note: Vercel detected. Run `entire configure` interactively to disable deployments for `%s` branches.\n", vercelconfig.BranchPattern)
 				return false, nil
 			}
