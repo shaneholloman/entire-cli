@@ -497,8 +497,9 @@ func readTranscriptFromObjectTree(tree *object.Tree, agentType types.AgentType) 
 
 // ReadSessionContentByID finds the session with the given sessionID in a checkpoint
 // and returns its content. Mirrors GitStore.ReadSessionContentByID for v2 refs.
-// Returns ErrCheckpointNotFound if the checkpoint doesn't exist; returns a wrapped
-// error if no session in the checkpoint matches sessionID.
+// Returns ErrCheckpointNotFound if the checkpoint doesn't exist; returns a
+// non-wrapped error (containing the session ID and checkpoint ID for context)
+// if no session in the checkpoint matches sessionID.
 func (s *V2GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string) (*SessionContent, error) {
 	summary, err := s.ReadCommitted(ctx, checkpointID)
 	if err != nil {

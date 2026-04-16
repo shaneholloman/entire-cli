@@ -2718,7 +2718,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
 		}
 
-		if settings.IsCheckpointsV1WriteEnabled(ctx) {
+		if !v2Only {
 			updateErr := store.UpdateCommitted(ctx, updateOpts)
 			if updateErr != nil {
 				logging.Warn(logCtx, "finalize: failed to update checkpoint",

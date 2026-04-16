@@ -258,7 +258,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 	// Write checkpoint metadata to the primary store.
 	writeV1Start := time.Now()
 	writeCtx, writeCommittedSpan := perf.Start(ctx, "write_committed_v1")
-	if settings.IsCheckpointsV1WriteEnabled(ctx) {
+	if !v2Only {
 		if err := store.WriteCommitted(writeCtx, writeOpts); err != nil {
 			writeCommittedSpan.RecordError(err)
 			writeCommittedSpan.End()
