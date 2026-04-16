@@ -123,3 +123,47 @@ func TestV2Push_Disabled_NoV2Refs(t *testing.T) {
 	assert.True(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should still exist on remote")
 }
+
+func TestV2Push_V2OnlySkipsV1Branch(t *testing.T) {
+	t.Parallel()
+	env := NewTestEnv(t)
+	defer env.Cleanup()
+
+	env.InitRepo()
+	env.WriteFile("README.md", "# Test")
+	env.WriteFile(".gitignore", ".entire/\n")
+	env.GitAdd("README.md")
+	env.GitAdd(".gitignore")
+	env.GitCommit("Initial commit")
+	env.GitCheckoutNewBranch("feature/v2-only-push-test")
+
+	env.InitEntireWithOptions(map[string]any{
+		"checkpoints_v2_only": true,
+	})
+
+	bareDir := env.SetupBareRemote()
+
+	session := env.NewSession()
+	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add feature")
+	require.NoError(t, err)
+
+	env.WriteFile("feature.go", "package main\n\nfunc Feature() {}")
+	session.CreateTranscript(
+		"Add feature",
+		[]FileChange{{Path: "feature.go", Content: "package main\n\nfunc Feature() {}"}},
+	)
+	err = env.SimulateStop(session.ID, session.TranscriptPath)
+	require.NoError(t, err)
+
+	env.GitAdd("feature.go")
+	env.GitCommitWithShadowHooks("Add feature")
+
+	env.RunPrePush("origin")
+
+	assert.True(t, bareRefExists(t, bareDir, paths.V2MainRefName),
+		"v2 /main ref should exist on remote after push")
+	assert.True(t, bareRefExists(t, bareDir, paths.V2FullCurrentRefName),
+		"v2 /full/current ref should exist on remote after push")
+	assert.False(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
+		"v1 metadata branch should NOT exist on remote when checkpoints_v2_only is enabled")
+}

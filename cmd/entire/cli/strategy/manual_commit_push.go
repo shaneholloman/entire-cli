@@ -27,14 +27,17 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 		return nil
 	}
 
-	_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
-	err := pushBranchIfNeeded(ctx, ps.pushTarget(), paths.MetadataBranchName)
-	if err != nil {
-		pushCheckpointsSpan.RecordError(err)
+	var err error
+	if settings.IsCheckpointsV1WriteEnabled(ctx) {
+		_, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
+		err = pushBranchIfNeeded(ctx, ps.pushTarget(), paths.MetadataBranchName)
+		if err != nil {
+			pushCheckpointsSpan.RecordError(err)
+		}
+		pushCheckpointsSpan.End()
 	}
-	pushCheckpointsSpan.End()
 
-	// Push v2 refs when both checkpoints_v2 and push_v2_refs are enabled
+	// Push v2 refs when enabled.
 	if settings.IsPushV2RefsEnabled(ctx) {
 		_, pushV2Span := perf.Start(ctx, "push_v2_refs")
 		pushV2Refs(ctx, ps.pushTarget())

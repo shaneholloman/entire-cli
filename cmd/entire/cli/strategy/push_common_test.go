@@ -1203,6 +1203,95 @@ func TestPrintSettingsCommitHint(t *testing.T) {
 	})
 }
 
+func TestIsCheckpointsV2OnlyCommitted(t *testing.T) {
+	t.Run("false when settings.json not committed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+
+		t.Chdir(tmpDir)
+		assert.False(t, isCheckpointsV2OnlyCommitted(context.Background()))
+	})
+
+	t.Run("true when checkpoints_v2_only is committed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "enable checkpoints_v2_only")
+
+		t.Chdir(tmpDir)
+		assert.True(t, isCheckpointsV2OnlyCommitted(context.Background()))
+	})
+}
+
+func TestPrintCheckpointsV2OnlyMigrationHint(t *testing.T) {
+	t.Run("prints when checkpoints_v2_only is committed", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "enable checkpoints_v2_only")
+		t.Chdir(tmpDir)
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		assert.Contains(t, output, `entire migrate --checkpoints "v2"`)
+		assert.Contains(t, output, `entire migrate --checkpoints "v2" --force`)
+	})
+
+	t.Run("prints only once per process", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "enable checkpoints_v2_only")
+		t.Chdir(tmpDir)
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		count := bytes.Count([]byte(output), []byte(`entire migrate --checkpoints "v2"`))
+		assert.Equal(t, 2, count, "expected both migrate and migrate --force lines exactly once")
+	})
+}
+
 // captureStderr redirects os.Stderr to a pipe and returns a function that restores
 // stderr and returns the captured output. Must be called on the main goroutine
 // (not parallel-safe). Uses t.Cleanup as a safety net to restore stderr and close

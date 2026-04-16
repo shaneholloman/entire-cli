@@ -119,17 +119,19 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 
 	ps.checkpointURL = checkpointURL
 
-	// If the checkpoint branch doesn't exist locally, try to fetch it from the URL.
-	// This is a one-time operation — once the branch exists locally, subsequent pushes
-	// skip the fetch entirely. Only fetch the metadata branch; trails are always pushed
-	// to the user's push remote, not the checkpoint remote.
-	if err := fetchMetadataBranchIfMissing(ctx, checkpointURL); err != nil {
-		logging.Warn(ctx, "checkpoint-remote: failed to fetch metadata branch",
-			slog.String("error", err.Error()),
-		)
+	if s.IsCheckpointsV1WriteEnabled() {
+		// If the checkpoint branch doesn't exist locally, try to fetch it from the URL.
+		// This is a one-time operation — once the branch exists locally, subsequent pushes
+		// skip the fetch entirely. Only fetch the metadata branch; trails are always pushed
+		// to the user's push remote, not the checkpoint remote.
+		if err := fetchMetadataBranchIfMissing(ctx, checkpointURL); err != nil {
+			logging.Warn(ctx, "checkpoint-remote: failed to fetch metadata branch",
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
-	// Also fetch v2 /main ref if push_v2_refs is enabled
+	// Also fetch v2 /main ref if v2 refs are enabled
 	if s.IsPushV2RefsEnabled() {
 		if err := fetchV2MainRefIfMissing(ctx, checkpointURL); err != nil {
 			logging.Warn(ctx, "checkpoint-remote: failed to fetch v2 /main ref",
