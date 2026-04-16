@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
-
-var cursorCommandRunner = exec.CommandContext
 
 // GenerateText sends a prompt to the Cursor agent CLI and returns the raw text response.
 //
@@ -22,7 +19,7 @@ func (c *CursorAgent) GenerateText(ctx context.Context, prompt string, model str
 		args = append(args, "--model", model)
 	}
 
-	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, cursorCommandRunner, "agent", "cursor", args, prompt)
+	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, c.CommandRunner, "agent", "cursor", args, prompt)
 	if err != nil {
 		return "", fmt.Errorf("cursor text generation failed: %w", err)
 	}

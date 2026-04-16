@@ -3,12 +3,9 @@ package copilotcli
 import (
 	"context"
 	"fmt"
-	"os/exec"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
-
-var copilotCommandRunner = exec.CommandContext
 
 // GenerateText sends a prompt to the Copilot CLI and returns the raw text response.
 //
@@ -22,7 +19,7 @@ func (c *CopilotCLIAgent) GenerateText(ctx context.Context, prompt string, model
 		args = append(args, "--model", model)
 	}
 
-	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, copilotCommandRunner, "copilot", "copilot", args, prompt)
+	result, err := agent.RunIsolatedTextGeneratorCLI(ctx, c.CommandRunner, "copilot", "copilot", args, prompt)
 	if err != nil {
 		return "", fmt.Errorf("copilot text generation failed: %w", err)
 	}
