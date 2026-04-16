@@ -541,8 +541,7 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 }
 
 // formatCheckpointSummaryError maps typed Claude CLI errors and context
-// sentinels to user-facing messages. This is the single point where the
-// final CLI wording is decided.
+// sentinels to user-facing messages.
 func formatCheckpointSummaryError(err error, deadline time.Duration) error {
 	var claudeErr *claudecode.ClaudeError
 	switch {

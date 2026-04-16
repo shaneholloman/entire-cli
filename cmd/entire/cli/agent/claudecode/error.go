@@ -26,13 +26,12 @@ const (
 )
 
 // ClaudeError is a typed error returned by ClaudeCodeAgent's text generation
-// methods. Callers can use errors.As to recover the kind and produce
-// user-facing messages.
+// methods. APIStatus and ExitCode use zero to mean "not applicable."
 type ClaudeError struct {
 	Kind      ClaudeErrorKind
 	Message   string // user-safe text extracted from the CLI envelope or stderr
-	APIStatus int    // HTTP status from the envelope; 0 if not applicable
-	ExitCode  int    // subprocess exit code; 0 if not applicable
+	APIStatus int
+	ExitCode  int
 	Cause     error
 }
 
