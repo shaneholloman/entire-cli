@@ -122,12 +122,11 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 	return nil
 }
 
-// SafelyAdvanceLocalRef updates localRefName to point at targetHash, but only
-// when doing so cannot rewind a locally-ahead ref. Specifically, when a local
-// ref exists and targetHash is reachable by walking back from the local hash,
-// the local ref is already at or ahead of the target — leaving it alone is
-// the safe choice. Otherwise (local missing, equal, or behind) the ref is
-// updated to targetHash.
+// SafelyAdvanceLocalRef updates localRefName to point at targetHash, except
+// when the existing local ref is already at or ahead of targetHash. In that
+// case it leaves the local ref unchanged to avoid rewinding locally-ahead
+// work. Otherwise (local missing, behind, or diverged) it updates the ref to
+// targetHash.
 //
 // The ancestry check walks from the local ref (which has full history), so
 // callers that fetched with --depth=1 do not break the check.
