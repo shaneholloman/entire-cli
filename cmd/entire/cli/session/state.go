@@ -137,6 +137,12 @@ type State struct {
 	// ACTIVE via TurnStart, or ENDED → IDLE via SessionStart) by ActionClearEndedAt.
 	FullyCondensed bool `json:"fully_condensed,omitempty"`
 
+	// DivergenceNoticeShown indicates the prepare-commit-msg warning about
+	// attribution divergence has been shown. Set when the warning fires,
+	// cleared when AttributionBaseCommit realigns with BaseCommit (next
+	// successful condensation). Prevents repeated warnings on every commit.
+	DivergenceNoticeShown bool `json:"divergence_notice_shown,omitempty"`
+
 	// AttachedManually indicates this session was imported via `entire attach` rather
 	// than being captured by hooks during normal agent execution.
 	AttachedManually bool `json:"attached_manually,omitempty"`
