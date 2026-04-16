@@ -24,6 +24,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
+	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
@@ -99,6 +100,10 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
 	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
 	if err != nil {
 		return err
 	}
@@ -1337,6 +1342,10 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	if err != nil {
 		return err
 	}
+	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
+	if err != nil {
+		return err
+	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitMsg := fmt.Sprintf("Finalize transcript for Checkpoint: %s", opts.CheckpointID)
@@ -1414,6 +1423,10 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	emptyTreeHash, err = s.maybeMergeVercelConfig(ctx, emptyTreeHash)
+	if err != nil {
+		return err
+	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	commitHash, err := s.createCommit(emptyTreeHash, plumbing.ZeroHash, "Initialize sessions branch", authorName, authorEmail)
@@ -1426,6 +1439,17 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 	return nil
+}
+
+func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plumbing.Hash) (plumbing.Hash, error) {
+	if err := vercelconfig.InitSettings(ctx); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("initialize vercel settings: %w", err)
+	}
+	mergedTreeHash, err := vercelconfig.MaybeMergeMetadataBranchConfig(s.repo, rootTreeHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge vercel metadata branch config: %w", err)
+	}
+	return mergedTreeHash, nil
 }
 
 // getFetchingTree returns a FetchingTree for the metadata branch.

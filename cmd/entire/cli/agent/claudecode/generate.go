@@ -8,12 +8,22 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
 
 // GenerateText sends a prompt to the Claude CLI and returns the raw text response.
 // Implements the agent.TextGenerator interface.
 // The model parameter hints which model to use (e.g., "haiku", "sonnet").
 // If empty, defaults to "haiku" for fast, cheap generation.
+//
+// Unlike most agents, this implementation runs the subprocess directly rather
+// than through agent.RunIsolatedTextGeneratorCLI. The shared helper collapses
+// stderr + exit code into a single formatted error string, but Claude CLI
+// returns operational errors (auth, rate limit, invalid model) as exit 0
+// with is_error:true in the JSON envelope on stdout — so we need structured
+// access to stdout, stderr and the exit code to produce the typed ClaudeError
+// values that formatCheckpointSummaryError maps to actionable messages.
 func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model string) (string, error) {
 	claudePath := "claude"
 	if model == "" {
@@ -30,9 +40,9 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 		"--model", model, "--setting-sources", "")
 
 	// Isolate from the user's git repo to prevent recursive hook triggers
-	// and index pollution (same approach as summarize/claude.go).
+	// and index pollution (matches agent.RunIsolatedTextGeneratorCLI behavior).
 	cmd.Dir = os.TempDir()
-	cmd.Env = stripGitEnv(os.Environ())
+	cmd.Env = agent.StripGitEnv(os.Environ())
 	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer
@@ -93,17 +103,4 @@ func isExecNotFound(err error) bool {
 		return true
 	}
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
-}
-
-// stripGitEnv returns a copy of env with all GIT_* variables removed.
-// This prevents a subprocess from discovering or modifying the parent's git repo.
-// Duplicated from summarize/claude.go — simple filter not worth extracting to shared package.
-func stripGitEnv(env []string) []string {
-	filtered := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.HasPrefix(e, "GIT_") {
-			filtered = append(filtered, e)
-		}
-	}
-	return filtered
 }

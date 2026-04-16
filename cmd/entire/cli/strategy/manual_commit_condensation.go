@@ -455,8 +455,9 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 		return nil
 	}
 
+	generator := buildSummaryGenerator(summarizeCtx)
 	// scopedTranscript is sliced from redactedTranscript, which was redacted earlier in CondenseSession.
-	summary, err := summarize.GenerateFromTranscript(summarizeCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, state.AgentType, nil)
+	summary, err := summarize.GenerateFromTranscript(summarizeCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, state.AgentType, generator)
 	if err != nil {
 		logging.Warn(summarizeCtx, "summary generation failed",
 			slog.String("session_id", state.SessionID),
@@ -466,6 +467,57 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 	logging.Info(summarizeCtx, "summary generated",
 		slog.String("session_id", state.SessionID))
 	return summary
+}
+
+// buildSummaryGenerator returns a Generator based on the configured summary provider.
+// Returns nil if no provider is configured (GenerateFromTranscript falls back to ClaudeGenerator).
+//
+// The return type is the summarize.Generator interface rather than the concrete
+// adapter pointer so callers can't accidentally hold a non-nil interface that
+// wraps a nil pointer (the classic Go nil-interface footgun).
+func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // intentional: nil interface avoids nil-pointer-wrapped-in-interface bug
+	s, err := settings.Load(ctx)
+	if err != nil {
+		// Warn (not Debug): this is the auto-summarize hot path on every commit.
+		// A settings-load failure silently downgrades the user's configured
+		// provider to the default, and Debug would hide that from operators.
+		logging.Warn(ctx, "could not load settings for summary provider, using default",
+			"error", err.Error())
+		return nil
+	}
+	if s.SummaryGeneration == nil || s.SummaryGeneration.Provider == "" {
+		return nil
+	}
+
+	providerName := types.AgentName(s.SummaryGeneration.Provider)
+	ag, err := agent.Get(providerName)
+	if err != nil {
+		logging.Warn(ctx, "configured summary provider not available, using default",
+			"provider", s.SummaryGeneration.Provider, "error", err.Error())
+		return nil
+	}
+
+	// Check binary on PATH, not DetectPresence — a repo can use one agent
+	// for development while a different agent generates summaries. Fall back
+	// silently (Warn log) because this runs in the post-commit hook and a
+	// hard error would block the commit.
+	if !agent.IsSummaryCLIAvailable(providerName) {
+		logging.Warn(ctx, "configured summary provider CLI binary not on PATH, using default",
+			"provider", s.SummaryGeneration.Provider)
+		return nil
+	}
+
+	tg, ok := agent.AsTextGenerator(ag)
+	if !ok {
+		logging.Warn(ctx, "configured summary provider does not support text generation, using default",
+			"provider", s.SummaryGeneration.Provider)
+		return nil
+	}
+
+	return &summarize.TextGeneratorAdapter{
+		TextGenerator: tg,
+		Model:         summarize.ResolveModel(providerName, s.SummaryGeneration.Model),
+	}
 }
 
 // marshalPromptAttributionsIncludingPending builds the complete prompt attribution slice
