@@ -245,7 +245,10 @@ func TestV2DualWrite_StopTimeFinalization(t *testing.T) {
 	assert.Contains(t, compactTranscript, `"v":1`)
 }
 
-func TestV2Only_FullWorkflow(t *testing.T) {
+// TestV2Only_SkipsV1Write verifies the v2-only specific deltas: v1 metadata is
+// not written and v2 refs still exist. The full v2 payload shape is already
+// covered by TestV2DualWrite_FullWorkflow.
+func TestV2Only_SkipsV1Write(t *testing.T) {
 	t.Parallel()
 	env := NewTestEnv(t)
 	defer env.Cleanup()
@@ -263,16 +266,14 @@ func TestV2Only_FullWorkflow(t *testing.T) {
 	})
 
 	session := env.NewSession()
-	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add greeting function")
-	require.NoError(t, err)
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add greeting function"))
 
 	env.WriteFile("greet.go", "package main\n\nfunc Greet() string { return \"hello\" }")
 	session.CreateTranscript(
 		"Add greeting function",
 		[]FileChange{{Path: "greet.go", Content: "package main\n\nfunc Greet() string { return \"hello\" }"}},
 	)
-	err = env.SimulateStop(session.ID, session.TranscriptPath)
-	require.NoError(t, err)
+	require.NoError(t, env.SimulateStop(session.ID, session.TranscriptPath))
 
 	env.GitCommitWithShadowHooks("Add greeting function", "greet.go")
 
@@ -283,20 +284,12 @@ func TestV2Only_FullWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	cpPath := cpID.Path()
 
+	// v1: should NOT be written.
 	_, found := env.ReadFileFromBranch(paths.MetadataBranchName, cpPath+"/"+paths.MetadataFileName)
 	assert.False(t, found,
 		"v1 committed checkpoint metadata should NOT exist when checkpoints_v2_only is enabled")
 
-	assert.True(t, env.RefExists(paths.V2MainRefName),
-		"v2 /main ref should exist")
-	assert.True(t, env.RefExists(paths.V2FullCurrentRefName),
-		"v2 /full/current ref should exist")
-
-	mainSummary, found := env.ReadFileFromRef(paths.V2MainRefName, cpPath+"/"+paths.MetadataFileName)
-	require.True(t, found, "v2 /main root metadata.json should exist")
-	assert.Contains(t, mainSummary, cpIDStr)
-
-	fullTranscript, found := env.ReadFileFromRef(paths.V2FullCurrentRefName, cpPath+"/0/"+paths.V2RawTranscriptFileName)
-	require.True(t, found, "raw_transcript should exist on v2 /full/current")
-	assert.Contains(t, fullTranscript, "Greet")
+	// v2: smoke check that the checkpoint still landed.
+	assert.True(t, env.RefExists(paths.V2MainRefName), "v2 /main ref should exist")
+	assert.True(t, env.RefExists(paths.V2FullCurrentRefName), "v2 /full/current ref should exist")
 }

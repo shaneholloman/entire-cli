@@ -276,11 +276,10 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 			writeCommittedV2Span.End()
 			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
 		}
-		writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	} else {
 		writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
-		writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	}
+	writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	writeCommittedV2Span.End()
 	writeV2Duration := time.Since(writeV2Start)
 
@@ -1410,14 +1409,16 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 	return offset
 }
 
-// writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
-// is enabled in settings. Failures are logged as warnings — v2 writes are
-// best-effort during the dual-write period and must not block the v1 path.
+// writeCommittedV2 writes checkpoint data to v2 refs unconditionally.
+// Callers decide whether to propagate or swallow the error (v2-only vs dual-write).
 func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
 	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
 	return v2Store.WriteCommitted(ctx, opts)
 }
 
+// writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
+// is enabled. Failures are logged as warnings — in dual-write mode v2 writes are
+// best-effort and must not block the v1 path.
 func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
 	if !settings.IsCheckpointsV2Enabled(ctx) {
 		return

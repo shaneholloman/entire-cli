@@ -2692,19 +2692,17 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		// Generate compact transcript for v2 /main
 		if v2Store != nil && redactedTranscript.Len() > 0 {
 			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
-			startLine := 0
+			var (
+				content *checkpoint.SessionContent
+				readErr error
+			)
 			if v2Only {
-				if summary, readErr := v2Store.ReadCommitted(ctx, cpID); readErr == nil && summary != nil {
-					for sessionIndex := range summary.Sessions {
-						if content, contentErr := v2Store.ReadSessionContent(ctx, cpID, sessionIndex); contentErr == nil && content != nil {
-							if content.Metadata.SessionID == state.SessionID {
-								startLine = content.Metadata.GetTranscriptStart()
-								break
-							}
-						}
-					}
-				}
-			} else if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
+				content, readErr = v2Store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			} else {
+				content, readErr = store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			}
+			startLine := 0
+			if readErr == nil && content != nil {
 				startLine = content.Metadata.GetTranscriptStart()
 			} else {
 				errMsg := "unknown"
@@ -2734,18 +2732,16 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 		if v2Store != nil {
 			if v2Err := v2Store.UpdateCommitted(logCtx, updateOpts); v2Err != nil {
-				label := "v2 dual-write update failed"
-				if v2Only {
-					label = "finalize: failed to update checkpoint in v2"
-					errCount++
-				}
-				logging.Warn(logCtx, label,
+				attrs := []any{
 					slog.String("checkpoint_id", cpIDStr),
 					slog.String("error", v2Err.Error()),
-				)
+				}
 				if v2Only {
+					logging.Warn(logCtx, "finalize: failed to update checkpoint in v2", attrs...)
+					errCount++
 					continue
 				}
+				logging.Warn(logCtx, "v2 dual-write update failed", attrs...)
 			}
 		}
 

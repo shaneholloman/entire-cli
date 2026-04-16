@@ -124,6 +124,9 @@ func TestV2Push_Disabled_NoV2Refs(t *testing.T) {
 		"v1 metadata branch should still exist on remote")
 }
 
+// TestV2Push_V2OnlySkipsV1Branch verifies that the v1 metadata branch is not
+// pushed when checkpoints_v2_only is enabled; v2 ref pushing itself is covered
+// by TestV2Push_FullCycle.
 func TestV2Push_V2OnlySkipsV1Branch(t *testing.T) {
 	t.Parallel()
 	env := NewTestEnv(t)
@@ -144,26 +147,23 @@ func TestV2Push_V2OnlySkipsV1Branch(t *testing.T) {
 	bareDir := env.SetupBareRemote()
 
 	session := env.NewSession()
-	err := env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add feature")
-	require.NoError(t, err)
+	require.NoError(t, env.SimulateUserPromptSubmitWithPrompt(session.ID, "Add feature"))
 
 	env.WriteFile("feature.go", "package main\n\nfunc Feature() {}")
 	session.CreateTranscript(
 		"Add feature",
 		[]FileChange{{Path: "feature.go", Content: "package main\n\nfunc Feature() {}"}},
 	)
-	err = env.SimulateStop(session.ID, session.TranscriptPath)
-	require.NoError(t, err)
+	require.NoError(t, env.SimulateStop(session.ID, session.TranscriptPath))
 
 	env.GitAdd("feature.go")
 	env.GitCommitWithShadowHooks("Add feature")
 
 	env.RunPrePush("origin")
 
-	assert.True(t, bareRefExists(t, bareDir, paths.V2MainRefName),
-		"v2 /main ref should exist on remote after push")
-	assert.True(t, bareRefExists(t, bareDir, paths.V2FullCurrentRefName),
-		"v2 /full/current ref should exist on remote after push")
 	assert.False(t, bareRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should NOT exist on remote when checkpoints_v2_only is enabled")
+	// Smoke: v2 refs still land; full payload asserted in TestV2Push_FullCycle.
+	assert.True(t, bareRefExists(t, bareDir, paths.V2MainRefName),
+		"v2 /main ref should exist on remote after push")
 }

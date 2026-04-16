@@ -170,18 +170,20 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		writeOpts.CompactTranscript = compacted
 	}
 
-	if settings.IsCheckpointsV2OnlyEnabled(logCtx) {
-		if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
-			return fmt.Errorf("failed to write checkpoint to v2: %w", err)
-		}
-	} else {
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(logCtx)
+	if !v2Only {
 		if err := store.WriteCommitted(ctx, writeOpts); err != nil {
 			return fmt.Errorf("failed to write checkpoint: %w", err)
 		}
-		if settings.IsCheckpointsV2Enabled(logCtx) {
-			if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
-				logging.Warn(logCtx, "attach v2 dual-write failed", "error", err)
+	}
+	// IsCheckpointsV2Enabled is true whenever v2Only is true, so this covers both
+	// the v2-only and dual-write paths. Only v2-only propagates the error.
+	if settings.IsCheckpointsV2Enabled(logCtx) {
+		if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
+			if v2Only {
+				return fmt.Errorf("failed to write checkpoint to v2: %w", err)
 			}
+			logging.Warn(logCtx, "attach v2 dual-write failed", "error", err)
 		}
 	}
 

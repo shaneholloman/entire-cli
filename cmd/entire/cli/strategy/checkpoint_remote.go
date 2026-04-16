@@ -119,8 +119,10 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 
 	ps.checkpointURL = checkpointURL
 
+	// Skip the v1 metadata-branch fetch entirely in v2-only mode — there is no
+	// v1 branch being written or pushed, so there is nothing to sync.
 	if s.IsCheckpointsV1WriteEnabled() {
-		// If the checkpoint branch doesn't exist locally, try to fetch it from the URL.
+		// If the v1 checkpoint branch doesn't exist locally, try to fetch it from the URL.
 		// This is a one-time operation — once the branch exists locally, subsequent pushes
 		// skip the fetch entirely. Only fetch the metadata branch; trails are always pushed
 		// to the user's push remote, not the checkpoint remote.

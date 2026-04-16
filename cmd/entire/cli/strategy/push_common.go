@@ -150,8 +150,8 @@ func printCheckpointsV2OnlyMigrationHint(ctx context.Context) {
 		if !isCheckpointsV2OnlyCommitted(ctx) {
 			return
 		}
-		fmt.Fprintln(os.Stderr, `[entire] Note: .entire/settings.json enables checkpoints_v2_only. Run 'entire migrate --checkpoints "v2"' to migrate existing checkpoints to v2.`)
-		fmt.Fprintln(os.Stderr, `[entire] Use 'entire migrate --checkpoints "v2" --force' to rewrite all checkpoints in v2.`)
+		fmt.Fprintln(os.Stderr, "[entire] Note: .entire/settings.json enables checkpoints_v2_only. Run 'entire migrate --checkpoints v2' to migrate existing checkpoints to v2.")
+		fmt.Fprintln(os.Stderr, "[entire] Use 'entire migrate --checkpoints v2 --force' to rewrite all checkpoints in v2.")
 	})
 }
 

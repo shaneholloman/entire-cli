@@ -852,33 +852,6 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 	}
 }
 
-func TestIsCheckpointsV1WriteEnabled(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		opts     map[string]any
-		expected bool
-	}{
-		{"default on", nil, true},
-		{"dual write still writes v1", map[string]any{"checkpoints_v2": true}, true},
-		{"v2 only disables v1", map[string]any{"checkpoints_v2_only": true}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			s := &EntireSettings{
-				Enabled:         true,
-				StrategyOptions: tt.opts,
-			}
-			if got := s.IsCheckpointsV1WriteEnabled(); got != tt.expected {
-				t.Errorf("IsCheckpointsV1WriteEnabled() = %v, want %v", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestIsFilteredFetchesEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}

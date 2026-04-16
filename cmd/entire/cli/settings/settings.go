@@ -560,7 +560,9 @@ func IsPushV2RefsEnabled(ctx context.Context) bool {
 	return s.IsPushV2RefsEnabled()
 }
 
-// IsCheckpointsV1WriteEnabled checks if v1 checkpoint writes should still happen.
+// IsCheckpointsV1WriteEnabled reports whether v1 checkpoint writes should still
+// happen. Defaults to true (fail-safe: keep writing v1) when settings cannot be
+// loaded, so a misconfigured settings file does not silently drop checkpoints.
 func IsCheckpointsV1WriteEnabled(ctx context.Context) bool {
 	s, err := Load(ctx)
 	if err != nil {
