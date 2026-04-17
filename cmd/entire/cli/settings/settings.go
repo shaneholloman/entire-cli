@@ -567,6 +567,16 @@ func IsCheckpointsV2Enabled(ctx context.Context) bool {
 	return settings.IsCheckpointsV2Enabled()
 }
 
+// IsCheckpointsV2OnlyEnabled checks if checkpoints should be written and pushed
+// only via v2 refs.
+func IsCheckpointsV2OnlyEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.IsCheckpointsV2OnlyEnabled()
+}
+
 // IsPushV2RefsEnabled checks if pushing v2 refs is enabled in settings.
 // Returns false by default if settings cannot be loaded or flags are missing.
 func IsPushV2RefsEnabled(ctx context.Context) bool {
@@ -658,9 +668,12 @@ func (s *EntireSettings) GetCheckpointRemote() *CheckpointRemoteConfig {
 	return &CheckpointRemoteConfig{Provider: provider, Repo: repo}
 }
 
-// IsCheckpointsV2Enabled checks if checkpoints v2 (dual-write to refs/entire/) is enabled.
-// Returns false by default if the key is missing or not a bool.
+// IsCheckpointsV2Enabled checks if checkpoints v2 is enabled.
+// Returns true when either checkpoints_v2 or checkpoints_v2_only is enabled.
 func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
+	if s.IsCheckpointsV2OnlyEnabled() {
+		return true
+	}
 	if s.StrategyOptions == nil {
 		return false
 	}
@@ -668,9 +681,22 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 	return ok && val
 }
 
+// IsCheckpointsV2OnlyEnabled checks if checkpoints should be written and pushed
+// only via v2 refs, with no v1 dual-write.
+func (s *EntireSettings) IsCheckpointsV2OnlyEnabled() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["checkpoints_v2_only"].(bool)
+	return ok && val
+}
+
 // IsPushV2RefsEnabled checks if pushing v2 refs is enabled.
-// Requires both checkpoints_v2 and push_v2_refs to be true.
+// checkpoints_v2_only forces v2 ref pushes on, regardless of push_v2_refs.
 func (s *EntireSettings) IsPushV2RefsEnabled() bool {
+	if s.IsCheckpointsV2OnlyEnabled() {
+		return true
+	}
 	if !s.IsCheckpointsV2Enabled() {
 		return false
 	}

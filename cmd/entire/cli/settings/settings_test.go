@@ -688,6 +688,17 @@ func TestIsCheckpointsV2Enabled_True(t *testing.T) {
 	}
 }
 
+func TestIsCheckpointsV2Enabled_V2Only(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_v2_only": true},
+	}
+	if !s.IsCheckpointsV2Enabled() {
+		t.Error("expected IsCheckpointsV2Enabled to be true when checkpoints_v2_only is enabled")
+	}
+}
+
 func TestIsCheckpointsV2Enabled_ExplicitlyFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{
@@ -773,6 +784,36 @@ func TestIsCheckpointsV2Enabled_LocalOverride(t *testing.T) {
 	}
 }
 
+func TestIsCheckpointsV2OnlyEnabled_DefaultsFalse(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{Enabled: true}
+	if s.IsCheckpointsV2OnlyEnabled() {
+		t.Error("expected IsCheckpointsV2OnlyEnabled to default to false")
+	}
+}
+
+func TestIsCheckpointsV2OnlyEnabled_True(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_v2_only": true},
+	}
+	if !s.IsCheckpointsV2OnlyEnabled() {
+		t.Error("expected IsCheckpointsV2OnlyEnabled to be true")
+	}
+}
+
+func TestIsCheckpointsV2OnlyEnabled_WrongType(t *testing.T) {
+	t.Parallel()
+	s := &EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_v2_only": "yes"},
+	}
+	if s.IsCheckpointsV2OnlyEnabled() {
+		t.Error("expected IsCheckpointsV2OnlyEnabled to be false for non-bool value")
+	}
+}
+
 func TestIsPushV2RefsEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}
@@ -789,6 +830,7 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 		opts     map[string]any
 		expected bool
 	}{
+		{"v2 only supersedes both", map[string]any{"checkpoints_v2": false, "push_v2_refs": false, "checkpoints_v2_only": true}, true},
 		{"both true", map[string]any{"checkpoints_v2": true, "push_v2_refs": true}, true},
 		{"only checkpoints_v2", map[string]any{"checkpoints_v2": true}, false},
 		{"only push_v2_refs", map[string]any{"push_v2_refs": true}, false},

@@ -827,9 +827,7 @@ func TestBuildCondensedTranscriptFromBytes_Codex_ExecCommandDetail(t *testing.T)
 			break
 		}
 	}
-	if toolEntry == nil {
-		t.Fatalf("no tool entry found in entries: %#v", entries)
-	}
+	require.NotNil(t, toolEntry, "no tool entry found in entries: %#v", entries)
 	if toolEntry.ToolName != "exec_command" {
 		t.Fatalf("expected exec_command, got %q", toolEntry.ToolName)
 	}
