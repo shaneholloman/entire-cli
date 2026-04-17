@@ -666,6 +666,23 @@ func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 	}
 }
 
+func TestEnableCmd_InitRepoFlagsMutuallyExclusive(t *testing.T) {
+	setupTestRepo(t)
+
+	cmd := newEnableCmd()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--init-repo", "--no-init-repo"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when both --init-repo and --no-init-repo are set")
+	}
+	if !strings.Contains(err.Error(), "init-repo") || !strings.Contains(err.Error(), "no-init-repo") {
+		t.Fatalf("expected error to mention both flags, got: %v", err)
+	}
+}
+
 // restoreCwd chdirs into dir for the duration of the test.
 func restoreCwd(t *testing.T, dir string) {
 	t.Helper()
