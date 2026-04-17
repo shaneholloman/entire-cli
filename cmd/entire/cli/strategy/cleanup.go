@@ -40,6 +40,7 @@ const (
 type CleanupItem struct {
 	Type   CleanupType
 	ID     string // Branch name, session ID, or checkpoint ID
+	RefOID string // For ref-based items: the OID observed at listing time (compare-and-swap)
 	Reason string // Why this item is being cleaned
 }
 
@@ -365,7 +366,7 @@ func ListEligibleV2Generations(ctx context.Context) ([]CleanupItem, []string, er
 
 	for _, name := range archived {
 		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + name)
-		_, treeHash, refErr := store.GetRefState(refName)
+		commitHash, treeHash, refErr := store.GetRefState(refName)
 		if refErr != nil {
 			warnings = append(warnings, fmt.Sprintf("generation %s: cannot read ref", name))
 			continue
@@ -397,6 +398,7 @@ func ListEligibleV2Generations(ctx context.Context) ([]CleanupItem, []string, er
 		cleanupItems = append(cleanupItems, CleanupItem{
 			Type:   CleanupTypeV2Generation,
 			ID:     name,
+			RefOID: commitHash.String(),
 			Reason: "expired archived full transcript generation",
 		})
 	}
@@ -404,19 +406,27 @@ func ListEligibleV2Generations(ctx context.Context) ([]CleanupItem, []string, er
 	return cleanupItems, warnings, nil
 }
 
+// V2GenerationRef pairs a generation name with the OID observed at listing time.
+type V2GenerationRef struct {
+	Name   string
+	RefOID string // Commit hash for compare-and-swap; empty skips the check
+}
+
 // DeleteV2Generations deletes archived checkpoints v2 /full/* generation refs.
-func DeleteV2Generations(ctx context.Context, generationNames []string) (deleted []string, failed []string, err error) {
-	if len(generationNames) == 0 {
+// When RefOID is set, deletion uses compare-and-swap to avoid deleting a ref
+// that was repointed after enumeration.
+func DeleteV2Generations(ctx context.Context, generations []V2GenerationRef) (deleted []string, failed []string, err error) {
+	if len(generations) == 0 {
 		return []string{}, []string{}, nil
 	}
 
-	for _, name := range generationNames {
-		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + name)
-		if err := DeleteRefCLI(ctx, refName.String(), ""); err != nil {
-			failed = append(failed, name)
+	for _, gen := range generations {
+		refName := plumbing.ReferenceName(paths.V2FullRefPrefix + gen.Name)
+		if err := DeleteRefCLI(ctx, refName.String(), gen.RefOID); err != nil {
+			failed = append(failed, gen.Name)
 			continue
 		}
-		deleted = append(deleted, name)
+		deleted = append(deleted, gen.Name)
 	}
 
 	return deleted, failed, nil
@@ -477,7 +487,8 @@ func DeleteAllCleanupItems(ctx context.Context, items []CleanupItem) (*CleanupRe
 	}
 
 	// Group items by type
-	var branches, states, checkpoints, v2Generations []string
+	var branches, states, checkpoints []string
+	var v2Generations []V2GenerationRef
 	for _, item := range items {
 		switch item.Type {
 		case CleanupTypeShadowBranch:
@@ -487,7 +498,7 @@ func DeleteAllCleanupItems(ctx context.Context, items []CleanupItem) (*CleanupRe
 		case CleanupTypeCheckpoint:
 			checkpoints = append(checkpoints, item.ID)
 		case CleanupTypeV2Generation:
-			v2Generations = append(v2Generations, item.ID)
+			v2Generations = append(v2Generations, V2GenerationRef{Name: item.ID, RefOID: item.RefOID})
 		}
 	}
 
