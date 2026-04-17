@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,22 +25,29 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	var detailed bool
+	var jsonFlag bool
 
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show Entire status",
 		Long:  "Show whether Entire is currently enabled or disabled",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runStatus(cmd.Context(), cmd.OutOrStdout(), detailed)
+			return runStatus(cmd.Context(), cmd.OutOrStdout(), detailed, jsonFlag)
 		},
 	}
 
 	cmd.Flags().BoolVar(&detailed, "detailed", false, "Show detailed status for each settings file")
+	cmd.Flags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
+	cmd.MarkFlagsMutuallyExclusive("detailed", "json")
 
 	return cmd
 }
 
-func runStatus(ctx context.Context, w io.Writer, detailed bool) error {
+func runStatus(ctx context.Context, w io.Writer, detailed, jsonOutput bool) error {
+	if jsonOutput {
+		return runStatusJSON(ctx, w)
+	}
+
 	// Check if we're in a git repository
 	if _, repoErr := paths.WorktreeRoot(ctx); repoErr != nil {
 		fmt.Fprintln(w, "✕ not a git repository")
@@ -426,4 +434,123 @@ func resolveWorktreeBranchGit(ctx context.Context, worktreePath string) string {
 		return strings.TrimPrefix(ref, "refs/heads/")
 	}
 	return detachedHEADDisplay
+}
+
+// statusJSON is the JSON output for `entire status --json`.
+type statusJSON struct {
+	Enabled        bool               `json:"enabled"`
+	Agents         []string           `json:"agents"`
+	ActiveSessions []sessionBriefJSON `json:"active_sessions"`
+	Error          string             `json:"error,omitempty"`
+}
+
+type sessionBriefJSON struct {
+	Agent  string `json:"agent"`
+	Model  string `json:"model,omitempty"`
+	Status string `json:"status"`
+}
+
+func runStatusJSON(ctx context.Context, w io.Writer) error {
+	writeJSON := func(v statusJSON) error {
+		return json.NewEncoder(w).Encode(v)
+	}
+
+	if _, err := paths.WorktreeRoot(ctx); err != nil {
+		return writeJSON(statusJSON{Error: "not a git repository"})
+	}
+
+	settingsPath, err := paths.AbsPath(ctx, EntireSettingsFile)
+	if err != nil {
+		settingsPath = EntireSettingsFile
+	}
+	localSettingsPath, err := paths.AbsPath(ctx, EntireSettingsLocalFile)
+	if err != nil {
+		localSettingsPath = EntireSettingsLocalFile
+	}
+
+	_, projectErr := os.Stat(settingsPath)
+	if projectErr != nil && !errors.Is(projectErr, fs.ErrNotExist) {
+		return writeJSON(statusJSON{Error: fmt.Sprintf("cannot access project settings file: %v", projectErr)})
+	}
+	_, localErr := os.Stat(localSettingsPath)
+	if localErr != nil && !errors.Is(localErr, fs.ErrNotExist) {
+		return writeJSON(statusJSON{Error: fmt.Sprintf("cannot access local settings file: %v", localErr)})
+	}
+
+	if projectErr != nil && localErr != nil {
+		return writeJSON(statusJSON{Error: "not set up"})
+	}
+
+	s, err := LoadEntireSettings(ctx)
+	if err != nil {
+		return writeJSON(statusJSON{Error: fmt.Sprintf("failed to load settings: %v", err)})
+	}
+
+	result := statusJSON{
+		Enabled:        s.Enabled,
+		Agents:         []string{},
+		ActiveSessions: []sessionBriefJSON{},
+	}
+
+	if s.Enabled {
+		if names := InstalledAgentDisplayNames(ctx); len(names) > 0 {
+			result.Agents = names
+		}
+
+		if store, err := session.NewStateStore(ctx); err == nil {
+			if states, err := store.List(ctx); err == nil {
+				// Deduplicate by agent: one entry per agent, "active" wins over "idle".
+				type agentEntry struct {
+					brief    sessionBriefJSON
+					isActive bool
+				}
+				byAgent := make(map[string]*agentEntry)
+				for _, st := range states {
+					if st.EndedAt != nil {
+						continue
+					}
+					agent := string(st.AgentType)
+					if agent == "" {
+						agent = unknownPlaceholder
+					}
+					active := st.Phase == session.PhaseActive
+					if existing, ok := byAgent[agent]; ok {
+						if active && !existing.isActive {
+							existing.brief.Model = st.ModelName
+							existing.brief.Status = sessionStatusLabel(st)
+							existing.isActive = true
+						}
+					} else {
+						byAgent[agent] = &agentEntry{
+							brief: sessionBriefJSON{
+								Agent:  agent,
+								Model:  st.ModelName,
+								Status: sessionStatusLabel(st),
+							},
+							isActive: active,
+						}
+					}
+				}
+				for _, e := range byAgent {
+					result.ActiveSessions = append(result.ActiveSessions, e.brief)
+				}
+				sort.Slice(result.ActiveSessions, func(i, j int) bool {
+					return result.ActiveSessions[i].Agent < result.ActiveSessions[j].Agent
+				})
+			}
+		}
+	}
+
+	return writeJSON(result)
+}
+
+// sessionStatusLabel derives a display status from a session state.
+func sessionStatusLabel(s *session.State) string {
+	if s.EndedAt != nil {
+		return "ended"
+	}
+	if s.Phase != "" {
+		return string(s.Phase)
+	}
+	return string(session.PhaseIdle)
 }

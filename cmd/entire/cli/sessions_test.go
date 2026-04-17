@@ -855,8 +855,8 @@ func TestInfoCmd_JSONOutput(t *testing.T) {
 	if result["session_id"] != "test-info-json" {
 		t.Errorf("expected session_id 'test-info-json', got: %v", result["session_id"])
 	}
-	if result["agent"] != "Claude Code" {
-		t.Errorf("expected agent 'Claude Code', got: %v", result["agent"])
+	if result["agent"] != testAgentClaude {
+		t.Errorf("expected agent %q, got: %v", testAgentClaude, result["agent"])
 	}
 	if result["status"] != "idle" {
 		t.Errorf("expected status 'idle', got: %v", result["status"])
