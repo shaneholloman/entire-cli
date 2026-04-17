@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -879,6 +880,28 @@ func TestIsFilteredFetchesEnabled_WrongType(t *testing.T) {
 	}
 	if s.IsFilteredFetchesEnabled() {
 		t.Error("expected IsFilteredFetchesEnabled to be false for non-bool value")
+	}
+}
+
+func TestSummaryTimeoutValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		seconds int
+		want    time.Duration
+	}{
+		{"Unset", 0, 0},
+		{"Negative", -5, 0},
+		{"Positive", 90, 90 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{SummaryTimeoutSeconds: tc.seconds}
+			if got := s.SummaryTimeoutValue(); got != tc.want {
+				t.Errorf("SummaryTimeoutValue() = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 

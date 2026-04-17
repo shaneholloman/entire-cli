@@ -56,7 +56,7 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes redact.Redacted
 
 	summary, err := generator.Generate(ctx, input)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate summary: %w", err)
+		return nil, err //nolint:wrapcheck // preserve *ClaudeError for errors.As at the explain layer
 	}
 
 	return summary, nil

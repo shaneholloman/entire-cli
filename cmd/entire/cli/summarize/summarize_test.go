@@ -3,10 +3,13 @@ package summarize
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	"github.com/entireio/cli/redact"
@@ -667,6 +670,40 @@ func TestGenerateFromTranscript(t *testing.T) {
 	require.NotNil(t, summary, "expected non-nil summary")
 	if summary.Intent != "Test intent" {
 		t.Errorf("unexpected intent: %s", summary.Intent)
+	}
+}
+
+// TestGenerateFromTranscript_PreservesClaudeError pins both //nolint:wrapcheck
+// contracts in one shot: the stub TextGenerator returns a *ClaudeError, which
+// must survive ClaudeGenerator.Generate (claude.go) AND GenerateFromTranscript
+// (summarize.go) so the explain layer can map it to actionable user messaging
+// via errors.As. A regression at either layer that flattens the typed error
+// (e.g. fmt.Errorf("...: %v", err)) would fail this test.
+func TestGenerateFromTranscript_PreservesClaudeError(t *testing.T) {
+	t.Parallel()
+
+	claudeErr := &claudecode.ClaudeError{
+		Kind:      claudecode.ClaudeErrorRateLimit,
+		Message:   "Rate limit exceeded",
+		APIStatus: 429,
+	}
+	gen := &ClaudeGenerator{TextGenerator: &stubTextGenerator{err: claudeErr}}
+
+	transcript := []byte(`{"type":"user","message":{"content":"Hello"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there"}]}}`)
+
+	_, err := GenerateFromTranscript(context.Background(), redact.AlreadyRedacted(transcript), []string{}, "", gen)
+	wrapped := fmt.Errorf("explain generate call: %w", err)
+
+	var ce *claudecode.ClaudeError
+	if !errors.As(wrapped, &ce) {
+		t.Fatalf("errors.As could not recover *ClaudeError from chain: %v", wrapped)
+	}
+	if ce.Kind != claudecode.ClaudeErrorRateLimit {
+		t.Errorf("Kind = %v; want %v", ce.Kind, claudecode.ClaudeErrorRateLimit)
+	}
+	if ce.APIStatus != 429 {
+		t.Errorf("APIStatus = %d; want 429", ce.APIStatus)
 	}
 }
 
