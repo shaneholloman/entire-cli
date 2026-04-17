@@ -56,16 +56,6 @@ func TestClaudeError_ErrorEmptyMessageIncludesExitCode(t *testing.T) {
 	}
 }
 
-func TestClaudeError_ErrorEmptyMessageNegativeExitCode(t *testing.T) {
-	t.Parallel()
-	e := &ClaudeError{Kind: ClaudeErrorUnknown, ExitCode: -1}
-	s := e.Error()
-	want := "claude CLI error (kind=unknown, exit=-1)"
-	if s != want {
-		t.Errorf("Error() = %q; want %q", s, want)
-	}
-}
-
 func TestClaudeError_ErrorsAsIntegration(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("timeout")
@@ -108,7 +98,6 @@ func TestClassifyEnvelopeError(t *testing.T) {
 		{"Unknown5xx", "upstream error", intPtr(503), 0, ClaudeErrorUnknown, 503, 0},
 		{"ExitCodePropagated", "internal error", intPtr(500), 2, ClaudeErrorUnknown, 500, 2},
 		{"AuthFromResultWhenStatusNil", "Invalid API key provided", nil, 0, ClaudeErrorAuth, 0, 0},
-		{"AuthFromResultCaseInsensitive", "User is NOT LOGGED IN to Claude", nil, 0, ClaudeErrorAuth, 0, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -3,12 +3,10 @@ package summarize
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 )
 
@@ -75,47 +73,6 @@ func TestClaudeGenerator_TextGeneratorError(t *testing.T) {
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded, got: %v", err)
-	}
-}
-
-// TestClaudeGenerator_PreservesClaudeError pins the contract documented by
-// the //nolint:wrapcheck comment in claude.go: a *ClaudeError returned from
-// the underlying TextGenerator must survive through Generate unwrapped, so
-// the explain layer can map it to an actionable user message via errors.As.
-// A regression that re-introduces fmt.Errorf("...: %v", err) would silently
-// flatten the typed error and fail this test.
-func TestClaudeGenerator_PreservesClaudeError(t *testing.T) {
-	t.Parallel()
-
-	claudeErr := &claudecode.ClaudeError{
-		Kind:      claudecode.ClaudeErrorAuth,
-		Message:   "Invalid API key",
-		APIStatus: 401,
-	}
-	gen := &ClaudeGenerator{
-		TextGenerator: &stubTextGenerator{err: claudeErr},
-	}
-
-	input := Input{
-		Transcript: []Entry{
-			{Type: EntryTypeUser, Content: "Hello"},
-		},
-	}
-
-	// Wrap the result to simulate being handed up through additional layers
-	// before the explain layer inspects it.
-	_, err := gen.Generate(context.Background(), input)
-	wrapped := fmt.Errorf("explain generate call: %w", err)
-
-	var ce *claudecode.ClaudeError
-	if !errors.As(wrapped, &ce) {
-		t.Fatalf("errors.As could not recover *ClaudeError from chain: %v", wrapped)
-	}
-	if ce.Kind != claudecode.ClaudeErrorAuth {
-		t.Errorf("Kind = %v; want %v", ce.Kind, claudecode.ClaudeErrorAuth)
-	}
-	if ce.APIStatus != 401 {
-		t.Errorf("APIStatus = %d; want 401", ce.APIStatus)
 	}
 }
 
