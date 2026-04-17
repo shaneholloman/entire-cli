@@ -2715,7 +2715,13 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 					slog.String("error", errMsg),
 				)
 			}
-			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
+			if compactor, ok := agent.AsTranscriptCompactor(finalAg); ok {
+				if compacted := compactTranscriptForExternalAgent(logCtx, compactor, finalAg, state.SessionID, state.TranscriptPath); compacted != nil {
+					updateOpts.CompactTranscript = compacted.Transcript
+				}
+			} else {
+				updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
+			}
 		}
 
 		if !v2Only {
