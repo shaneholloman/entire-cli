@@ -107,6 +107,33 @@ func TestFormatCheckpointSummaryError_CLIMissing(t *testing.T) {
 	}
 }
 
+// TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage guards against
+// the null-result-envelope regression: Claude can emit is_error:true with a real
+// HTTP status (401/429/4xx) but result:null, producing a ClaudeError with Message="".
+// The Auth/RateLimit/Config branches must not render a bare colon in that case.
+func TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage(t *testing.T) {
+	t.Parallel()
+	kinds := []claudecode.ClaudeErrorKind{
+		claudecode.ClaudeErrorAuth,
+		claudecode.ClaudeErrorRateLimit,
+		claudecode.ClaudeErrorConfig,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: kind}, 0)
+			msg := err.Error()
+			// Must not end any line with a bare colon (the classic regression
+			// of rendering "...: " with nothing after it).
+			for _, line := range strings.Split(msg, "\n") {
+				if strings.HasSuffix(strings.TrimSpace(line), ":") {
+					t.Errorf("line ends with bare colon: %q (full: %q)", line, msg)
+				}
+			}
+		})
+	}
+}
+
 func TestFormatCheckpointSummaryError_DeadlineExceeded(t *testing.T) {
 	t.Parallel()
 	err := formatCheckpointSummaryError(fmt.Errorf("wrapped: %w", context.DeadlineExceeded), 5*time.Minute)
@@ -236,7 +263,7 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -278,7 +305,7 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, appliedDeadline, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -287,6 +314,13 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 	}
 	if gotDeadline.IsZero() {
 		t.Fatal("expected deadline to be captured")
+	}
+	// The applied deadline must reflect the shorter parent-ctx deadline,
+	// not the package-default checkpointSummaryTimeout. Otherwise
+	// formatCheckpointSummaryError would report the wrong timeout to users.
+	if appliedDeadline >= checkpointSummaryTimeout {
+		t.Fatalf("appliedDeadline = %s; want shorter than %s (parent had tighter deadline)",
+			appliedDeadline, checkpointSummaryTimeout)
 	}
 	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
 		t.Fatalf("deadline delta = %s, want near 0", delta)
@@ -327,7 +361,7 @@ func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testin
 		return nil, claudeErr
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	var ce *claudecode.ClaudeError
 	if !errors.As(err, &ce) {
 		t.Fatalf("errors.As did not recover *ClaudeError; got %v", err)
@@ -367,7 +401,7 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -404,7 +438,7 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}

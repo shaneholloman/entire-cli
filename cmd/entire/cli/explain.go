@@ -520,9 +520,9 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 		fmt.Fprintln(errW, "Generating checkpoint summary...")
 	}
 
-	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
+	summary, appliedDeadline, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
 	if err != nil {
-		return formatCheckpointSummaryError(err, checkpointSummaryTimeout)
+		return formatCheckpointSummaryError(err, appliedDeadline)
 	}
 
 	// Persist to both stores; at least one must succeed.
@@ -556,7 +556,13 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 	return nil
 }
 
-func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, error) {
+// generateCheckpointAISummary returns the generated summary, the effective
+// deadline applied to the underlying call (which may be shorter than
+// checkpointSummaryTimeout if the parent context had an earlier deadline),
+// and any error. The effective deadline is returned so the caller can render
+// the true timeout value in user-facing error messages instead of always
+// showing the package default.
+func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, time.Duration, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointSummaryTimeout)
 	timeoutDuration := checkpointSummaryTimeout
 	if deadline, ok := timeoutCtx.Deadline(); ok {
@@ -570,17 +576,18 @@ func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, f
 		// Only classify as ctx cancel/deadline when the error chain actually
 		// contains the sentinel. Relying on timeoutCtx.Err() here loses typed
 		// errors (e.g. *ClaudeError) when the subprocess returned a real
-		// structured failure and the deadline happened to fire concurrently.
+		// structured failure while timeoutCtx.Err() is non-nil for any reason
+		// (parent cancelled, deadline already elapsed, etc.).
 		if errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("summary generation canceled: %w", err)
+			return nil, timeoutDuration, fmt.Errorf("summary generation canceled: %w", err)
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), err)
+			return nil, timeoutDuration, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), err)
 		}
-		return nil, err
+		return nil, timeoutDuration, err
 	}
 
-	return summary, nil
+	return summary, timeoutDuration, nil
 }
 
 // formatCheckpointSummaryError maps typed Claude CLI errors and context
@@ -591,11 +598,11 @@ func formatCheckpointSummaryError(err error, deadline time.Duration) error {
 	case errors.As(err, &claudeErr):
 		switch claudeErr.Kind { //nolint:exhaustive // ClaudeErrorUnknown handled by default
 		case claudecode.ClaudeErrorAuth:
-			return fmt.Errorf("Claude authentication failed: %s\nRun `claude login` and retry", claudeErr.Message) //nolint:staticcheck // ST1005: capitalized because Claude is a proper noun
+			return fmt.Errorf("Claude authentication failed%s\nRun `claude login` and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005: capitalized because Claude is a proper noun
 		case claudecode.ClaudeErrorRateLimit:
-			return fmt.Errorf("Claude rejected the summary request due to rate limits or quota: %s\nWait and retry", claudeErr.Message) //nolint:staticcheck // ST1005
+			return fmt.Errorf("Claude rejected the summary request due to rate limits or quota%s\nWait and retry", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorConfig:
-			return fmt.Errorf("Claude rejected the summary request: %s\nCheck your Claude CLI config and selected model", claudeErr.Message) //nolint:staticcheck // ST1005
+			return fmt.Errorf("Claude rejected the summary request%s\nCheck your Claude CLI config and selected model", formatMessageSuffix(claudeErr.Message)) //nolint:staticcheck // ST1005
 		case claudecode.ClaudeErrorCLIMissing:
 			return errors.New("Claude CLI is not installed or not on PATH") //nolint:staticcheck // ST1005
 		default:
@@ -618,6 +625,17 @@ func formatCheckpointSummaryError(err error, deadline time.Duration) error {
 	default:
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
+}
+
+// formatMessageSuffix formats ": <msg>" when msg is non-empty and "" otherwise.
+// Used by the Auth / RateLimit / Config branches of formatCheckpointSummaryError
+// to avoid rendering a bare colon when ClaudeError.Message is empty (reachable
+// when the CLI envelope is is_error:true with result:null but a real status).
+func formatMessageSuffix(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	return ": " + msg
 }
 
 // formatClaudeErrorSuffix builds a diagnostic suffix for user-facing output

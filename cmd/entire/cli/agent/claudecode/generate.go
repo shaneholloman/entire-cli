@@ -50,17 +50,11 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return "", context.DeadlineExceeded
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return "", context.Canceled
-		}
-		if isExecNotFound(err) {
-			return "", &ClaudeError{Kind: ClaudeErrorCLIMissing, Cause: err}
-		}
-		// Non-zero exit: try to parse stdout for a structured error envelope,
-		// then fall back to stderr classification.
+		// Prefer a structured Claude error over bare ctx sentinels: if the CLI
+		// already emitted an is_error envelope on stdout, surface that even when
+		// the context happens to be done. Otherwise the user loses actionable
+		// auth/rate-limit/config diagnostics whenever ctx and the subprocess
+		// both fail at roughly the same time.
 		if _, env, parseErr := parseGenerateTextResponse(stdout.Bytes()); parseErr == nil && env != nil && env.IsError {
 			result := ""
 			if env.Result != nil {
@@ -72,6 +66,17 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 				exitCode = exitErr.ExitCode()
 			}
 			return "", classifyEnvelopeError(result, env.APIErrorStatus, exitCode)
+		}
+		// No structured signal on stdout — ctx cancellation is next most
+		// informative, since the rest is a guess.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", context.DeadlineExceeded
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return "", context.Canceled
+		}
+		if isExecNotFound(err) {
+			return "", &ClaudeError{Kind: ClaudeErrorCLIMissing, Cause: err}
 		}
 		exitCode := -1
 		var exitErr *exec.ExitError
@@ -94,12 +99,14 @@ func (c *ClaudeCodeAgent) GenerateText(ctx context.Context, prompt string, model
 	return result, nil
 }
 
-// isExecNotFound returns true if err indicates the subprocess binary could not be found.
-// Covers both PATH-based lookups (*exec.Error / exec.ErrNotFound) and absolute-path
-// failures (*fs.PathError wrapping os.ErrNotExist on macOS/Linux).
+// isExecNotFound returns true only when err indicates the binary was not
+// found on PATH or at the given absolute path. It intentionally excludes
+// other *exec.Error causes (permission denied, invalid executable format),
+// which should surface as a generic failure so operators aren't misdirected
+// to a reinstall when the real problem is a broken/inaccessible binary.
 func isExecNotFound(err error) bool {
 	var execErr *exec.Error
-	if errors.As(err, &execErr) {
+	if errors.As(err, &execErr) && errors.Is(execErr.Err, exec.ErrNotFound) {
 		return true
 	}
 	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
