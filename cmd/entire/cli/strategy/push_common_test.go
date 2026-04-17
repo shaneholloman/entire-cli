@@ -6,12 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -1200,6 +1203,167 @@ func TestPrintSettingsCommitHint(t *testing.T) {
 
 		count := bytes.Count(buf.Bytes(), []byte("does not contain checkpoint_remote"))
 		assert.Equal(t, 1, count, "hint should print exactly once, got %d", count)
+	})
+}
+
+func TestIsCheckpointsV2OnlyCommitted(t *testing.T) {
+	t.Run("false when settings.json not committed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+
+		t.Chdir(tmpDir)
+		assert.False(t, isCheckpointsV2OnlyCommitted(context.Background()))
+	})
+
+	t.Run("true when checkpoints_v2_only is committed", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		entireDir := filepath.Join(tmpDir, ".entire")
+		require.NoError(t, os.MkdirAll(entireDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+		testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+		testutil.GitCommit(t, tmpDir, "enable checkpoints_v2_only")
+
+		t.Chdir(tmpDir)
+		assert.True(t, isCheckpointsV2OnlyCommitted(context.Background()))
+	})
+}
+
+// setupV2OnlyCommittedRepo creates a temp repo with checkpoints_v2_only enabled
+// in the committed .entire/settings.json and chdirs into it. Returns an opened
+// *git.Repository for populating checkpoints.
+func setupV2OnlyCommittedRepo(t *testing.T) *git.Repository {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	require.NoError(t, os.MkdirAll(entireDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(entireDir, "settings.json"),
+		[]byte(`{"strategy_options":{"checkpoints_v2_only":true}}`), 0o644))
+	testutil.GitAdd(t, tmpDir, ".entire/settings.json")
+	testutil.GitCommit(t, tmpDir, "enable checkpoints_v2_only")
+	t.Chdir(tmpDir)
+
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+	return repo
+}
+
+// writeV1Checkpoint writes a minimal checkpoint to the v1 metadata branch.
+func writeV1Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID, sessionID string) {
+	t.Helper()
+	err := checkpoint.NewGitStore(repo).WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    sessionID,
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"` + sessionID + `"}`)),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+}
+
+func TestPrintCheckpointsV2OnlyMigrationHint(t *testing.T) {
+	t.Run("suppressed when no v1 checkpoints exist", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+		setupV2OnlyCommittedRepo(t)
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		assert.Empty(t, output, "hint should not print when there are no v1 checkpoints to migrate")
+	})
+
+	t.Run("suppressed when every v1 checkpoint is already in v2", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+		repo := setupV2OnlyCommittedRepo(t)
+
+		cpID := id.MustCheckpointID("aabbccddeeff")
+		writeV1Checkpoint(t, repo, cpID, "session-1")
+		writeV2Checkpoint(t, repo, cpID, "session-1")
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		assert.Empty(t, output, "hint should not print once v2 already mirrors every v1 checkpoint")
+	})
+
+	t.Run("prints when v1 has checkpoints not in v2", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+		repo := setupV2OnlyCommittedRepo(t)
+
+		writeV1Checkpoint(t, repo, id.MustCheckpointID("111111111111"), "session-1")
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		assert.Contains(t, output, "entire migrate --checkpoints v2")
+		assert.Contains(t, output, "entire migrate --checkpoints v2 --force")
+	})
+
+	t.Run("prints only once per process", func(t *testing.T) {
+		v2OnlyMigrationHintOnce = sync.Once{}
+		repo := setupV2OnlyCommittedRepo(t)
+
+		writeV1Checkpoint(t, repo, id.MustCheckpointID("222222222222"), "session-2")
+
+		restore := captureStderr(t)
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		printCheckpointsV2OnlyMigrationHint(context.Background())
+		output := restore()
+
+		// --force appears in exactly one line, so its count equals the number of
+		// invocations that actually emitted output.
+		forceCount := strings.Count(output, "--force")
+		assert.Equal(t, 1, forceCount, "hint should print exactly once per process")
+	})
+}
+
+func TestHasUnmigratedV1Checkpoints(t *testing.T) {
+	t.Run("false when no v1 checkpoints exist", func(t *testing.T) {
+		setupV2OnlyCommittedRepo(t)
+		assert.False(t, hasUnmigratedV1Checkpoints(context.Background()))
+	})
+
+	t.Run("false when every v1 checkpoint is in v2", func(t *testing.T) {
+		repo := setupV2OnlyCommittedRepo(t)
+		cpID := id.MustCheckpointID("333333333333")
+		writeV1Checkpoint(t, repo, cpID, "session-a")
+		writeV2Checkpoint(t, repo, cpID, "session-a")
+
+		assert.False(t, hasUnmigratedV1Checkpoints(context.Background()))
+	})
+
+	t.Run("true when at least one v1 checkpoint is missing from v2", func(t *testing.T) {
+		repo := setupV2OnlyCommittedRepo(t)
+		mirrored := id.MustCheckpointID("444444444444")
+		missing := id.MustCheckpointID("555555555555")
+		writeV1Checkpoint(t, repo, mirrored, "session-b")
+		writeV2Checkpoint(t, repo, mirrored, "session-b")
+		writeV1Checkpoint(t, repo, missing, "session-c")
+
+		assert.True(t, hasUnmigratedV1Checkpoints(context.Background()))
 	})
 }
 

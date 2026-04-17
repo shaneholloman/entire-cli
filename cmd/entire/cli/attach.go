@@ -170,11 +170,21 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		writeOpts.CompactTranscript = compacted
 	}
 
-	if err := store.WriteCommitted(ctx, writeOpts); err != nil {
-		return fmt.Errorf("failed to write checkpoint: %w", err)
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(logCtx)
+	if !v2Only {
+		if err := store.WriteCommitted(ctx, writeOpts); err != nil {
+			return fmt.Errorf("failed to write checkpoint: %w", err)
+		}
 	}
+	// IsCheckpointsV2Enabled is true whenever v2Only is true, so this covers both
+	// the v2-only and dual-write paths. Only v2-only propagates the error.
 	if settings.IsCheckpointsV2Enabled(logCtx) {
-		writeAttachCheckpointV2(logCtx, repo, writeOpts)
+		if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
+			if v2Only {
+				return fmt.Errorf("failed to write checkpoint to v2: %w", err)
+			}
+			logging.Warn(logCtx, "attach v2 dual-write failed", "error", err)
+		}
 	}
 
 	// Create or update session state.
@@ -198,17 +208,13 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	return nil
 }
 
-// writeAttachCheckpointV2 mirrors attach-created checkpoints into the v2 refs.
-// The caller is responsible for checking whether checkpoints_v2 is enabled.
-// v2 failures are logged and do not fail attach.
-func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
+// writeAttachCheckpointV2 writes attach-created checkpoints into the v2 refs.
+func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
 	v2Store := cpkg.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
-		logging.Warn(ctx, "attach v2 dual-write failed",
-			"checkpoint_id", opts.CheckpointID.String(),
-			"error", err,
-		)
+		return fmt.Errorf("v2 write committed: %w", err)
 	}
+	return nil
 }
 
 // getHeadCommit returns the HEAD commit object.

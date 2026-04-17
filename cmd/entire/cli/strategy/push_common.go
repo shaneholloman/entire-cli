@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v6"
@@ -120,6 +121,9 @@ func printCheckpointRemoteHint(target string) {
 // settingsHintOnce ensures the settings commit hint prints at most once per process.
 var settingsHintOnce sync.Once
 
+// v2OnlyMigrationHintOnce ensures the v2-only migration hint prints at most once per process.
+var v2OnlyMigrationHintOnce sync.Once
+
 // printSettingsCommitHint prints a hint after a successful checkpoint remote push
 // when the committed .entire/settings.json does not contain a checkpoint_remote config.
 // entire.io discovers the external checkpoint repo by reading the committed project
@@ -139,6 +143,53 @@ func printSettingsCommitHint(ctx context.Context, target string) {
 	})
 }
 
+// printCheckpointsV2OnlyMigrationHint prints a hint when the committed project
+// settings enable checkpoints_v2_only AND there are v1 checkpoints that have
+// not yet been mirrored into v2. Suppressed when v2 already has every v1
+// checkpoint (nothing to migrate) so the hint does not become noise once the
+// migration is done.
+func printCheckpointsV2OnlyMigrationHint(ctx context.Context) {
+	v2OnlyMigrationHintOnce.Do(func() {
+		if !isCheckpointsV2OnlyCommitted(ctx) {
+			return
+		}
+		if !hasUnmigratedV1Checkpoints(ctx) {
+			return
+		}
+		fmt.Fprintln(os.Stderr, "[entire] Note: .entire/settings.json enables checkpoints_v2_only. Run 'entire migrate --checkpoints v2' to migrate existing checkpoints to v2.")
+		fmt.Fprintln(os.Stderr, "[entire] Use 'entire migrate --checkpoints v2 --force' to rewrite all checkpoints in v2.")
+	})
+}
+
+// hasUnmigratedV1Checkpoints reports whether any v1 checkpoint has no matching
+// entry in v2. Any failure opening the repo or listing either store is treated
+// as "no migration needed" so we stay silent instead of printing a speculative
+// hint — the hint is advisory and should never be the reason a push gets noisy.
+func hasUnmigratedV1Checkpoints(ctx context.Context) bool {
+	repo, err := OpenRepository(ctx)
+	if err != nil {
+		return false
+	}
+	v1List, err := checkpoint.NewGitStore(repo).ListCommitted(ctx)
+	if err != nil || len(v1List) == 0 {
+		return false
+	}
+	v2List, err := checkpoint.NewV2GitStore(repo, "").ListCommitted(ctx)
+	if err != nil {
+		return false
+	}
+	v2Set := make(map[string]struct{}, len(v2List))
+	for _, info := range v2List {
+		v2Set[info.CheckpointID.String()] = struct{}{}
+	}
+	for _, info := range v1List {
+		if _, ok := v2Set[info.CheckpointID.String()]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // isCheckpointRemoteCommitted returns true if the committed .entire/settings.json
 // at HEAD contains a valid checkpoint_remote configuration. This is the true
 // discoverability check: entire.io reads from committed project settings, not from
@@ -155,6 +206,21 @@ func isCheckpointRemoteCommitted(ctx context.Context) bool {
 		return false
 	}
 	return committed.GetCheckpointRemote() != nil
+}
+
+// isCheckpointsV2OnlyCommitted returns true if the committed .entire/settings.json
+// at HEAD enables checkpoints_v2_only.
+func isCheckpointsV2OnlyCommitted(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "git", "show", "HEAD:.entire/settings.json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	committed, err := settings.LoadFromBytes(output)
+	if err != nil {
+		return false
+	}
+	return committed.IsCheckpointsV2OnlyEnabled()
 }
 
 // pushResult describes what happened during a push attempt.
@@ -189,6 +255,7 @@ func finishPush(ctx context.Context, stop func(string), result pushResult, targe
 		stop(" done")
 		printSettingsCommitHint(ctx, target)
 	}
+	printCheckpointsV2OnlyMigrationHint(ctx)
 }
 
 // tryPushSessionsCommon attempts to push the sessions branch.

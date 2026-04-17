@@ -2661,6 +2661,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	}
 
 	store := checkpoint.NewGitStore(repo)
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(logCtx)
 
 	// Evaluate v2 flag once before the loop to avoid re-reading settings per checkpoint
 	var v2Store *checkpoint.V2GitStore
@@ -2691,8 +2692,17 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		// Generate compact transcript for v2 /main
 		if v2Store != nil && redactedTranscript.Len() > 0 {
 			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
+			var (
+				content *checkpoint.SessionContent
+				readErr error
+			)
+			if v2Only {
+				content, readErr = v2Store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			} else {
+				content, readErr = store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			}
 			startLine := 0
-			if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
+			if readErr == nil && content != nil {
 				startLine = content.Metadata.GetTranscriptStart()
 			} else {
 				errMsg := "unknown"
@@ -2708,23 +2718,30 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
 		}
 
-		updateErr := store.UpdateCommitted(ctx, updateOpts)
-		if updateErr != nil {
-			logging.Warn(logCtx, "finalize: failed to update checkpoint",
-				slog.String("checkpoint_id", cpIDStr),
-				slog.String("error", updateErr.Error()),
-			)
-			errCount++
-			continue
+		if !v2Only {
+			updateErr := store.UpdateCommitted(ctx, updateOpts)
+			if updateErr != nil {
+				logging.Warn(logCtx, "finalize: failed to update checkpoint",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", updateErr.Error()),
+				)
+				errCount++
+				continue
+			}
 		}
 
-		// Dual-write: update v2 refs when enabled
 		if v2Store != nil {
 			if v2Err := v2Store.UpdateCommitted(logCtx, updateOpts); v2Err != nil {
-				logging.Warn(logCtx, "v2 dual-write update failed",
+				attrs := []any{
 					slog.String("checkpoint_id", cpIDStr),
 					slog.String("error", v2Err.Error()),
-				)
+				}
+				if v2Only {
+					logging.Warn(logCtx, "finalize: failed to update checkpoint in v2", attrs...)
+					errCount++
+					continue
+				}
+				logging.Warn(logCtx, "v2 dual-write update failed", attrs...)
 			}
 		}
 

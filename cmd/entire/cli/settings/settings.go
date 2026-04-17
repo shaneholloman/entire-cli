@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -79,6 +80,13 @@ type EntireSettings struct {
 	// Vercel indicates that the repository uses Vercel and the metadata branch
 	// should include a vercel.json that disables deployments for Entire branches.
 	Vercel bool `json:"vercel,omitempty"`
+
+	// SummaryTimeoutSeconds is an optional hard deadline (in seconds) for
+	// `entire explain --generate` summary generation. Zero or negative means
+	// "unset" -- the caller picks the default. Not yet consumed by the
+	// generate path; present so settings round-trip for a follow-up change
+	// that wires it into the deadline selection.
+	SummaryTimeoutSeconds int `json:"summary_timeout_seconds,omitempty"`
 
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
@@ -153,6 +161,16 @@ func (s *EntireSettings) GetCommitLinking() string {
 		return s.CommitLinking
 	}
 	return CommitLinkingPrompt
+}
+
+// SummaryTimeoutValue returns the configured hard deadline for
+// `entire explain --generate` summary generation. Zero means "unset" --
+// the caller picks the default. Negative values are treated as unset.
+func (s *EntireSettings) SummaryTimeoutValue() time.Duration {
+	if s.SummaryTimeoutSeconds < 1 {
+		return 0
+	}
+	return time.Duration(s.SummaryTimeoutSeconds) * time.Second
 }
 
 // Load loads the Entire settings from .entire/settings.json,
@@ -418,6 +436,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 		settings.Vercel = vercel
 	}
 
+	// Override summary_timeout_seconds if present
+	if summaryTimeoutRaw, ok := raw["summary_timeout_seconds"]; ok {
+		var st int
+		if err := json.Unmarshal(summaryTimeoutRaw, &st); err != nil {
+			return fmt.Errorf("parsing summary_timeout_seconds field: %w", err)
+		}
+		settings.SummaryTimeoutSeconds = st
+	}
+
 	return nil
 }
 
@@ -540,6 +567,16 @@ func IsCheckpointsV2Enabled(ctx context.Context) bool {
 	return settings.IsCheckpointsV2Enabled()
 }
 
+// IsCheckpointsV2OnlyEnabled checks if checkpoints should be written and pushed
+// only via v2 refs.
+func IsCheckpointsV2OnlyEnabled(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.IsCheckpointsV2OnlyEnabled()
+}
+
 // IsPushV2RefsEnabled checks if pushing v2 refs is enabled in settings.
 // Returns false by default if settings cannot be loaded or flags are missing.
 func IsPushV2RefsEnabled(ctx context.Context) bool {
@@ -631,9 +668,12 @@ func (s *EntireSettings) GetCheckpointRemote() *CheckpointRemoteConfig {
 	return &CheckpointRemoteConfig{Provider: provider, Repo: repo}
 }
 
-// IsCheckpointsV2Enabled checks if checkpoints v2 (dual-write to refs/entire/) is enabled.
-// Returns false by default if the key is missing or not a bool.
+// IsCheckpointsV2Enabled checks if checkpoints v2 is enabled.
+// Returns true when either checkpoints_v2 or checkpoints_v2_only is enabled.
 func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
+	if s.IsCheckpointsV2OnlyEnabled() {
+		return true
+	}
 	if s.StrategyOptions == nil {
 		return false
 	}
@@ -641,9 +681,22 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 	return ok && val
 }
 
+// IsCheckpointsV2OnlyEnabled checks if checkpoints should be written and pushed
+// only via v2 refs, with no v1 dual-write.
+func (s *EntireSettings) IsCheckpointsV2OnlyEnabled() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["checkpoints_v2_only"].(bool)
+	return ok && val
+}
+
 // IsPushV2RefsEnabled checks if pushing v2 refs is enabled.
-// Requires both checkpoints_v2 and push_v2_refs to be true.
+// checkpoints_v2_only forces v2 ref pushes on, regardless of push_v2_refs.
 func (s *EntireSettings) IsPushV2RefsEnabled() bool {
+	if s.IsCheckpointsV2OnlyEnabled() {
+		return true
+	}
 	if !s.IsCheckpointsV2Enabled() {
 		return false
 	}
