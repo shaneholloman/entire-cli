@@ -484,6 +484,57 @@ func TestRunGitHubBootstrap_RepoExistsFails(t *testing.T) {
 	}
 }
 
+func TestGhFlagsProvided(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		opts GitHubBootstrapOptions
+		want bool
+	}{
+		{"none", GitHubBootstrapOptions{}, false},
+		{"repo-name", GitHubBootstrapOptions{RepoName: "foo"}, true},
+		{"repo-owner", GitHubBootstrapOptions{RepoOwner: "octocat"}, true},
+		{"repo-visibility", GitHubBootstrapOptions{RepoVisibility: "private"}, true},
+		// NoGitHub intentionally does NOT count as "provided" — it's the
+		// opposite signal. It's handled separately upstream.
+		{"no-github", GitHubBootstrapOptions{NoGitHub: true}, false},
+		{"init-repo only", GitHubBootstrapOptions{InitRepo: true}, false},
+	}
+	for _, tc := range cases {
+		if got := ghFlagsProvided(tc.opts); got != tc.want {
+			t.Errorf("%s: ghFlagsProvided = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestRunGitHubBootstrap_NonInteractive_NoFlagsDefaultsToGitHub confirms the
+// non-interactive happy path still creates a GitHub repo when the user
+// didn't set any explicit flag (the confirm prompt is only interactive).
+func TestRunGitHubBootstrap_NonInteractive_NoFlagsDefaultsToGitHub(t *testing.T) {
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	dir := t.TempDir()
+	restoreCwd(t, dir)
+
+	r := newFakeRunner()
+	r.setIdentityConfigured()
+	r.set("gh", []string{"--version"}, "gh", nil)
+	r.set("gh", []string{"auth", "status"}, "ok", nil)
+	r.set("gh", []string{"api", "user", "--jq", ".login"}, "octocat\n", nil)
+	r.set("gh", []string{"api", "user/orgs", "--jq", ".[].login"}, "", nil)
+	// Default folder slug derived from t.TempDir().
+	suggested := slugifyRepoName(filepath.Base(dir))
+	r.set("gh", []string{"repo", "view", "octocat/" + suggested, "--json", "name"}, "", errors.New("not found"))
+	r.set("git", []string{"init"}, "", nil)
+
+	state, err := runGitHubBootstrapInitWith(context.Background(), io.Discard, io.Discard, GitHubBootstrapOptions{InitRepo: true}, r)
+	if err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	if !state.useGitHub {
+		t.Fatal("non-interactive bootstrap should default to using GitHub")
+	}
+}
+
 // TestRunGitHubBootstrap_InitBeforeFinalize verifies the two-phase split:
 // init runs git init up front, finalize creates the commit + pushes. A
 // simulated "agent setup" step writes a file between the phases; that

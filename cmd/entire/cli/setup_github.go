@@ -162,6 +162,20 @@ func runGitHubBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts Git
 		}
 	}
 
+	// Step 3b: ask a simple yes/no before diving into owner/name/visibility
+	// prompts. Skip the confirm when any gh-specific flag is set (the flag
+	// implies intent) or when we're non-interactive (keep the documented
+	// happy path: default to yes).
+	if useGitHub && !ghFlagsProvided(opts) && interactive.CanPromptInteractively() {
+		confirmed, err := confirmCreateGitHubRepo()
+		if err != nil {
+			return nil, err
+		}
+		if !confirmed {
+			useGitHub = false
+		}
+	}
+
 	// Step 4: collect GitHub repo details up front so all prompts are
 	// contiguous.
 	var fullName, visibility string
@@ -226,6 +240,34 @@ func runGitHubBootstrapFinalize(ctx context.Context, w io.Writer, s *bootstrapSt
 		fmt.Fprintf(w, "Created GitHub repository %s.\n", s.fullName)
 	}
 	return nil
+}
+
+// ghFlagsProvided reports whether the caller has already expressed intent
+// to create a GitHub repo via any of the gh-specific flags. Used to skip
+// the "create on GitHub?" confirm prompt in that case.
+func ghFlagsProvided(opts GitHubBootstrapOptions) bool {
+	return opts.RepoName != "" || opts.RepoOwner != "" || opts.RepoVisibility != ""
+}
+
+// confirmCreateGitHubRepo asks the user whether they want to also create
+// a matching GitHub repository. Interactive-only; callers gate on
+// CanPromptInteractively.
+func confirmCreateGitHubRepo() (bool, error) {
+	confirmed := true
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Create a matching repository on GitHub?").
+				Value(&confirmed),
+		),
+	)
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return false, nil
+		}
+		return false, fmt.Errorf("github confirm prompt: %w", err)
+	}
+	return confirmed, nil
 }
 
 // confirmInitRepo returns true if we should proceed with `git init`. It
