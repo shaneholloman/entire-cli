@@ -37,6 +37,10 @@ type GitHubBootstrapOptions struct {
 	NoGitHub bool
 	// InitialCommitMessage overrides the default commit message prompt.
 	InitialCommitMessage string
+	// SkipInitialCommit leaves the newly-created files unstaged so the
+	// user can commit themselves. The GitHub repo (if requested) is
+	// still created, but nothing is pushed.
+	SkipInitialCommit bool
 }
 
 // bootstrapRunner executes external commands. Tests override this to avoid
@@ -112,7 +116,8 @@ type bootstrapState struct {
 	useGitHub  bool
 	fullName   string // owner/name, if useGitHub
 	visibility string // public/private/internal, if useGitHub
-	message    string // resolved initial commit message
+	commit     bool   // false means the user opted out of the initial commit
+	message    string // resolved initial commit message (empty when !commit)
 }
 
 // runGitHubBootstrapInit handles the pre-setup half of "enable on a non-git
@@ -196,14 +201,21 @@ func runGitHubBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts Git
 		visibility = vis
 	}
 
-	// Step 5: resolve commit message and ensure git identity. Must run after
-	// `git init` so `git config` reads are scoped correctly.
-	message, err := resolveCommitMessage(w, opts)
+	// Step 5: resolve commit message (+ skip decision) and ensure git
+	// identity. Must run after `git init` so `git config` reads are
+	// scoped correctly. If the user chose to skip the commit we still
+	// need an identity *if* we're going to create the GitHub repo,
+	// because gh may read local config; but we can skip the identity
+	// check when the user is fully opting out of both commit and
+	// remote to keep the flow minimal.
+	message, commit, err := resolveCommitMessage(w, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureGitIdentity(ctx, w, errW, runner, cwd); err != nil {
-		return nil, err
+	if commit {
+		if err := ensureGitIdentity(ctx, w, errW, runner, cwd); err != nil {
+			return nil, err
+		}
 	}
 
 	return &bootstrapState{
@@ -212,6 +224,7 @@ func runGitHubBootstrapInitWith(ctx context.Context, w, errW io.Writer, opts Git
 		useGitHub:  useGitHub,
 		fullName:   fullName,
 		visibility: visibility,
+		commit:     commit,
 		message:    message,
 	}, nil
 }
@@ -230,22 +243,36 @@ func runGitHubBootstrapWith(ctx context.Context, w, errW io.Writer, opts GitHubB
 // runGitHubBootstrapFinalize runs the post-setup half: stage + initial
 // commit (now including any `.entire/`, agent hook, and settings files
 // written by the enable flow), then create the GitHub repo and push.
+// If the user opted out of the initial commit we still create the
+// GitHub repo (if they opted in) but skip the push — there's nothing to
+// push — and print next-step instructions.
 func runGitHubBootstrapFinalize(ctx context.Context, w io.Writer, s *bootstrapState) error {
 	if s == nil {
 		return nil
 	}
-	committed, err := doInitialCommit(ctx, s.runner, s.cwd, s.message)
-	if err != nil {
-		return fmt.Errorf("initial commit: %w", err)
-	}
-	if !committed {
-		fmt.Fprintln(w, "No files to commit; skipping initial commit.")
+	var committed bool
+	if s.commit {
+		c, err := doInitialCommit(ctx, s.runner, s.cwd, s.message)
+		if err != nil {
+			return fmt.Errorf("initial commit: %w", err)
+		}
+		committed = c
+		if !committed {
+			fmt.Fprintln(w, "No files to commit; skipping initial commit.")
+		}
 	}
 	if s.useGitHub {
 		if err := ghRepoCreate(ctx, s.runner, s.cwd, s.fullName, s.visibility, committed); err != nil {
 			return fmt.Errorf("gh repo create: %w", err)
 		}
 		fmt.Fprintf(w, "Created GitHub repository %s.\n", s.fullName)
+	}
+	if !s.commit {
+		fmt.Fprintln(w, "Skipped initial commit. When you're ready:")
+		fmt.Fprintln(w, "  git add -A && git commit -m \"Initial commit\"")
+		if s.useGitHub {
+			fmt.Fprintln(w, "  git push -u origin HEAD")
+		}
 	}
 	return nil
 }
@@ -490,33 +517,74 @@ func resolveVisibility(w io.Writer, owner, currentUser string, opts GitHubBootst
 	return selected, nil
 }
 
-func resolveCommitMessage(w io.Writer, opts GitHubBootstrapOptions) (string, error) {
+// resolveCommitMessage returns the message to use for the initial
+// commit. The second return value is false when the user chose to skip
+// the initial commit entirely; callers must skip `doInitialCommit` and
+// any subsequent push.
+func resolveCommitMessage(w io.Writer, opts GitHubBootstrapOptions) (string, bool, error) {
+	const defaultMsg = "Initial commit"
+
+	if opts.SkipInitialCommit {
+		return "", false, nil
+	}
 	if opts.InitialCommitMessage != "" {
-		return opts.InitialCommitMessage, nil
+		return opts.InitialCommitMessage, true, nil
 	}
-	defaultMsg := "Initial commit"
 	if !interactive.CanPromptInteractively() {
-		return defaultMsg, nil
+		return defaultMsg, true, nil
 	}
-	input := defaultMsg
+
+	const (
+		choiceDefault   = "default"
+		choiceCustomize = "custom"
+		choiceSkip      = "skip"
+	)
+	choice := choiceDefault
 	form := NewAccessibleForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("Initial commit message").
-				Value(&input),
+			huh.NewSelect[string]().
+				Title("Initial commit").
+				Options(
+					huh.NewOption(`Commit with default message "Initial commit"`, choiceDefault),
+					huh.NewOption("Customize message...", choiceCustomize),
+					huh.NewOption("Skip — I'll commit manually later", choiceSkip),
+				).
+				Value(&choice),
 		),
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return "", errBootstrapInterrupted
+			return "", false, errBootstrapInterrupted
 		}
-		return "", fmt.Errorf("commit message prompt: %w", err)
+		return "", false, fmt.Errorf("commit message prompt: %w", err)
 	}
 	_ = w
-	if strings.TrimSpace(input) == "" {
-		return defaultMsg, nil
+
+	switch choice {
+	case choiceSkip:
+		return "", false, nil
+	case choiceCustomize:
+		input := defaultMsg
+		custom := NewAccessibleForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Initial commit message").
+					Value(&input),
+			),
+		)
+		if err := custom.Run(); err != nil {
+			if errors.Is(err, huh.ErrUserAborted) {
+				return "", false, errBootstrapInterrupted
+			}
+			return "", false, fmt.Errorf("commit message prompt: %w", err)
+		}
+		if strings.TrimSpace(input) == "" {
+			return defaultMsg, true, nil
+		}
+		return input, true, nil
+	default:
+		return defaultMsg, true, nil
 	}
-	return input, nil
 }
 
 // gitInit runs `git init` in the given directory.

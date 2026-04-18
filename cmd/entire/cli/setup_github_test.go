@@ -485,6 +485,102 @@ func TestRunGitHubBootstrap_RepoExistsFails(t *testing.T) {
 	}
 }
 
+func TestResolveCommitMessage_SkipFlag(t *testing.T) {
+	t.Parallel()
+	msg, commit, err := resolveCommitMessage(io.Discard, GitHubBootstrapOptions{SkipInitialCommit: true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if commit {
+		t.Fatal("commit should be false when SkipInitialCommit is set")
+	}
+	if msg != "" {
+		t.Fatalf("message should be empty when skipping, got %q", msg)
+	}
+}
+
+func TestResolveCommitMessage_FlagTakesMessage(t *testing.T) {
+	t.Parallel()
+	msg, commit, err := resolveCommitMessage(io.Discard, GitHubBootstrapOptions{InitialCommitMessage: "custom"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !commit {
+		t.Fatal("commit should be true with explicit message flag")
+	}
+	if msg != "custom" {
+		t.Fatalf("message = %q, want custom", msg)
+	}
+}
+
+func TestResolveCommitMessage_NonInteractiveDefault(t *testing.T) {
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	msg, commit, err := resolveCommitMessage(io.Discard, GitHubBootstrapOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !commit {
+		t.Fatal("commit should default to true non-interactively")
+	}
+	if msg != "Initial commit" {
+		t.Fatalf("message = %q, want Initial commit", msg)
+	}
+}
+
+// TestRunGitHubBootstrap_SkipCommitKeepsGitHub verifies that passing
+// --skip-initial-commit still creates the GitHub repo (if requested) but
+// skips both commit and push. The local repo's files remain unstaged.
+func TestRunGitHubBootstrap_SkipCommitKeepsGitHub(t *testing.T) {
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	dir := t.TempDir()
+	restoreCwd(t, dir)
+
+	r := newFakeRunner()
+	r.set("gh", []string{"--version"}, "gh", nil)
+	r.set("gh", []string{"auth", "status"}, "ok", nil)
+	r.set("gh", []string{"api", "user", "--jq", ".login"}, "octocat\n", nil)
+	r.set("gh", []string{"api", "user/orgs", "--jq", ".[].login"}, "", nil)
+	r.set("gh", []string{"repo", "view", "octocat/skipme", "--json", "name"}, "", errors.New("not found"))
+	r.set("git", []string{"init"}, "", nil)
+	r.setInteractive("gh", []string{
+		"repo", "create", "octocat/skipme",
+		"--private",
+		"--source=.",
+		"--remote=origin",
+	}, nil)
+
+	opts := GitHubBootstrapOptions{
+		InitRepo:          true,
+		RepoName:          "skipme",
+		RepoVisibility:    "private",
+		SkipInitialCommit: true,
+	}
+	var out bytes.Buffer
+	if err := runGitHubBootstrapWith(context.Background(), &out, io.Discard, opts, r); err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+
+	if r.hasCall(argsMatch("git", []string{"add", "-A"})) {
+		t.Fatal("git add should not run when SkipInitialCommit is set")
+	}
+	if r.hasCall(func(c fakeCall) bool {
+		return c.name == cmdGit && len(c.args) >= 1 && (c.args[0] == gitCmdCommit || (len(c.args) >= 3 && c.args[2] == gitCmdCommit))
+	}) {
+		t.Fatal("git commit should not run when SkipInitialCommit is set")
+	}
+	if r.hasCall(argsMatch("git", []string{"push"})) {
+		t.Fatal("git push should not run when commit was skipped")
+	}
+	// gh repo create should still have run.
+	if !r.hasCall(argsMatch("gh", []string{"repo", "create"})) {
+		t.Fatal("gh repo create should still run when only the commit is skipped")
+	}
+	// Output should mention how to commit manually.
+	if !strings.Contains(out.String(), "git add -A") {
+		t.Fatalf("expected manual-commit hint in output, got: %s", out.String())
+	}
+}
+
 func TestGhFlagsProvided(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -824,6 +920,23 @@ func TestErrSentinels_DistinctPrePostInit(t *testing.T) {
 	t.Parallel()
 	if errors.Is(errBootstrapDeclined, errBootstrapInterrupted) {
 		t.Fatal("errBootstrapDeclined and errBootstrapInterrupted must not match as the same sentinel")
+	}
+}
+
+func TestEnableCmd_InitCommitMessageFlagsMutuallyExclusive(t *testing.T) {
+	setupTestRepo(t)
+
+	cmd := newEnableCmd()
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--initial-commit-message", "foo", "--skip-initial-commit"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error when both --initial-commit-message and --skip-initial-commit are set")
+	}
+	if !strings.Contains(err.Error(), "initial-commit-message") || !strings.Contains(err.Error(), "skip-initial-commit") {
+		t.Fatalf("expected error to mention both flags, got: %v", err)
 	}
 }
 
