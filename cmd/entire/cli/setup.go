@@ -672,7 +672,7 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 			if _, err := paths.WorktreeRoot(ctx); err != nil {
 				state, bootstrapErr := runGitHubBootstrapInit(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), bootstrapOpts)
 				if errors.Is(bootstrapErr, errBootstrapDeclined) {
-					fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository.")
+					fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository, or pass --init-repo to initialize one here.")
 					return NewSilentError(errors.New("not a git repository"))
 				}
 				if errors.Is(bootstrapErr, errBootstrapInterrupted) {

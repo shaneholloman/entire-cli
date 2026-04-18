@@ -86,9 +86,13 @@ var errBootstrapDeclined = errors.New("bootstrap declined")
 // pretending no init happened.
 var errBootstrapInterrupted = errors.New("bootstrap interrupted after init")
 
-// ghRepoNameRe validates GitHub repository names. GitHub allows alphanumerics,
-// hyphens, underscores, and periods; it does not allow spaces or leading dots.
-var ghRepoNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+// ghRepoNameRe validates GitHub repository names. GitHub allows
+// alphanumerics, hyphens, underscores, and periods — including as the
+// first character (e.g. `.github`). We don't enforce a leading-char
+// restriction here; `validateRepoName` handles the specific names GitHub
+// reserves (`.`, `..`). Any other edge case is left to GitHub to reject
+// so we don't over-restrict.
+var ghRepoNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // allowed visibility values.
 const (
@@ -321,8 +325,11 @@ func confirmCreateGitHubRepo() (bool, error) {
 }
 
 // confirmInitRepo returns true if we should proceed with `git init`. It
-// respects --init-repo / --no-init-repo; otherwise prompts.
-func confirmInitRepo(w io.Writer, cwd string, opts GitHubBootstrapOptions) (bool, error) {
+// respects --init-repo / --no-init-repo; otherwise prompts. In
+// non-interactive mode we return false without printing anything so
+// the caller (setup.go) owns the "Not a git repository" message and
+// doesn't end up with duplicate output on stdout + stderr.
+func confirmInitRepo(_ io.Writer, cwd string, opts GitHubBootstrapOptions) (bool, error) {
 	if opts.NoInitRepo {
 		return false, nil
 	}
@@ -330,7 +337,6 @@ func confirmInitRepo(w io.Writer, cwd string, opts GitHubBootstrapOptions) (bool
 		return true, nil
 	}
 	if !interactive.CanPromptInteractively() {
-		fmt.Fprintln(w, "Not a git repository. Pass --init-repo to initialize one non-interactively.")
 		return false, nil
 	}
 
@@ -903,8 +909,11 @@ func validateRepoName(name string) error {
 	if strings.Contains(name, "/") {
 		return errors.New("name must not contain '/' (pass --repo-owner separately)")
 	}
+	if name == "." || name == ".." {
+		return errors.New("name cannot be '.' or '..'")
+	}
 	if !ghRepoNameRe.MatchString(name) {
-		return errors.New("name may only contain letters, digits, '.', '-', '_' and must start with a letter or digit")
+		return errors.New("name may only contain letters, digits, '.', '-', '_'")
 	}
 	return nil
 }

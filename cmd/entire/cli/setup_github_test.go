@@ -44,13 +44,20 @@ func TestSlugifyRepoName(t *testing.T) {
 
 func TestValidateRepoName(t *testing.T) {
 	t.Parallel()
-	valid := []string{"my-repo", "foo_bar", "a.b.c", "Repo123", "x"}
+	// GitHub accepts leading ".", "-", and "_" (e.g. `.github`), so we
+	// accept them too.
+	valid := []string{
+		"my-repo", "foo_bar", "a.b.c", "Repo123", "x",
+		".github", ".leading", "-leading", "_leading",
+	}
 	for _, name := range valid {
 		if err := validateRepoName(name); err != nil {
 			t.Errorf("validateRepoName(%q) unexpectedly returned error: %v", name, err)
 		}
 	}
-	invalid := []string{"", "-leading", ".leading", "has/slash", "has space", strings.Repeat("a", 101)}
+	// "." and ".." are specifically rejected; anything with / or
+	// whitespace is rejected; length is capped.
+	invalid := []string{"", ".", "..", "has/slash", "has space", strings.Repeat("a", 101)}
 	for _, name := range invalid {
 		if err := validateRepoName(name); err == nil {
 			t.Errorf("validateRepoName(%q) = nil, want error", name)
@@ -903,10 +910,36 @@ func writeTempFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// TestBootstrap_FreshMachine_NoIdentity_RealGit verifies that a fresh machine
-// without any git identity configured fails cleanly in non-interactive mode
-// with a helpful error message, instead of letting git commit fail with a
-// confusing "please tell me who you are" stderr.
+// ghFailingRunner wraps another bootstrapRunner and forces all `gh`
+// invocations to fail, while letting real `git` calls through. This
+// lets tests deterministically exercise the "gh unavailable" path
+// regardless of whether `gh` is installed/authenticated on the host.
+type ghFailingRunner struct {
+	inner bootstrapRunner
+}
+
+func (r ghFailingRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if name == "gh" {
+		return "", errors.New("gh not available (test)")
+	}
+	return r.inner.Run(ctx, name, args...)
+}
+
+func (r ghFailingRunner) RunInDir(ctx context.Context, dir, name string, args ...string) (string, error) {
+	if name == "gh" {
+		return "", errors.New("gh not available (test)")
+	}
+	return r.inner.RunInDir(ctx, dir, name, args...)
+}
+
+// TestBootstrap_FreshMachine_NoIdentity_RealGit verifies that a fresh
+// machine without any git identity configured fails cleanly in
+// non-interactive mode with a helpful error message, instead of letting
+// `git commit` fail with a confusing "please tell me who you are" stderr.
+//
+// Uses a gh-failing runner wrapper rather than PATH manipulation so the
+// test isn't sensitive to whether `gh` + GH_TOKEN/GITHUB_TOKEN are set
+// on the host.
 func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 	t.Setenv("ENTIRE_TEST_TTY", "0")
 
@@ -920,10 +953,10 @@ func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", globalCfg)
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-	// Ensure gh isn't authenticated for the purpose of this test — point
-	// PATH at an empty directory so `gh` resolves to "not found".
-	emptyBin := t.TempDir()
-	t.Setenv("PATH", emptyBin)
+	// Belt-and-suspenders: unset any GitHub tokens so a wrapper bypass
+	// would still not find credentials.
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
 
 	projectDir := t.TempDir()
 	restoreCwd(t, projectDir)
@@ -936,12 +969,8 @@ func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 		NoGitHub:             true,
 		InitialCommitMessage: "x",
 	}
-	// With PATH wiped, execRunner can't find git either — so use a runner
-	// that keeps git on the original PATH but points gh to nowhere. The
-	// simplest portable way: re-extend PATH with common git locations.
-	t.Setenv("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
-
-	err := runGitHubBootstrapWith(context.Background(), io.Discard, io.Discard, opts, execRunner{})
+	runner := ghFailingRunner{inner: execRunner{}}
+	err := runGitHubBootstrapWith(context.Background(), io.Discard, io.Discard, opts, runner)
 	if err == nil {
 		t.Fatal("expected error when identity missing and gh unavailable")
 	}
