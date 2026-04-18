@@ -670,6 +670,10 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 					fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire enable' from within a git repository.")
 					return NewSilentError(errors.New("not a git repository"))
 				}
+				if errors.Is(bootstrapErr, errBootstrapInterrupted) {
+					fmt.Fprintln(cmd.ErrOrStderr(), "Bootstrap cancelled. A local git repository has been initialized but setup didn't complete. Run `entire enable` again to continue.")
+					return NewSilentError(errors.New("bootstrap interrupted"))
+				}
 				if bootstrapErr != nil {
 					return bootstrapErr
 				}

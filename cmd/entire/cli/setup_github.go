@@ -79,8 +79,16 @@ func (execRunner) RunInteractive(ctx context.Context, dir, name string, args ...
 	return nil
 }
 
-// errBootstrapDeclined signals that the user chose not to initialize a repo.
+// errBootstrapDeclined signals that the user chose not to initialize a
+// repo. Returned _before_ `git init` runs; callers fall back to the
+// legacy "Not a git repository" error.
 var errBootstrapDeclined = errors.New("bootstrap declined")
+
+// errBootstrapInterrupted signals that the user aborted a prompt _after_
+// `git init` has already run. The local repo is in place but setup
+// didn't complete; callers should surface that clearly instead of
+// pretending no init happened.
+var errBootstrapInterrupted = errors.New("bootstrap interrupted after init")
 
 // ghRepoNameRe validates GitHub repository names. GitHub allows alphanumerics,
 // hyphens, underscores, and periods; it does not allow spaces or leading dots.
@@ -263,7 +271,7 @@ func confirmCreateGitHubRepo() (bool, error) {
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return false, nil
+			return false, errBootstrapInterrupted
 		}
 		return false, fmt.Errorf("github confirm prompt: %w", err)
 	}
@@ -371,7 +379,7 @@ func resolveOwner(w io.Writer, currentUser string, orgs []string, opts GitHubBoo
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return "", errBootstrapDeclined
+			return "", errBootstrapInterrupted
 		}
 		return "", fmt.Errorf("owner prompt: %w", err)
 	}
@@ -411,7 +419,7 @@ func resolveRepoName(ctx context.Context, w, errW io.Writer, runner bootstrapRun
 		)
 		if err := form.Run(); err != nil {
 			if errors.Is(err, huh.ErrUserAborted) {
-				return "", errBootstrapDeclined
+				return "", errBootstrapInterrupted
 			}
 			return "", fmt.Errorf("repo name prompt: %w", err)
 		}
@@ -474,7 +482,7 @@ func resolveVisibility(w io.Writer, owner, currentUser string, opts GitHubBootst
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return "", errBootstrapDeclined
+			return "", errBootstrapInterrupted
 		}
 		return "", fmt.Errorf("visibility prompt: %w", err)
 	}
@@ -500,7 +508,7 @@ func resolveCommitMessage(w io.Writer, opts GitHubBootstrapOptions) (string, err
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return "", errBootstrapDeclined
+			return "", errBootstrapInterrupted
 		}
 		return "", fmt.Errorf("commit message prompt: %w", err)
 	}
@@ -601,7 +609,7 @@ func resolveGitIdentity(w, _ io.Writer, ghName, ghEmail string) (string, string,
 	)
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			return "", "", errBootstrapDeclined
+			return "", "", errBootstrapInterrupted
 		}
 		return "", "", fmt.Errorf("git identity prompt: %w", err)
 	}

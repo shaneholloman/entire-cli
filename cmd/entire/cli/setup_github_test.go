@@ -18,6 +18,7 @@ const (
 	cmdGit       = "git"
 	ghSubcmdRepo = "repo"
 	ghActCreate  = "create"
+	gitCmdCommit = "commit"
 )
 
 func TestSlugifyRepoName(t *testing.T) {
@@ -332,7 +333,7 @@ func TestDoInitialCommit_WithFiles(t *testing.T) {
 	}
 	// Verify gpgsign=false was passed to the commit.
 	if !r.hasCall(func(c fakeCall) bool {
-		return c.name == cmdGit && len(c.args) >= 3 && c.args[0] == "-c" && c.args[1] == "commit.gpgsign=false" && c.args[2] == "commit"
+		return c.name == cmdGit && len(c.args) >= 3 && c.args[0] == "-c" && c.args[1] == "commit.gpgsign=false" && c.args[2] == gitCmdCommit
 	}) {
 		t.Fatal("expected commit to pass -c commit.gpgsign=false")
 	}
@@ -812,6 +813,17 @@ func TestBootstrap_FreshMachine_NoIdentity_RealGit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "git config --global user.name") {
 		t.Fatalf("expected guidance to set git config, got: %v", err)
+	}
+}
+
+// TestErrSentinels_DistinctPrePostInit documents the contract that the two
+// error sentinels signal: errBootstrapDeclined before `git init`,
+// errBootstrapInterrupted after. setup.go relies on this to show the
+// right user-facing message.
+func TestErrSentinels_DistinctPrePostInit(t *testing.T) {
+	t.Parallel()
+	if errors.Is(errBootstrapDeclined, errBootstrapInterrupted) {
+		t.Fatal("errBootstrapDeclined and errBootstrapInterrupted must not match as the same sentinel")
 	}
 }
 
