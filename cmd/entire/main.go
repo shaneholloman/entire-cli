@@ -12,6 +12,10 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli"
 	"github.com/spf13/cobra"
+
+	// Registers the default Auto ConfigLoader plugin, which lets
+	// repo.ConfigScoped resolve global/system git config from ~/.gitconfig.
+	_ "github.com/go-git/go-git/v6/x/plugin"
 )
 
 func main() {

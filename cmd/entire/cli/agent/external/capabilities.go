@@ -17,10 +17,14 @@ func Wrap(ea *Agent) (agent.Agent, error) {
 	if ea == nil {
 		return nil, errors.New("unable to wrap nil agent")
 	}
-	return &wrappedAgent{
+	base := &wrappedAgent{
 		ea:   ea,
 		caps: ea.info.Capabilities,
-	}, nil
+	}
+	if len(ea.info.ProtectedFiles) > 0 {
+		return &wrappedAgentWithProtectedFiles{wrappedAgent: base}, nil
+	}
+	return base, nil
 }
 
 // wrappedAgent forwards all agent.Agent and optional interface methods to the
@@ -29,6 +33,12 @@ func Wrap(ea *Agent) (agent.Agent, error) {
 type wrappedAgent struct {
 	ea   *Agent
 	caps agent.DeclaredCaps
+}
+
+// wrappedAgentWithProtectedFiles opt-ins external agents to ProtectedFilesProvider
+// only when the binary actually advertised protected_files in its info response.
+type wrappedAgentWithProtectedFiles struct {
+	*wrappedAgent
 }
 
 // --- CapabilityDeclarer ---
@@ -118,6 +128,10 @@ func (w *wrappedAgent) GenerateText(ctx context.Context, prompt string, model st
 
 func (w *wrappedAgent) WriteHookResponse(message string) error {
 	return w.ea.WriteHookResponse(message)
+}
+
+func (w *wrappedAgentWithProtectedFiles) ProtectedFiles() []string {
+	return w.ea.ProtectedFiles()
 }
 
 // --- SubagentAwareExtractor ---

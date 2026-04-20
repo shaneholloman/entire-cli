@@ -253,20 +253,32 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	compactTranscriptDuration := buildCompactTranscript(ctx, ag, redactedTranscript, state, &writeOpts)
 
-	// Write checkpoint metadata to v1 branch
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(ctx)
+
+	// Write checkpoint metadata to the primary store.
 	writeV1Start := time.Now()
 	writeCtx, writeCommittedSpan := perf.Start(ctx, "write_committed_v1")
-	if err := store.WriteCommitted(writeCtx, writeOpts); err != nil {
-		writeCommittedSpan.RecordError(err)
-		writeCommittedSpan.End()
-		return nil, fmt.Errorf("failed to write checkpoint metadata: %w", err)
+	if !v2Only {
+		if err := store.WriteCommitted(writeCtx, writeOpts); err != nil {
+			writeCommittedSpan.RecordError(err)
+			writeCommittedSpan.End()
+			return nil, fmt.Errorf("failed to write checkpoint metadata: %w", err)
+		}
 	}
 	writeCommittedSpan.End()
 	writeV1Duration := time.Since(writeV1Start)
 
 	writeV2Start := time.Now()
 	writeV2Ctx, writeCommittedV2Span := perf.Start(ctx, "write_committed_v2")
-	writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+	if v2Only {
+		if err := writeCommittedV2(writeV2Ctx, repo, writeOpts); err != nil {
+			writeCommittedV2Span.RecordError(err)
+			writeCommittedV2Span.End()
+			return nil, fmt.Errorf("failed to write checkpoint metadata to v2: %w", err)
+		}
+	} else {
+		writeCommittedV2IfEnabled(writeV2Ctx, repo, writeOpts)
+	}
 	writeTaskMetadataV2IfEnabled(writeV2Ctx, repo, checkpointID, state.SessionID, ref)
 	writeCommittedV2Span.End()
 	writeV2Duration := time.Since(writeV2Start)
@@ -475,7 +487,7 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 // The return type is the summarize.Generator interface rather than the concrete
 // adapter pointer so callers can't accidentally hold a non-nil interface that
 // wraps a nil pointer (the classic Go nil-interface footgun).
-func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // intentional: nil interface avoids nil-pointer-wrapped-in-interface bug
+func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // interface return is intentional for provider abstraction and nil-safety
 	s, err := settings.Load(ctx)
 	if err != nil {
 		// Warn (not Debug): this is the auto-summarize hot path on every commit.
@@ -1158,7 +1170,8 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	state.CheckpointTranscriptSize = int64(len(result.Transcript))
 	state.Phase = session.PhaseIdle
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 
@@ -1275,7 +1288,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
 	state.CompactTranscriptStart += result.CompactTranscriptLines
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 	state.FullyCondensed = true // FilesTouched is already empty (checked above)
@@ -1397,16 +1411,24 @@ func computeCompactTranscriptStart(ctx context.Context, ag agent.Agent, state *S
 	return offset
 }
 
+// writeCommittedV2 writes checkpoint data to v2 refs unconditionally.
+// Callers decide whether to propagate or swallow the error (v2-only vs dual-write).
+func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
+	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+		return fmt.Errorf("v2 write committed: %w", err)
+	}
+	return nil
+}
+
 // writeCommittedV2IfEnabled writes checkpoint data to v2 refs when checkpoints_v2
-// is enabled in settings. Failures are logged as warnings — v2 writes are
-// best-effort during the dual-write period and must not block the v1 path.
+// is enabled. Failures are logged as warnings — in dual-write mode v2 writes are
+// best-effort and must not block the v1 path.
 func writeCommittedV2IfEnabled(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) {
 	if !settings.IsCheckpointsV2Enabled(ctx) {
 		return
 	}
-
-	v2Store := cpkg.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
-	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+	if err := writeCommittedV2(ctx, repo, opts); err != nil {
 		logging.Warn(ctx, "v2 dual-write failed",
 			slog.String("checkpoint_id", opts.CheckpointID.String()),
 			slog.String("error", err.Error()),

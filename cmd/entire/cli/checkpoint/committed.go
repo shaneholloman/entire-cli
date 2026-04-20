@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -39,6 +40,12 @@ import (
 
 // errStopIteration is used to stop commit iteration early in GetCheckpointAuthor.
 var errStopIteration = errors.New("stop iteration")
+
+// chunkTranscript is an indirection over agent.ChunkTranscript so tests can
+// count or intercept chunking calls (e.g., to verify the short-circuit avoids
+// re-chunking identical content). Production code paths always use the
+// unwrapped function.
+var chunkTranscript = agent.ChunkTranscript
 
 // WriteCommitted writes a committed checkpoint to the entire/checkpoints/v1 branch.
 // Checkpoints are stored at sharded paths: <id[:2]>/<id[2:]>/
@@ -1318,7 +1325,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	// Replace transcript (full replace, not append).
 	// Transcript is pre-redacted by the caller (enforced by RedactedBytes type).
 	if opts.Transcript.Len() > 0 {
-		if err := s.replaceTranscript(ctx, opts.Transcript, opts.Agent, sessionPath, entries); err != nil {
+		if err := s.replaceTranscript(ctx, opts.Transcript, opts.Agent, opts.PrecomputedBlobs, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
 	}
@@ -1365,7 +1372,41 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 // replaceTranscript writes the full transcript content, replacing any existing transcript.
 // Also removes any chunk files from a previous write and updates the content hash.
-func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
+//
+// Short-circuits when the existing content_hash.txt already matches the new
+// transcript's sha256 — in that case the chunk entries are preserved as-is and
+// no chunking/zlib happens. Use precomputed (non-nil) to reuse blob hashes
+// computed once across multiple checkpoints.
+func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, precomputed *PrecomputedTranscriptBlobs, sessionPath string, entries map[string]object.TreeEntry) error {
+	// Ignore precompute if invariants are violated — fall back to fresh chunking.
+	if precomputed != nil && !precomputed.isUsable() {
+		precomputed = nil
+	}
+
+	// Compute the new content-hash string (cheap — SHA-256 over transcript bytes).
+	var newContentHash string
+	if precomputed != nil {
+		newContentHash = precomputed.ContentHash
+	} else {
+		newContentHash = fmt.Sprintf("sha256:%x", sha256.Sum256(transcript.Bytes()))
+	}
+
+	// Short-circuit: if the existing content_hash.txt already matches, the
+	// chunk entries currently in `entries` represent the same content. Leave
+	// everything as-is and skip chunking + zlib.
+	hashPath := sessionPath + paths.ContentHashFileName
+	if existing, ok := entries[hashPath]; ok {
+		if blob, err := s.repo.BlobObject(existing.Hash); err == nil {
+			if rdr, rerr := blob.Reader(); rerr == nil {
+				existingHash, readErr := io.ReadAll(rdr)
+				_ = rdr.Close()
+				if readErr == nil && string(existingHash) == newContentHash {
+					return nil
+				}
+			}
+		}
+	}
+
 	// Remove existing transcript files (base + any chunks)
 	transcriptBase := sessionPath + paths.TranscriptFileName
 	for key := range entries {
@@ -1374,19 +1415,28 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.Reda
 		}
 	}
 
-	// Chunk the transcript (matches writeTranscript behavior)
-	chunks, err := agent.ChunkTranscript(ctx, transcript.Bytes(), agentType)
-	if err != nil {
-		return fmt.Errorf("failed to chunk transcript: %w", err)
+	// Resolve chunk hashes from precompute, or chunk + blob-write now.
+	var chunkHashes []plumbing.Hash
+	if precomputed != nil {
+		chunkHashes = precomputed.ChunkHashes
+	} else {
+		chunks, err := chunkTranscript(ctx, transcript.Bytes(), agentType)
+		if err != nil {
+			return fmt.Errorf("failed to chunk transcript: %w", err)
+		}
+		chunkHashes = make([]plumbing.Hash, len(chunks))
+		for i, chunk := range chunks {
+			blobHash, err := CreateBlobFromContent(s.repo, chunk)
+			if err != nil {
+				return fmt.Errorf("failed to create transcript blob: %w", err)
+			}
+			chunkHashes[i] = blobHash
+		}
 	}
 
-	// Write chunk files
-	for i, chunk := range chunks {
+	// Record chunk files in the tree at v1 (full.jsonl) naming.
+	for i, blobHash := range chunkHashes {
 		chunkPath := sessionPath + agent.ChunkFileName(paths.TranscriptFileName, i)
-		blobHash, err := CreateBlobFromContent(s.repo, chunk)
-		if err != nil {
-			return fmt.Errorf("failed to create transcript blob: %w", err)
-		}
 		entries[chunkPath] = object.TreeEntry{
 			Name: chunkPath,
 			Mode: filemode.Regular,
@@ -1394,13 +1444,17 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.Reda
 		}
 	}
 
-	// Update content hash
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript.Bytes()))
-	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
-	if err != nil {
-		return fmt.Errorf("failed to create content hash blob: %w", err)
+	// Content-hash blob.
+	var hashBlob plumbing.Hash
+	if precomputed != nil {
+		hashBlob = precomputed.ContentHashBlob
+	} else {
+		h, err := CreateBlobFromContent(s.repo, []byte(newContentHash))
+		if err != nil {
+			return fmt.Errorf("failed to create content hash blob: %w", err)
+		}
+		hashBlob = h
 	}
-	hashPath := sessionPath + paths.ContentHashFileName
 	entries[hashPath] = object.TreeEntry{
 		Name: hashPath,
 		Mode: filemode.Regular,
@@ -1408,6 +1462,44 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.Reda
 	}
 
 	return nil
+}
+
+// PrecomputeTranscriptBlobs chunks the given transcript and writes each chunk
+// plus the content-hash blob to the object store once, returning the resulting
+// hashes for reuse across multiple UpdateCommitted calls that share the same
+// transcript content.
+//
+// The returned blobs work for both v1 (full.jsonl) and v2 (raw_transcript)
+// paths since blob hashes are content-addressed (SHA-1 of chunk bytes). Only
+// the tree-entry filenames differ between v1 and v2.
+func PrecomputeTranscriptBlobs(ctx context.Context, repo *git.Repository, transcript redact.RedactedBytes, agentType types.AgentType) (*PrecomputedTranscriptBlobs, error) {
+	raw := transcript.Bytes()
+
+	chunks, err := chunkTranscript(ctx, raw, agentType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to chunk transcript: %w", err)
+	}
+
+	chunkHashes := make([]plumbing.Hash, len(chunks))
+	for i, chunk := range chunks {
+		h, err := CreateBlobFromContent(repo, chunk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create transcript blob: %w", err)
+		}
+		chunkHashes[i] = h
+	}
+
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(raw))
+	hashBlob, err := CreateBlobFromContent(repo, []byte(contentHash))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create content hash blob: %w", err)
+	}
+
+	return &PrecomputedTranscriptBlobs{
+		ChunkHashes:     chunkHashes,
+		ContentHashBlob: hashBlob,
+		ContentHash:     contentHash,
+	}, nil
 }
 
 // ensureSessionsBranch ensures the entire/checkpoints/v1 branch exists.
@@ -1631,27 +1723,14 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 // GetGitAuthorFromRepo retrieves the git user.name and user.email,
 // checking both the repository-local config and the global ~/.gitconfig.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
-	// Get repository config (includes local settings)
-	cfg, err := repo.Config()
-	if err == nil {
+	// ConfigScoped merges local + global (local wins), matching git's own resolution.
+	// Requires a ConfigLoader plugin to be registered; cmd/entire/main.go blank-imports
+	// go-git/v6/x/plugin to register the default Auto loader.
+	if cfg, err := repo.ConfigScoped(config.GlobalScope); err == nil {
 		name = cfg.User.Name
 		email = cfg.User.Email
 	}
 
-	// If not found in local config, try global config
-	if name == "" || email == "" {
-		globalCfg, err := config.LoadConfig(config.GlobalScope)
-		if err == nil {
-			if name == "" {
-				name = globalCfg.User.Name
-			}
-			if email == "" {
-				email = globalCfg.User.Email
-			}
-		}
-	}
-
-	// Provide sensible defaults if git user is not configured
 	if name == "" {
 		name = "Unknown"
 	}

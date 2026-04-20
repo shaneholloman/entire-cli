@@ -92,6 +92,10 @@ func (e *Agent) ProtectedDirs() []string {
 	return e.info.ProtectedDirs
 }
 
+func (e *Agent) ProtectedFiles() []string {
+	return e.info.ProtectedFiles
+}
+
 // --- Agent interface: Transcript Storage ---
 
 func (e *Agent) ReadTranscript(sessionRef string) ([]byte, error) {

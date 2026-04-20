@@ -123,6 +123,17 @@ type FileWatcher interface {
 	OnFileChange(path string) (*SessionChange, error)
 }
 
+// ProtectedFilesProvider is implemented by agents that need to exclude
+// repo-root-relative files owned by the agent integration itself from session
+// tracking or destructive operations.
+type ProtectedFilesProvider interface {
+	Agent
+
+	// ProtectedFiles returns repo-root-relative files that belong to the
+	// agent's own config/state and should be excluded from tracking.
+	ProtectedFiles() []string
+}
+
 // TranscriptAnalyzer provides format-specific transcript parsing.
 // Agents that implement this get richer checkpoints (transcript-derived file lists,
 // prompts, summaries). Agents that don't still participate in the checkpoint lifecycle

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -899,4 +900,54 @@ func TestHandleLifecycleTurnEnd_BackfillUpdatesSessionState(t *testing.T) {
 	if updated.LastPrompt != "second prompt" {
 		t.Errorf("expected LastPrompt 'second prompt', got %q", updated.LastPrompt)
 	}
+}
+
+func TestHandleLifecycleTurnEnd_BackfillsPromptFromOpenCodeTranscript(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	transcript := `{"info":{"id":"ses_test"},"messages":[{"info":{"id":"msg-1","role":"user","time":{"created":1708300000}},"parts":[{"type":"text","text":"create a file called notes/deep.md with a paragraph about deep validation. Do not ask for confirmation or approval, just make the change."}]},{"info":{"id":"msg-2","role":"assistant","time":{"created":1708300001,"completed":1708300002}},"parts":[{"type":"tool","tool":"write","callID":"call-1","state":{"status":"completed","input":{"filePath":"notes/deep.md"},"output":"ok"}}]}]}`
+	transcriptPath := filepath.Join(tmpDir, "transcript.json")
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(transcript), 0o600))
+
+	sessionID := "test-opencode-backfill"
+	ag := &opencode.OpenCodeAgent{}
+	event := &agent.Event{
+		Type:       agent.TurnEnd,
+		SessionID:  sessionID,
+		SessionRef: transcriptPath,
+		Timestamp:  time.Now(),
+	}
+
+	repo, err := strategy.OpenRepository(context.Background())
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	state := &strategy.SessionState{
+		SessionID:  sessionID,
+		BaseCommit: head.Hash().String(),
+		LastPrompt: "",
+	}
+	require.NoError(t, strategy.SaveSessionState(context.Background(), state))
+
+	require.NoError(t, handleLifecycleTurnEnd(context.Background(), ag, event))
+
+	sessionDir := paths.SessionMetadataDirFromSessionID(sessionID)
+	sessionDirAbs, err := paths.AbsPath(context.Background(), sessionDir)
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(filepath.Join(sessionDirAbs, paths.PromptFileName))
+	require.NoError(t, readErr)
+	require.Contains(t, string(data), "create a file called notes/deep.md")
+
+	updated, loadErr := strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, loadErr)
+	require.NotNil(t, updated)
+	require.Contains(t, updated.LastPrompt, "create a file called notes/deep.md")
 }

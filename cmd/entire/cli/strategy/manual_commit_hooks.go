@@ -462,6 +462,8 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 	findSessionsSpan.End()
 
+	s.warnIfAttributionDiverged(ctx, sessions)
+
 	// Fast path: skip content detection for mid-turn agent commits.
 	if s.tryAgentCommitFastPath(ctx, commitMsgFile, sessions, source) {
 		return nil
@@ -1416,7 +1418,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	// Update session state for the new base commit
 	newHead := head.Hash().String()
 	state.BaseCommit = newHead
-	state.AttributionBaseCommit = newHead
+	state.RealignAttributionBase(newHead)
 	state.StepCount = 0
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
 	state.CompactTranscriptStart += result.CompactTranscriptLines
@@ -1431,8 +1433,11 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	// decides whether to clear it based on carry-forward: if remaining files exist,
 	// the prompt must persist so the next condensation can read it.
 
-	// Save checkpoint ID so subsequent commits can reuse it (e.g., amend restores trailer)
+	// Save checkpoint ID so subsequent commits can reuse it (e.g., amend restores trailer).
+	// LastCheckpointCommitHash records the exact commit SHA so the reconcile path can
+	// distinguish a true reset (same SHA) from cherry-pick/rebase (same trailer, new SHA).
 	state.LastCheckpointID = checkpointID
+	state.LastCheckpointCommitHash = newHead
 
 	logging.Info(logCtx, "session condensed",
 		slog.String("strategy", "manual-commit"),
@@ -1465,7 +1470,7 @@ func (s *ManualCommitStrategy) updateBaseCommitIfChanged(ctx context.Context, st
 		// Keep AttributionBaseCommit in sync to prevent stale base drift.
 		// Without this, a subsequent condensation would diff from the old base,
 		// inflating human_added with lines from unrelated prior commits.
-		state.AttributionBaseCommit = newHead
+		state.RealignAttributionBase(newHead)
 		logging.Debug(logCtx, "post-commit: updated BaseCommit and AttributionBaseCommit",
 			slog.String("session_id", state.SessionID),
 			slog.String("new_head", truncateHash(newHead)),
@@ -1509,7 +1514,7 @@ func (s *ManualCommitStrategy) postCommitUpdateBaseCommitOnly(ctx context.Contex
 			// Keep AttributionBaseCommit in sync to prevent stale base drift.
 			// Without this, a subsequent condensation would diff from the old base,
 			// inflating human_added with lines from unrelated prior commits.
-			state.AttributionBaseCommit = newHead
+			state.RealignAttributionBase(newHead)
 			if err := s.saveSessionState(ctx, state); err != nil {
 				logging.Warn(logCtx, "failed to update session state",
 					slog.String("session_id", state.SessionID),
@@ -2002,6 +2007,38 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 	return modifiedFiles
 }
 
+// warnIfAttributionDiverged prints at most one stderr warning per call and
+// marks every divergent session as notified so subsequent invocations stay
+// silent until the next successful condensation (or reconcile) realigns
+// attribution and clears the flag via State.RealignAttributionBase.
+//
+// Divergence arises when the migrate path advances BaseCommit to a new HEAD
+// but intentionally leaves AttributionBaseCommit pinned (e.g., after a pull
+// or git reset to an unrelated commit). Writing to stderrWriter surfaces the
+// message in the user's terminal during prepare-commit-msg, not the agent's
+// transcript — stderr from the hook is TTY-bound to the invoking process.
+func (s *ManualCommitStrategy) warnIfAttributionDiverged(ctx context.Context, sessions []*SessionState) {
+	logCtx := logging.WithComponent(ctx, "checkpoint")
+	printed := false
+	for _, sess := range sessions {
+		if sess.AttributionBaseCommit == "" ||
+			sess.AttributionBaseCommit == sess.BaseCommit ||
+			sess.DivergenceNoticeShown {
+			continue
+		}
+		if !printed {
+			fmt.Fprintln(stderrWriter, "entire: session attribution diverged after recent history movement; figures may be off until next checkpoint")
+			printed = true
+		}
+		sess.DivergenceNoticeShown = true
+		if err := s.saveSessionState(ctx, sess); err != nil {
+			logging.Warn(logCtx, "failed to save divergence notice flag",
+				slog.String("session_id", sess.SessionID),
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
 // tryAgentCommitFastPath skips content detection for mid-turn agent commits.
 // Returns true if the fast path was taken (trailer added or attempt made),
 // false if the caller should continue with normal content detection.
@@ -2215,11 +2252,18 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 			state.TranscriptPath = transcriptPath
 		}
 
-		// Clear checkpoint IDs on every new prompt.
-		// LastCheckpointID is set during PostCommit, cleared at new prompt.
-		// TurnCheckpointIDs tracks mid-turn checkpoints for stop-time finalization.
-		state.LastCheckpointID = ""
-		state.TurnCheckpointIDs = nil
+		// ORDERING: attribution runs BEFORE migrate to use the pre-migration
+		// BaseCommit as the base tree (preserving correct agent-line counts when
+		// HEAD moved between turns via pull/rebase). Migrate runs BEFORE the
+		// LastCheckpointID clear so the reconcile guard can read the checkpoint ID.
+		//
+		// Sequence: attribution → migrate → clear
+		//
+		// 1. Attribution uses state.BaseCommit to locate the shadow branch and
+		//    base tree. Running it before migrate ensures it diffs against the
+		//    original base, not the post-migration HEAD.
+		// 2. Migrate/reconcile reads state.LastCheckpointID — clearing it first
+		//    would prevent the reconcile path from ever firing at turn start.
 
 		// Calculate attribution at prompt start (BEFORE agent makes any changes)
 		// This captures user edits since the last checkpoint (or base commit for first prompt).
@@ -2231,9 +2275,25 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 
 		// Check if HEAD has moved (user pulled/rebased or committed)
 		// migrateShadowBranchIfNeeded handles renaming the shadow branch and updating state.BaseCommit
-		if _, err := s.migrateShadowBranchIfNeeded(ctx, repo, state); err != nil {
+		_, reconciled, err := s.migrateShadowBranchIfNeeded(ctx, repo, state)
+		if err != nil {
 			return fmt.Errorf("failed to check/migrate shadow branch: %w", err)
 		}
+		if reconciled {
+			// Reconcile advanced BaseCommit + AttributionBaseCommit to HEAD (the
+			// known checkpoint we reset to). The attribution just computed is
+			// against the stale pre-reset base and would count discarded-history
+			// edits as churn. Recompute against the new base so the next
+			// checkpoint sees accurate user-delta.
+			recomputed := s.calculatePromptAttributionAtStart(ctx, repo, state)
+			state.PendingPromptAttribution = &recomputed
+		}
+
+		// Clear checkpoint IDs on every new prompt.
+		// LastCheckpointID is set during PostCommit, cleared at new prompt.
+		// TurnCheckpointIDs tracks mid-turn checkpoints for stop-time finalization.
+		state.LastCheckpointID = ""
+		state.TurnCheckpointIDs = nil
 
 		if err := s.saveSessionState(ctx, state); err != nil {
 			return fmt.Errorf("failed to update session state: %w", err)
@@ -2565,6 +2625,29 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 	return nil
 }
 
+// precomputeTranscriptBlobsForFinalize chunks + zlib-compresses the redacted
+// transcript once for reuse across every checkpoint in the turn. Returns nil
+// (without error) when the transcript is empty — downstream stores skip
+// transcript updates in that case, so precompute would only write a wasted
+// empty-chunk blob to the object store. On failure, logs a warning and
+// returns nil so the loop falls back to per-checkpoint chunking.
+func precomputeTranscriptBlobsForFinalize(ctx context.Context, repo *git.Repository, transcript redact.RedactedBytes, state *SessionState) *checkpoint.PrecomputedTranscriptBlobs {
+	if transcript.Len() == 0 {
+		return nil
+	}
+	_, span := perf.Start(ctx, "precompute_transcript_blobs")
+	defer span.End()
+	precomputed, err := checkpoint.PrecomputeTranscriptBlobs(ctx, repo, transcript, state.AgentType)
+	if err != nil {
+		logging.Warn(ctx, "finalize: precompute transcript blobs failed, falling back to per-checkpoint work",
+			slog.String("session_id", state.SessionID),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	return precomputed
+}
+
 // finalizeAllTurnCheckpoints replaces the provisional transcript in each checkpoint
 // created during this turn with the full session transcript.
 //
@@ -2661,12 +2744,15 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	}
 
 	store := checkpoint.NewGitStore(repo)
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(logCtx)
 
 	// Evaluate v2 flag once before the loop to avoid re-reading settings per checkpoint
 	var v2Store *checkpoint.V2GitStore
 	if settings.IsCheckpointsV2Enabled(logCtx) {
 		v2Store = checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(logCtx, "origin"))
 	}
+
+	precomputed := precomputeTranscriptBlobsForFinalize(logCtx, repo, redactedTranscript, state)
 
 	// Update each checkpoint with the full transcript
 	for _, cpIDStr := range state.TurnCheckpointIDs {
@@ -2681,18 +2767,28 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		}
 
 		updateOpts := checkpoint.UpdateCommittedOptions{
-			CheckpointID: cpID,
-			SessionID:    state.SessionID,
-			Transcript:   redactedTranscript,
-			Prompts:      prompts,
-			Agent:        state.AgentType,
+			CheckpointID:     cpID,
+			SessionID:        state.SessionID,
+			Transcript:       redactedTranscript,
+			Prompts:          prompts,
+			Agent:            state.AgentType,
+			PrecomputedBlobs: precomputed,
 		}
 
 		// Generate compact transcript for v2 /main
 		if v2Store != nil && redactedTranscript.Len() > 0 {
 			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
+			var (
+				content *checkpoint.SessionContent
+				readErr error
+			)
+			if v2Only {
+				content, readErr = v2Store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			} else {
+				content, readErr = store.ReadSessionContentByID(ctx, cpID, state.SessionID)
+			}
 			startLine := 0
-			if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
+			if readErr == nil && content != nil {
 				startLine = content.Metadata.GetTranscriptStart()
 			} else {
 				errMsg := "unknown"
@@ -2708,23 +2804,30 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
 		}
 
-		updateErr := store.UpdateCommitted(ctx, updateOpts)
-		if updateErr != nil {
-			logging.Warn(logCtx, "finalize: failed to update checkpoint",
-				slog.String("checkpoint_id", cpIDStr),
-				slog.String("error", updateErr.Error()),
-			)
-			errCount++
-			continue
+		if !v2Only {
+			updateErr := store.UpdateCommitted(ctx, updateOpts)
+			if updateErr != nil {
+				logging.Warn(logCtx, "finalize: failed to update checkpoint",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", updateErr.Error()),
+				)
+				errCount++
+				continue
+			}
 		}
 
-		// Dual-write: update v2 refs when enabled
 		if v2Store != nil {
 			if v2Err := v2Store.UpdateCommitted(logCtx, updateOpts); v2Err != nil {
-				logging.Warn(logCtx, "v2 dual-write update failed",
+				attrs := []any{
 					slog.String("checkpoint_id", cpIDStr),
 					slog.String("error", v2Err.Error()),
-				)
+				}
+				if v2Only {
+					logging.Warn(logCtx, "finalize: failed to update checkpoint in v2", attrs...)
+					errCount++
+					continue
+				}
+				logging.Warn(logCtx, "v2 dual-write update failed", attrs...)
 			}
 		}
 

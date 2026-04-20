@@ -887,3 +887,27 @@ func TestPrintMultiSessionResumeCommands_OutputMatchesResumeStyle(t *testing.T) 
 		t.Fatalf("printMultiSessionResumeCommands() unexpected stderr: %q", errOutput.String())
 	}
 }
+
+// Not parallel: uses t.Chdir()
+func TestGetMetadataTree_SucceedsWithLocalBranch(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
+
+	// Create checkpoint metadata on the local metadata branch
+	sessionID := "2025-01-01-metadata-tree-test"
+	_ = createCheckpointOnMetadataBranch(t, repo, sessionID)
+
+	// No origin remote, no checkpoint_remote — only local branch
+	tree, freshRepo, err := getMetadataTree(context.Background())
+	if err != nil {
+		t.Fatalf("getMetadataTree() error = %v", err)
+	}
+	if tree == nil {
+		t.Fatal("getMetadataTree() returned nil tree")
+	}
+	if freshRepo == nil {
+		t.Fatal("getMetadataTree() returned nil repo")
+	}
+}

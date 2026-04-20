@@ -495,6 +495,33 @@ func readTranscriptFromObjectTree(tree *object.Tree, agentType types.AgentType) 
 	return nil, nil
 }
 
+// ReadSessionContentByID finds the session with the given sessionID in a checkpoint
+// and returns its content. Mirrors GitStore.ReadSessionContentByID for v2 refs.
+// Returns ErrCheckpointNotFound if the checkpoint doesn't exist; returns a
+// non-wrapped error (containing the session ID and checkpoint ID for context)
+// if no session in the checkpoint matches sessionID.
+func (s *V2GitStore) ReadSessionContentByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string) (*SessionContent, error) {
+	summary, err := s.ReadCommitted(ctx, checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	for i := range summary.Sessions {
+		content, readErr := s.ReadSessionContent(ctx, checkpointID, i)
+		if readErr != nil {
+			continue
+		}
+		if content != nil && content.Metadata.SessionID == sessionID {
+			return content, nil
+		}
+	}
+
+	return nil, fmt.Errorf("session %q not found in checkpoint %s", sessionID, checkpointID)
+}
+
 // GetSessionLog reads the latest session's raw transcript and session ID from v2 refs.
 // Convenience wrapper matching the GitStore.GetSessionLog signature.
 func (s *V2GitStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string, error) {

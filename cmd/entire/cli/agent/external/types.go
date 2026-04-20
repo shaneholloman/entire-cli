@@ -22,6 +22,7 @@ type InfoResponse struct {
 	Description     string             `json:"description"`
 	IsPreview       bool               `json:"is_preview"`
 	ProtectedDirs   []string           `json:"protected_dirs"`
+	ProtectedFiles  []string           `json:"protected_files"`
 	HookNames       []string           `json:"hook_names"`
 	Capabilities    agent.DeclaredCaps `json:"capabilities"`
 }

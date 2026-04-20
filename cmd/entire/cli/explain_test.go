@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
@@ -66,6 +68,137 @@ func TestExplainCmd_SearchAllFlag(t *testing.T) {
 
 	if flag.DefValue != "false" {
 		t.Errorf("expected default value 'false', got %q", flag.DefValue)
+	}
+}
+
+func TestFormatCheckpointSummaryError_Auth(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}, 0)
+	msg := err.Error()
+	if !strings.Contains(strings.ToLower(msg), "authentication failed") {
+		t.Errorf("missing 'authentication failed' in %q", msg)
+	}
+	if !strings.Contains(msg, "Invalid API key") {
+		t.Errorf("missing envelope message in %q", msg)
+	}
+}
+
+func TestFormatCheckpointSummaryError_RateLimit(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorRateLimit, Message: "429"}, 0)
+	if !strings.Contains(err.Error(), "rate limit") {
+		t.Errorf("missing rate-limit phrasing: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_Config(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorConfig, Message: "model not found"}, 0)
+	if !strings.Contains(err.Error(), "model not found") {
+		t.Errorf("envelope message not surfaced: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_CLIMissing(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: claudecode.ClaudeErrorCLIMissing}, 0)
+	if !strings.Contains(err.Error(), "not installed") {
+		t.Errorf("missing cli-missing phrasing: %q", err)
+	}
+}
+
+// TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage guards against
+// the null-result-envelope regression: Claude can emit is_error:true with a real
+// HTTP status (401/429/4xx) but result:null, producing a ClaudeError with Message="".
+// The Auth/RateLimit/Config branches must not render a bare colon in that case.
+func TestFormatCheckpointSummaryError_TypedBranchesHandleEmptyMessage(t *testing.T) {
+	t.Parallel()
+	kinds := []claudecode.ClaudeErrorKind{
+		claudecode.ClaudeErrorAuth,
+		claudecode.ClaudeErrorRateLimit,
+		claudecode.ClaudeErrorConfig,
+	}
+	for _, kind := range kinds {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			err := formatCheckpointSummaryError(&claudecode.ClaudeError{Kind: kind}, 0)
+			msg := err.Error()
+			// Must not end any line with a bare colon (the classic regression
+			// of rendering "...: " with nothing after it).
+			for _, line := range strings.Split(msg, "\n") {
+				if strings.HasSuffix(strings.TrimSpace(line), ":") {
+					t.Errorf("line ends with bare colon: %q (full: %q)", line, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatCheckpointSummaryError_DeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(fmt.Errorf("wrapped: %w", context.DeadlineExceeded), 5*time.Minute)
+	msg := err.Error()
+	for _, want := range []string{"5m", "safety deadline"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("missing %q in %q", want, msg)
+		}
+	}
+	// Negative guards against regressions:
+	//   - summary_timeout_seconds advice was removed because the setting is
+	//     not wired yet (follow-up PR). Reintroducing it would re-mislead users.
+	//   - Hardcoded "Claude" / "sonnet" / "Anthropic" would misdirect users of
+	//     alternate summary providers (codex, gemini).
+	for _, unwanted := range []string{"summary_timeout_seconds", "Claude", "sonnet", "Anthropic", "anthropic.com"} {
+		if strings.Contains(msg, unwanted) {
+			t.Errorf("unexpected %q in provider-neutral timeout message: %q", unwanted, msg)
+		}
+	}
+}
+
+func TestFormatCheckpointSummaryError_Canceled(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(fmt.Errorf("wrapped: %w", context.Canceled), 0)
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Errorf("missing canceled: %q", err)
+	}
+}
+
+func TestFormatCheckpointSummaryError_Passthrough(t *testing.T) {
+	t.Parallel()
+	err := formatCheckpointSummaryError(errors.New("something else"), 0)
+	if !strings.Contains(err.Error(), "something else") {
+		t.Errorf("original error not preserved: %q", err)
+	}
+}
+
+// TestFormatCheckpointSummaryError_Unknown covers the three branches of the
+// default-case suffix builder. Guards against users seeing
+// "Claude failed to generate the summary:" with nothing after the colon
+// (the null-result and no-stderr-OOM scenarios).
+func TestFormatCheckpointSummaryError_Unknown(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  *claudecode.ClaudeError
+		want string // substring that must appear in the rendered message
+	}{
+		{"APIStatus when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, APIStatus: 500}, "500"},
+		{"ExitCode when Message empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: 137}, "137"},
+		{"Negative ExitCode renders as abnormal, not -1", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, ExitCode: -1}, "abnormal"},
+		{"All-zero fields render a diagnostic sentinel, not empty", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown}, "no diagnostic detail"},
+		{"Message takes precedence", &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorUnknown, Message: "something weird"}, "something weird"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			msg := formatCheckpointSummaryError(tc.err, 0).Error()
+			if strings.HasSuffix(strings.TrimSpace(msg), ":") {
+				t.Errorf("user-facing message ends with bare colon: %q", msg)
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("missing %q in %q", tc.want, msg)
+			}
+		})
 	}
 }
 
@@ -130,7 +263,7 @@ func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -172,7 +305,7 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, appliedDeadline, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -182,11 +315,59 @@ func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testi
 	if gotDeadline.IsZero() {
 		t.Fatal("expected deadline to be captured")
 	}
+	// The applied deadline must reflect the shorter parent-ctx deadline,
+	// not the package-default checkpointSummaryTimeout. Otherwise
+	// formatCheckpointSummaryError would report the wrong timeout to users.
+	if appliedDeadline >= checkpointSummaryTimeout {
+		t.Fatalf("appliedDeadline = %s; want shorter than %s (parent had tighter deadline)",
+			appliedDeadline, checkpointSummaryTimeout)
+	}
 	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
 		t.Fatalf("deadline delta = %s, want near 0", delta)
 	}
 	if strings.Contains(err.Error(), "30s") {
 		t.Fatalf("timeout error should not report default timeout when parent deadline fired: %v", err)
+	}
+}
+
+// TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone guards
+// against the race where the underlying summarizer returns a typed
+// *ClaudeError AND the context happens to be done. Prior code checked
+// timeoutCtx.Err() and unconditionally wrapped with %w context.DeadlineExceeded,
+// which discarded the typed error and routed the user to the wrong
+// "safety deadline" guidance instead of the auth/rate-limit message.
+func TestGenerateCheckpointAISummary_PreservesClaudeErrorWhenCtxIsDone(t *testing.T) {
+	tmpTimeout := checkpointSummaryTimeout
+	tmpGenerator := generateTranscriptSummary
+	t.Cleanup(func() {
+		checkpointSummaryTimeout = tmpTimeout
+		generateTranscriptSummary = tmpGenerator
+	})
+
+	checkpointSummaryTimeout = 30 * time.Second
+
+	// Cancel the parent before we even call — ctx.Err() will be non-nil.
+	parentCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	claudeErr := &claudecode.ClaudeError{Kind: claudecode.ClaudeErrorAuth, Message: "Invalid API key"}
+	generateTranscriptSummary = func(
+		context.Context,
+		redact.RedactedBytes,
+		[]string,
+		types.AgentType,
+		summarize.Generator,
+	) (*checkpoint.Summary, error) {
+		return nil, claudeErr
+	}
+
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	var ce *claudecode.ClaudeError
+	if !errors.As(err, &ce) {
+		t.Fatalf("errors.As did not recover *ClaudeError; got %v", err)
+	}
+	if ce.Kind != claudecode.ClaudeErrorAuth {
+		t.Errorf("Kind = %v; want auth", ce.Kind)
 	}
 }
 
@@ -220,7 +401,7 @@ func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t 
 	}
 
 	start := time.Now()
-	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
@@ -257,7 +438,7 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, _, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -274,9 +455,7 @@ func TestExplainCommit_NotFound(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	if _, err := git.PlainInit(tmpDir, false); err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	var stdout bytes.Buffer
 	err := runExplainCommit(context.Background(), &stdout, "nonexistent", false, false, false, false)
@@ -294,10 +473,9 @@ func TestExplainCommit_NoEntireData(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -347,10 +525,9 @@ func TestExplainCommit_WithMetadataTrailerButNoCheckpoint(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -415,10 +592,9 @@ func TestExplainDefault_ShowsBranchView(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create initial commit so HEAD exists (required for branch view)
 	w, err := repo.Worktree()
@@ -471,10 +647,9 @@ func TestExplainDefault_NoCheckpoints_ShowsHelpfulMessage(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create initial commit so HEAD exists (required for branch view)
 	w, err := repo.Worktree()
@@ -993,10 +1168,9 @@ func TestRunExplainCheckpoint_NotFound(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with an initial commit (required for checkpoint lookup)
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2243,10 +2417,9 @@ func TestGetBranchCheckpoints_ReadsPromptFromShadowBranch(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with an initial commit
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2357,9 +2530,7 @@ func TestGetCurrentWorktreeHash_MainWorktree(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	if _, err := git.PlainInit(tmpDir, false); err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
 
 	hash := getCurrentWorktreeHash(context.Background())
 	expected := checkpoint.HashWorktreeID("") // Main worktree has empty ID
@@ -2374,10 +2545,9 @@ func TestGetReachableTemporaryCheckpoints_FiltersByWorktree(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2477,10 +2647,9 @@ func TestRunExplainBranchDefault_DetachedHead(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo with a commit
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2534,10 +2703,9 @@ func TestIsAncestorOf(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2600,10 +2768,9 @@ func TestGetBranchCheckpoints_OnFeatureBranch(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2648,10 +2815,9 @@ func TestHasCodeChanges_FirstCommitReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2688,10 +2854,9 @@ func TestHasCodeChanges_OnlyMetadataChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2746,10 +2911,9 @@ func TestHasCodeChanges_WithCodeChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2800,10 +2964,9 @@ func TestHasCodeChanges_MixedChanges(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -2865,10 +3028,9 @@ func TestGetBranchCheckpoints_FiltersMainCommits(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3147,10 +3309,9 @@ func TestRunExplainCommit_NoCheckpointTrailer(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create a commit without checkpoint trailer
 	w, err := repo.Worktree()
@@ -3189,10 +3350,9 @@ func TestRunExplainCommit_WithCheckpointTrailer(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	// Create a commit with checkpoint trailer
 	w, err := repo.Worktree()
@@ -3448,10 +3608,9 @@ func TestGetAssociatedCommits(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3546,10 +3705,9 @@ func TestGetAssociatedCommits_NoMatches(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -3591,10 +3749,9 @@ func TestGetAssociatedCommits_MultipleMatches(t *testing.T) {
 	t.Chdir(tmpDir)
 
 	// Initialize git repo
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4413,10 +4570,9 @@ func TestGetBranchCheckpoints_ReadsPromptFromCommittedCheckpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4670,10 +4826,9 @@ func TestHasAnyChanges_FirstCommitReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
@@ -4711,10 +4866,9 @@ func TestHasAnyChanges_MetadataOnlyChangeReturnsTrue(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
-	repo, err := git.PlainInit(tmpDir, false)
-	if err != nil {
-		t.Fatalf("failed to init git repo: %v", err)
-	}
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
 
 	w, err := repo.Worktree()
 	if err != nil {
