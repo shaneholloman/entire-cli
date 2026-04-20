@@ -109,21 +109,6 @@ func resolvePushSettings(ctx context.Context, pushRemoteName string) pushSetting
 	return ps
 }
 
-// ResolveRemoteRepo returns the host, owner, and repo name for the given git remote.
-// It parses the remote URL (SSH or HTTPS) and extracts the components.
-// For example, git@github.com:org/my-repo.git returns ("github.com", "org", "my-repo").
-func ResolveRemoteRepo(ctx context.Context, remoteName string) (host, owner, repo string, err error) {
-	rawURL, err := remote.GetRemoteURL(ctx, remoteName)
-	if err != nil {
-		return "", "", "", fmt.Errorf("get remote URL for %q: %w", remoteName, err)
-	}
-	info, err := remote.ParseURL(rawURL)
-	if err != nil {
-		return "", "", "", fmt.Errorf("parse remote URL: %w", err)
-	}
-	return info.Host, info.Owner, info.Repo, nil
-}
-
 // FetchMetadataBranch fetches the metadata branch from the checkpoint remote URL
 // and updates the local branch. Unlike fetchMetadataBranchIfMissing, this always
 // fetches regardless of whether the branch exists locally (for resume scenarios

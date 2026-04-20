@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 
+	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
@@ -19,16 +18,12 @@ const (
 )
 
 const (
-	ProtocolSSH   = "ssh"
-	ProtocolHTTPS = "https"
+	ProtocolSSH   = gitremote.ProtocolSSH
+	ProtocolHTTPS = gitremote.ProtocolHTTPS
 )
 
-type Info struct {
-	Protocol string
-	Host     string
-	Owner    string
-	Repo     string
-}
+// Info is an alias for gitremote.Info.
+type Info = gitremote.Info
 
 // FetchURL returns the effective checkpoint fetch URL for the current repository.
 // If strategy_options.checkpoint_remote is configured, the returned URL is derived
@@ -212,70 +207,35 @@ func Configured(ctx context.Context) bool {
 	return s.GetCheckpointRemote() != nil
 }
 
+// GetRemoteURL returns the URL configured for the named git remote.
 func GetRemoteURL(ctx context.Context, remoteName string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "remote", "get-url", remoteName)
-	output, err := cmd.Output()
+	url, err := gitremote.GetRemoteURL(ctx, remoteName)
 	if err != nil {
-		return "", fmt.Errorf("remote %q not found", remoteName)
+		return "", fmt.Errorf("get remote URL: %w", err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return url, nil
 }
 
+// ParseURL parses a git remote URL (SSH SCP-style or HTTPS) into its components.
 func ParseURL(rawURL string) (*Info, error) {
-	rawURL = strings.TrimSpace(rawURL)
-
-	if strings.Contains(rawURL, ":") && !strings.Contains(rawURL, "://") {
-		parts := strings.SplitN(rawURL, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid SSH URL: %s", RedactURL(rawURL))
-		}
-
-		hostPart := parts[0]
-		host := hostPart
-		if idx := strings.Index(hostPart, "@"); idx >= 0 {
-			host = hostPart[idx+1:]
-		}
-
-		pathPart := strings.TrimSuffix(parts[1], ".git")
-		owner, repo, err := splitOwnerRepo(pathPart)
-		if err != nil {
-			return nil, err
-		}
-
-		return &Info{Protocol: ProtocolSSH, Host: host, Owner: owner, Repo: repo}, nil
-	}
-
-	u, err := url.Parse(rawURL)
+	info, err := gitremote.ParseURL(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %s", RedactURL(rawURL))
+		return nil, fmt.Errorf("parse URL: %w", err)
 	}
-	if u.Scheme == "" {
-		return nil, fmt.Errorf("no protocol in URL: %s", RedactURL(rawURL))
-	}
-
-	pathPart := strings.TrimPrefix(u.Path, "/")
-	owner, repo, err := splitOwnerRepo(pathPart)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Info{Protocol: u.Scheme, Host: u.Hostname(), Owner: owner, Repo: repo}, nil
+	return info, nil
 }
 
 func DeriveCheckpointURL(pushRemoteURL string, config *settings.CheckpointRemoteConfig) (string, error) {
-	info, err := ParseURL(pushRemoteURL)
+	info, err := gitremote.ParseURL(pushRemoteURL)
 	if err != nil {
 		return "", fmt.Errorf("cannot parse push remote URL: %w", err)
 	}
 	return deriveCheckpointURLFromInfo(info, config)
 }
 
+// ExtractOwnerFromRemoteURL extracts the owner component from a git remote URL.
 func ExtractOwnerFromRemoteURL(rawURL string) string {
-	info, err := ParseURL(rawURL)
-	if err != nil {
-		return ""
-	}
-	return info.Owner
+	return gitremote.ExtractOwnerFromRemoteURL(rawURL)
 }
 
 func deriveCheckpointURLFromInfo(info *Info, config *settings.CheckpointRemoteConfig) (string, error) {
@@ -290,7 +250,7 @@ func deriveCheckpointURLFromInfo(info *Info, config *settings.CheckpointRemoteCo
 }
 
 func deriveTokenOriginURL(originURL string) (string, bool) {
-	info, err := ParseURL(originURL)
+	info, err := gitremote.ParseURL(originURL)
 	if err != nil {
 		return "", false
 	}
@@ -311,28 +271,9 @@ func providerHost(provider string) (string, bool) {
 	}
 }
 
-func splitOwnerRepo(path string) (string, string, error) {
-	path = strings.TrimSuffix(path, ".git")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("cannot parse owner/repo from path: %s", path)
-	}
-	return parts[0], parts[1], nil
-}
-
+// RedactURL removes credentials and query parameters from a URL for safe logging.
 func RedactURL(rawURL string) string {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		if idx := strings.Index(rawURL, "@"); idx >= 0 {
-			if colonIdx := strings.Index(rawURL[idx:], ":"); colonIdx >= 0 {
-				return rawURL[idx+1:idx+colonIdx] + ":***"
-			}
-		}
-		return "<unparseable>"
-	}
-	u.User = nil
-	u.RawQuery = ""
-	return u.Scheme + "://" + u.Host + u.Path
+	return gitremote.RedactURL(rawURL)
 }
 
 func logFallback(ctx context.Context, operation, fallbackURL, reason string, err error, attrs ...any) {

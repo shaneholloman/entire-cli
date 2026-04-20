@@ -18,69 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseGitRemoteURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		url      string
-		wantInfo *remote.Info
-		wantErr  bool
-	}{
-		{
-			name:     "SSH SCP format",
-			url:      "git@github.com:org/repo.git",
-			wantInfo: &remote.Info{Protocol: remote.ProtocolSSH, Host: "github.com", Owner: "org", Repo: "repo"},
-		},
-		{
-			name:     "SSH SCP without .git",
-			url:      "git@github.com:org/repo",
-			wantInfo: &remote.Info{Protocol: remote.ProtocolSSH, Host: "github.com", Owner: "org", Repo: "repo"},
-		},
-		{
-			name:     "HTTPS format",
-			url:      "https://github.com/org/repo.git",
-			wantInfo: &remote.Info{Protocol: remote.ProtocolHTTPS, Host: "github.com", Owner: "org", Repo: "repo"},
-		},
-		{
-			name:     "HTTPS without .git",
-			url:      "https://github.com/org/repo",
-			wantInfo: &remote.Info{Protocol: remote.ProtocolHTTPS, Host: "github.com", Owner: "org", Repo: "repo"},
-		},
-		{
-			name:     "SSH protocol format",
-			url:      "ssh://git@github.com/org/repo.git",
-			wantInfo: &remote.Info{Protocol: remote.ProtocolSSH, Host: "github.com", Owner: "org", Repo: "repo"},
-		},
-		{
-			name:    "empty string",
-			url:     "",
-			wantErr: true,
-		},
-		{
-			name:    "no path",
-			url:     "https://github.com",
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			info, err := remote.ParseURL(tt.url)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantInfo.Protocol, info.Protocol)
-			assert.Equal(t, tt.wantInfo.Host, info.Host)
-			assert.Equal(t, tt.wantInfo.Owner, info.Owner)
-			assert.Equal(t, tt.wantInfo.Repo, info.Repo)
-		})
-	}
-}
-
 func TestDeriveCheckpointURL(t *testing.T) {
 	t.Parallel()
 
@@ -134,60 +71,6 @@ func TestDeriveCheckpointURL(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestExtractOwnerFromRemoteURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		url  string
-		want string
-	}{
-		{"SSH", "git@github.com:org/repo.git", "org"},
-		{"HTTPS", "https://github.com/org/repo.git", "org"},
-		{"invalid", "not-a-url", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, remote.ExtractOwnerFromRemoteURL(tt.url))
-		})
-	}
-}
-
-func TestRedactURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		url  string
-		want string
-	}{
-		{
-			name: "HTTPS no creds",
-			url:  "https://github.com/org/repo.git",
-			want: "https://github.com/org/repo.git",
-		},
-		{
-			name: "HTTPS with token",
-			url:  "https://x-token:ghp_abc123@github.com/org/repo.git",
-			want: "https://github.com/org/repo.git",
-		},
-		{
-			name: "HTTPS with query token",
-			url:  "https://github.com/org/repo.git?token=secret",
-			want: "https://github.com/org/repo.git",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, remote.RedactURL(tt.url))
 		})
 	}
 }
