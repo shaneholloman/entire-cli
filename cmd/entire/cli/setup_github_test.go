@@ -1117,6 +1117,40 @@ func TestRunGitHubBootstrap_YesRepoExistsNoTTY_Fails(t *testing.T) {
 	}
 }
 
+func TestResolveRepoName_YesRepoExistsWithTTY_FallsBackToPrompt(t *testing.T) {
+	// When --yes is set, the name is taken, and a TTY is available,
+	// resolveRepoName should print a conflict message and fall through
+	// to the interactive prompt (which we can't complete in a test, but
+	// we can verify it reached the right path via the output).
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	dir := t.TempDir()
+	restoreCwd(t, dir)
+
+	r := newFakeRunner()
+	repoName := filepath.Base(dir)
+	// The suggested name exists.
+	r.set("gh", []string{"repo", "view", "myuser/" + repoName, "--json", "name"}, `{"name":"`+repoName+`"}`, nil)
+
+	var stdout bytes.Buffer
+	opts := GitHubBootstrapOptions{Yes: true}
+	// resolveRepoName will print the conflict message, then try to run
+	// the interactive form which will fail without a real TTY — that's fine,
+	// we just need to verify it printed the conflict message (reached the
+	// fallback path) rather than returning the taken name or a hard error.
+	_, err := resolveRepoName(context.Background(), &stdout, io.Discard, r, "myuser", dir, opts)
+
+	output := stdout.String()
+	if !strings.Contains(output, "already exists on GitHub") {
+		t.Errorf("expected conflict message in output, got: %s", output)
+	}
+	// The form.Run() will error since there's no real TTY — that's expected.
+	// The key assertion is that we got the conflict message, proving the
+	// fallback path was taken instead of returning the taken name.
+	if err == nil {
+		t.Error("expected error from form.Run() without a real TTY")
+	}
+}
+
 func TestRunGitHubBootstrap_YesWithNoGitHub(t *testing.T) {
 	// --yes combined with --no-github should skip GitHub but still init + commit.
 	t.Setenv("ENTIRE_TEST_TTY", "0")
