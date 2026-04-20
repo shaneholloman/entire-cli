@@ -76,7 +76,7 @@ func (execRunner) RunInDir(ctx context.Context, dir, name string, args ...string
 // commit & push). Kept simple text so it renders correctly in accessible
 // mode and non-TTY captures.
 func printBootstrapSection(w io.Writer, title string) {
-	fmt.Fprintf(w, "\n━ %s\n", title)
+	fmt.Fprintf(w, "\n── %s\n", title)
 }
 
 // errBootstrapDeclined signals that the user chose not to initialize a
