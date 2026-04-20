@@ -396,9 +396,32 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		)
 	}
 
-	// Always try treeless fetch first to ensure local branch is up-to-date
+	// When checkpoint_remote is configured, try it first — that's where
+	// checkpoint data lives. Avoids a wasted fetch from origin (which may
+	// not have the metadata branch at all).
+	if fetchErr := FetchMetadataFromCheckpointRemote(ctx); fetchErr == nil {
+		freshRepo, freshErr := openRepository(ctx)
+		if freshErr == nil {
+			logRefHash(freshRepo, "checkpoint-remote")
+			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			if treeErr == nil {
+				logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
+					slog.String("tree_hash", metadataTree.Hash.String()),
+				)
+				return metadataTree, freshRepo, nil
+			}
+			logging.Debug(logCtx, "checkpoint remote fetch succeeded but tree read failed",
+				slog.String("error", treeErr.Error()),
+			)
+		}
+	} else {
+		logging.Debug(logCtx, "checkpoint remote fetch skipped or failed",
+			slog.String("error", fetchErr.Error()),
+		)
+	}
+
+	// Try treeless fetch from origin
 	if fetchErr := FetchMetadataTreeOnly(ctx); fetchErr == nil {
-		// Open a fresh repo so the storer sees new packfiles from the fetch
 		freshRepo, repoErr := openRepository(ctx)
 		if repoErr == nil {
 			logRefHash(freshRepo, "treeless-fetch")
@@ -432,29 +455,6 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		}
 		logging.Debug(logCtx, "local metadata branch not available",
 			slog.String("error", err.Error()),
-		)
-	}
-
-	// Try checkpoint_remote if configured. Checkpoints may live in a separate repo,
-	// so this avoids a potentially unnecessary full origin fetch.
-	if fetchErr := FetchMetadataFromCheckpointRemote(ctx); fetchErr == nil {
-		freshRepo, freshErr := openRepository(ctx)
-		if freshErr == nil {
-			logRefHash(freshRepo, "checkpoint-remote")
-			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
-			if treeErr == nil {
-				logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
-					slog.String("tree_hash", metadataTree.Hash.String()),
-				)
-				return metadataTree, freshRepo, nil
-			}
-			logging.Debug(logCtx, "checkpoint remote fetch succeeded but tree read failed",
-				slog.String("error", treeErr.Error()),
-			)
-		}
-	} else {
-		logging.Debug(logCtx, "checkpoint remote fetch skipped or failed",
-			slog.String("error", fetchErr.Error()),
 		)
 	}
 
@@ -865,10 +865,10 @@ func displayRestoredSessions(w io.Writer, sessions []strategy.RestoredSession) e
 	})
 
 	if len(sessions) > 1 {
-		fmt.Fprintf(w, "\n✓ Restored %d sessions. To continue, run:\n", len(sessions))
+		fmt.Fprintf(w, "\n✓ Restored %d sessions. To continue:\n", len(sessions))
 	} else if len(sessions) == 1 {
 		fmt.Fprintf(w, "✓ Restored session %s.\n", sessions[0].SessionID)
-		fmt.Fprintf(w, "\nTo continue this session, run:\n")
+		fmt.Fprintf(w, "\nTo continue this session:\n")
 	}
 
 	isMulti := len(sessions) > 1
@@ -897,7 +897,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 			slog.String("checkpoint_id", checkpointID.String()),
 		)
 		fmt.Fprintf(w, "Session '%s' found in commit trailer but session log not available\n", sessionID)
-		fmt.Fprintf(w, "\nTo continue this session, run:\n")
+		fmt.Fprintf(w, "\nTo continue this session:\n")
 		fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 		return nil
 	}
@@ -928,7 +928,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 				slog.String("session_id", sessionID),
 			)
 			fmt.Fprintf(w, "Session '%s' found in commit trailer but session log not available\n", sessionID)
-			fmt.Fprintf(w, "\nTo continue this session, run:\n")
+			fmt.Fprintf(w, "\nTo continue this session:\n")
 			fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 			return nil
 		}
@@ -994,7 +994,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 
 	fmt.Fprintf(w, "✓ Session restored to: %s\n", sessionLogPath)
 	fmt.Fprintf(w, "  Session: %s\n", sessionID)
-	fmt.Fprintf(w, "\nTo continue this session, run:\n")
+	fmt.Fprintf(w, "\nTo continue this session:\n")
 	fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 
 	return nil

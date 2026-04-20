@@ -96,7 +96,8 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 		"telemetry": true,
 		"redaction": {"pii": {"enabled": true, "email": true, "phone": false}},
 		"external_agents": true,
-		"vercel": true
+		"vercel": true,
+		"sign_checkpoint_commits": false
 	}`
 	if err := os.WriteFile(settingsFile, []byte(settingsContent), 0644); err != nil {
 		t.Fatalf("failed to write settings file: %v", err)
@@ -152,6 +153,9 @@ func TestLoad_AcceptsValidKeys(t *testing.T) {
 	}
 	if !settings.Vercel {
 		t.Error("expected vercel to be true")
+	}
+	if settings.SignCheckpointCommits == nil || *settings.SignCheckpointCommits {
+		t.Error("expected sign_checkpoint_commits to be false")
 	}
 }
 
@@ -848,6 +852,63 @@ func TestIsPushV2RefsEnabled_RequiresBothFlags(t *testing.T) {
 			}
 			if got := s.IsPushV2RefsEnabled(); got != tt.expected {
 				t.Errorf("IsPushV2RefsEnabled() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetFullTranscriptGenerationRetentionDays(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{
+			name: "defaults to sixty when missing",
+			opts: nil,
+			want: 60,
+		},
+		{
+			name: "returns configured integer",
+			opts: map[string]any{"full_transcript_generation_retention_days": 30},
+			want: 30,
+		},
+		{
+			name: "returns configured float from json decode",
+			opts: map[string]any{"full_transcript_generation_retention_days": float64(21)},
+			want: 21,
+		},
+		{
+			name: "returns default for wrong type",
+			opts: map[string]any{"full_transcript_generation_retention_days": "30"},
+			want: 60,
+		},
+		{
+			name: "returns default for zero",
+			opts: map[string]any{"full_transcript_generation_retention_days": 0},
+			want: 60,
+		},
+		{
+			name: "returns default for negative",
+			opts: map[string]any{"full_transcript_generation_retention_days": -5},
+			want: 60,
+		},
+		{
+			name: "returns default for non integral float",
+			opts: map[string]any{"full_transcript_generation_retention_days": 1.5},
+			want: 60,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.GetFullTranscriptGenerationRetentionDays(); got != tt.want {
+				t.Fatalf("GetFullTranscriptGenerationRetentionDays() = %d, want %d", got, tt.want)
 			}
 		})
 	}

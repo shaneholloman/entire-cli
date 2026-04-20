@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -49,7 +50,8 @@ the session started, or to attach a research session.
 If the last commit already has a checkpoint, the session is added to it.
 Otherwise a new checkpoint is created.
 
-Supported agents: claude-code, gemini, opencode, codex, cursor, copilot-cli, factoryai-droid`,
+Works with any registered agent, including external agents enabled via
+external_agents in settings. Run 'entire configure' to see the full list.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return cmd.Help()
@@ -57,12 +59,15 @@ Supported agents: claude-code, gemini, opencode, codex, cursor, copilot-cli, fac
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
 				return nil
 			}
+			// Discover external agents so --agent <external-name> is recognized
+			// and so auto-detection can find transcripts from external agents.
+			external.DiscoverAndRegister(cmd.Context())
 			agentName := types.AgentName(agentFlag)
 			return runAttach(cmd.Context(), cmd.OutOrStdout(), args[0], agentName, force)
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation and amend the last commit with the checkpoint trailer")
-	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (claude-code, gemini, opencode, codex, cursor, copilot-cli, factoryai-droid)")
+	cmd.Flags().StringVarP(&agentFlag, "agent", "a", string(agent.DefaultAgentName), "Agent that created the session (see 'entire configure' for registered agents, including external)")
 	return cmd
 }
 

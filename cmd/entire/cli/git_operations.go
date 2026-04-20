@@ -539,10 +539,25 @@ func FetchMetadataFromCheckpointRemote(ctx context.Context) error {
 	return nil
 }
 
+// resolveCheckpointFetchTarget returns the fetch target for checkpoint data.
+// When a checkpoint_remote is configured in settings, returns its resolved URL.
+// Otherwise falls back to "origin".
+func resolveCheckpointFetchTarget(ctx context.Context) string {
+	url, has, err := strategy.ResolveCheckpointRemoteURL(ctx)
+	if has && err == nil && url != "" {
+		return url
+	}
+	return "origin"
+}
+
 // FetchBlobsByHash fetches specific blob objects from the remote by their SHA-1 hashes.
-// Uses "git fetch origin <hash>" which goes through normal credential helpers,
+// Uses "git fetch <target> <hash>" which goes through normal credential helpers,
 // unlike fetch-pack which bypasses them. Requires the server to support
 // uploadpack.allowReachableSHA1InWant (GitHub, GitLab, Bitbucket all do).
+//
+// The fetch target is resolved via resolveCheckpointFetchTarget: when a
+// checkpoint_remote is configured, blobs are fetched from there; otherwise
+// from origin.
 //
 // If fetching by hash fails, falls back to a full metadata branch fetch.
 func FetchBlobsByHash(ctx context.Context, hashes []plumbing.Hash) error {
@@ -553,23 +568,26 @@ func FetchBlobsByHash(ctx context.Context, hashes []plumbing.Hash) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	// Build fetch args: "git fetch --no-tags origin <hash1> <hash2> ..."
-	// This uses the normal transport + credential helpers, unlike fetch-pack.
-	args := []string{"fetch", "--no-tags", "--no-write-fetch-head", "origin"}
+	fetchTarget := resolveCheckpointFetchTarget(ctx)
+
+	args := []string{"fetch", "--no-tags", "--no-write-fetch-head", fetchTarget}
 	for _, h := range hashes {
 		args = append(args, h.String())
 	}
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", args...)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, fetchTarget, args...)
 	if _, fetchErr := fetchCmd.CombinedOutput(); fetchErr != nil {
 		logging.Debug(ctx, "fetch-by-hash failed, falling back to full metadata fetch",
 			slog.Int("blob_count", len(hashes)),
+			slog.String("fetch_target", fetchTarget),
 			slog.String("error", fetchErr.Error()),
 		)
-		// Fallback: full metadata branch fetch (pack negotiation skips already-local objects)
-		if fallbackErr := FetchMetadataBranch(ctx); fallbackErr != nil {
-			return fmt.Errorf("fetch-by-hash failed: %w; fallback fetch also failed: %w",
-				fetchErr, fallbackErr)
+		// Fallback: try checkpoint remote first (if configured), then origin
+		if cpErr := FetchMetadataFromCheckpointRemote(ctx); cpErr != nil {
+			if fallbackErr := FetchMetadataBranch(ctx); fallbackErr != nil {
+				return fmt.Errorf("fetch-by-hash failed: %w; fallback fetch also failed: %w",
+					fetchErr, fallbackErr)
+			}
 		}
 	}
 

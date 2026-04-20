@@ -534,7 +534,7 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 // The return type is the summarize.Generator interface rather than the concrete
 // adapter pointer so callers can't accidentally hold a non-nil interface that
 // wraps a nil pointer (the classic Go nil-interface footgun).
-func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // intentional: nil interface avoids nil-pointer-wrapped-in-interface bug
+func buildSummaryGenerator(ctx context.Context) summarize.Generator { //nolint:ireturn // interface return is intentional for provider abstraction and nil-safety
 	s, err := settings.Load(ctx)
 	if err != nil {
 		// Warn (not Debug): this is the auto-summarize hot path on every commit.
@@ -1217,7 +1217,8 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	state.CheckpointTranscriptSize = int64(len(result.Transcript))
 	state.Phase = session.PhaseIdle
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 
@@ -1334,7 +1335,8 @@ func (s *ManualCommitStrategy) CondenseAndMarkFullyCondensed(ctx context.Context
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
 	state.CompactTranscriptStart += result.CompactTranscriptLines
 	state.LastCheckpointID = checkpointID
-	state.AttributionBaseCommit = state.BaseCommit
+	state.LastCheckpointCommitHash = state.BaseCommit
+	state.RealignAttributionBase(state.BaseCommit)
 	state.PromptAttributions = nil
 	state.PendingPromptAttribution = nil
 	state.FullyCondensed = true // FilesTouched is already empty (checked above)
@@ -1535,7 +1537,7 @@ func writeTaskMetadataV2IfEnabled(
 		return
 	}
 
-	if err := spliceTaskTreeToV2FullCurrent(repo, v2Store, checkpointID, sessionIndex, tasksTree.Hash); err != nil {
+	if err := spliceTaskTreeToV2FullCurrent(ctx, repo, v2Store, checkpointID, sessionIndex, tasksTree.Hash); err != nil {
 		logging.Warn(ctx, "v2 dual-write task metadata copy failed",
 			slog.String("checkpoint_id", checkpointID.String()),
 			slog.String("session_id", sessionID),
@@ -1604,6 +1606,7 @@ func resolveV2SessionIndexForCheckpoint(repo *git.Repository, checkpointID id.Ch
 }
 
 func spliceTaskTreeToV2FullCurrent(
+	ctx context.Context,
 	repo *git.Repository,
 	v2Store *cpkg.V2GitStore,
 	checkpointID id.CheckpointID,
@@ -1634,7 +1637,7 @@ func spliceTaskTreeToV2FullCurrent(
 	}
 
 	authorName, authorEmail := cpkg.GetGitAuthorFromRepo(repo)
-	commitHash, err := cpkg.CreateCommit(repo, newRootHash, parentHash,
+	commitHash, err := cpkg.CreateCommit(ctx, repo, newRootHash, parentHash,
 		fmt.Sprintf("Checkpoint: %s (task metadata)\n", checkpointID),
 		authorName, authorEmail)
 	if err != nil {

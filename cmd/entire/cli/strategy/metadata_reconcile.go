@@ -571,7 +571,7 @@ func cherryPickOnto(ctx context.Context, repo *git.Repository, base plumbing.Has
 		}
 
 		// Create new commit on top of current tip, preserving original message/author
-		newHash, err := createCherryPickCommit(repo, mergedTreeHash, currentTip, commit)
+		newHash, err := createCherryPickCommit(ctx, repo, mergedTreeHash, currentTip, commit)
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to create cherry-pick commit: %w", err)
 		}
@@ -584,7 +584,7 @@ func cherryPickOnto(ctx context.Context, repo *git.Repository, base plumbing.Has
 
 // createCherryPickCommit creates a new commit on top of parent, preserving the
 // original commit's message and author.
-func createCherryPickCommit(repo *git.Repository, treeHash, parent plumbing.Hash, original *object.Commit) (plumbing.Hash, error) {
+func createCherryPickCommit(ctx context.Context, repo *git.Repository, treeHash, parent plumbing.Hash, original *object.Commit) (plumbing.Hash, error) {
 	committerName, committerEmail := GetGitAuthorFromRepo(repo)
 	now := time.Now()
 
@@ -599,6 +599,8 @@ func createCherryPickCommit(repo *git.Repository, treeHash, parent plumbing.Hash
 		},
 		Message: original.Message,
 	}
+
+	checkpoint.SignCommitBestEffort(ctx, commit)
 
 	obj := repo.Storer.NewEncodedObject()
 	if err := commit.Encode(obj); err != nil {

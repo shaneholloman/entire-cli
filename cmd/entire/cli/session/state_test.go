@@ -96,6 +96,63 @@ func TestState_NormalizeAfterLoad(t *testing.T) {
 		state.NormalizeAfterLoad(context.Background())
 		assert.Equal(t, 45, state.CompactTranscriptStart)
 	})
+
+	t.Run("heals_stale_divergence_flag_when_attribution_aligned", func(t *testing.T) {
+		t.Parallel()
+		// DivergenceNoticeShown is only meaningful while attribution is diverged.
+		// A state file carrying notice=true with base==attribution must self-heal on load —
+		// otherwise a legitimate future divergence would be suppressed by the stale flag.
+		state := &State{
+			BaseCommit:            "aaaaaaa",
+			AttributionBaseCommit: "aaaaaaa",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.False(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be cleared when AttributionBaseCommit == BaseCommit")
+	})
+
+	t.Run("heals_stale_divergence_flag_when_attribution_empty", func(t *testing.T) {
+		t.Parallel()
+		// Empty AttributionBaseCommit gets backfilled to BaseCommit below; once aligned,
+		// the flag is meaningless and must clear.
+		state := &State{
+			BaseCommit:            "bbbbbbb",
+			AttributionBaseCommit: "",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.False(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be cleared when AttributionBaseCommit is empty/backfilled")
+	})
+
+	t.Run("preserves_divergence_flag_when_actually_diverged", func(t *testing.T) {
+		t.Parallel()
+		state := &State{
+			BaseCommit:            "cccccc1",
+			AttributionBaseCommit: "cccccc0",
+			DivergenceNoticeShown: true,
+		}
+		state.NormalizeAfterLoad(context.Background())
+		assert.True(t, state.DivergenceNoticeShown,
+			"DivergenceNoticeShown must be preserved when attribution is genuinely diverged")
+	})
+}
+
+func TestState_RealignAttributionBase_ClearsDivergenceFlag(t *testing.T) {
+	t.Parallel()
+
+	state := &State{
+		BaseCommit:            "ccccccc",
+		AttributionBaseCommit: "aaaaaaa",
+		DivergenceNoticeShown: true,
+	}
+	state.RealignAttributionBase("ccccccc")
+
+	assert.Equal(t, "ccccccc", state.AttributionBaseCommit,
+		"AttributionBaseCommit must be updated to the new base")
+	assert.False(t, state.DivergenceNoticeShown,
+		"DivergenceNoticeShown must be cleared whenever attribution is realigned")
 }
 
 func TestState_NormalizeAfterLoad_JSONRoundTrip(t *testing.T) {
