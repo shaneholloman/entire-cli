@@ -865,10 +865,10 @@ func displayRestoredSessions(w io.Writer, sessions []strategy.RestoredSession) e
 	})
 
 	if len(sessions) > 1 {
-		fmt.Fprintf(w, "\n✓ Restored %d sessions. To continue, run:\n", len(sessions))
+		fmt.Fprintf(w, "\n✓ Restored %d sessions. To continue:\n", len(sessions))
 	} else if len(sessions) == 1 {
 		fmt.Fprintf(w, "✓ Restored session %s.\n", sessions[0].SessionID)
-		fmt.Fprintf(w, "\nTo continue this session, run:\n")
+		fmt.Fprintf(w, "\nTo continue this session:\n")
 	}
 
 	isMulti := len(sessions) > 1
@@ -897,7 +897,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 			slog.String("checkpoint_id", checkpointID.String()),
 		)
 		fmt.Fprintf(w, "Session '%s' found in commit trailer but session log not available\n", sessionID)
-		fmt.Fprintf(w, "\nTo continue this session, run:\n")
+		fmt.Fprintf(w, "\nTo continue this session:\n")
 		fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 		return nil
 	}
@@ -928,7 +928,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 				slog.String("session_id", sessionID),
 			)
 			fmt.Fprintf(w, "Session '%s' found in commit trailer but session log not available\n", sessionID)
-			fmt.Fprintf(w, "\nTo continue this session, run:\n")
+			fmt.Fprintf(w, "\nTo continue this session:\n")
 			fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 			return nil
 		}
@@ -994,7 +994,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 
 	fmt.Fprintf(w, "✓ Session restored to: %s\n", sessionLogPath)
 	fmt.Fprintf(w, "  Session: %s\n", sessionID)
-	fmt.Fprintf(w, "\nTo continue this session, run:\n")
+	fmt.Fprintf(w, "\nTo continue this session:\n")
 	fmt.Fprintf(w, "  %s\n", ag.FormatResumeCommand(sessionID))
 
 	return nil
