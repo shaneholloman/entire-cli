@@ -647,7 +647,7 @@ Use --remove to remove a specific agent non-interactively:
 	cmd.Flags().StringVar(&summarizeModel, flagSummarizeModel, "", "Set the model hint used by explain --generate")
 	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
-	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults: enable all agents, accept telemetry, skip prompts")
+	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults without prompting (in a non-repo directory: init git, create private GitHub repo, commit; then enable all agents and accept telemetry)")
 
 	// Provide a helpful error when --agent is used without a value
 	defaultFlagErr := cmd.FlagErrorFunc()
@@ -806,7 +806,7 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 	cmd.Flags().StringVar(&opts.CheckpointRemote, flagCheckpointRemote, "", "Checkpoint remote in provider:owner/repo format (e.g., github:org/checkpoints-repo)")
 	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
-	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults: enable all agents, accept telemetry, skip prompts")
+	cmd.Flags().BoolVarP(&opts.Yes, "yes", "y", false, "Accept all defaults without prompting (in a non-repo directory: init git, create private GitHub repo, commit; then enable all agents and accept telemetry)")
 
 	// Bootstrap flags for non-git-repo folders.
 	cmd.Flags().BoolVar(&bootstrapOpts.InitRepo, "init-repo", false, "If not a git repo, initialize one non-interactively")
