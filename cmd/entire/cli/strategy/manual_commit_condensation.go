@@ -1420,7 +1420,7 @@ func writeCommittedV2(ctx context.Context, repo *git.Repository, opts cpkg.Write
 		logging.Debug(ctx, "manual-commit condensation: using origin for v2 write fetch remote",
 			slog.String("error", err.Error()),
 		)
-		v2URL = "origin"
+		v2URL = originRemote
 	}
 	v2Store := cpkg.NewV2GitStore(repo, v2URL)
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
@@ -1492,7 +1492,7 @@ func writeTaskMetadataV2IfEnabled(
 		logging.Debug(ctx, "manual-commit condensation: using origin for v2 task metadata fetch remote",
 			slog.String("error", err.Error()),
 		)
-		v2URL = "origin"
+		v2URL = originRemote
 	}
 	v2Store := cpkg.NewV2GitStore(repo, v2URL)
 	sessionIndex, err := resolveV2SessionIndexForCheckpoint(repo, checkpointID, sessionID)

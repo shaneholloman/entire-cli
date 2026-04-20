@@ -2755,7 +2755,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			logging.Debug(logCtx, "finalize: using origin for v2 store fetch remote",
 				slog.String("error", err.Error()),
 			)
-			v2URL = "origin"
+			v2URL = originRemote
 		}
 		v2Store = checkpoint.NewV2GitStore(repo, v2URL)
 	}

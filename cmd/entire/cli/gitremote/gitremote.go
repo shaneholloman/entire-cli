@@ -77,14 +77,16 @@ func ParseURL(rawURL string) (*Info, error) {
 }
 
 // RedactURL removes credentials and query parameters from a URL for safe logging.
+// SCP-style SSH URLs (e.g., git@github.com:org/repo.git) are returned as-is
+// since they contain no embedded credentials.
 func RedactURL(rawURL string) string {
+	// SCP-style SSH: user@host:path — no credentials to redact.
+	if strings.Contains(rawURL, ":") && !strings.Contains(rawURL, "://") {
+		return rawURL
+	}
+
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		if idx := strings.Index(rawURL, "@"); idx >= 0 {
-			if colonIdx := strings.Index(rawURL[idx:], ":"); colonIdx >= 0 {
-				return rawURL[idx+1:idx+colonIdx] + ":***"
-			}
-		}
 		return "<unparseable>"
 	}
 	u.User = nil

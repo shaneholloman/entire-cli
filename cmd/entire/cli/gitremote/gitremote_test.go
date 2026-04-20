@@ -118,6 +118,11 @@ func TestRedactURL(t *testing.T) {
 			url:  "https://github.com/org/repo.git?token=secret",
 			want: "https://github.com/org/repo.git",
 		},
+		{
+			name: "SSH SCP-style returned as-is",
+			url:  "git@github.com:org/repo.git",
+			want: "git@github.com:org/repo.git",
+		},
 	}
 
 	for _, tt := range tests {

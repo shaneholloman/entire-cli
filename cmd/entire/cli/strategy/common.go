@@ -36,6 +36,8 @@ import (
 const (
 	branchMain   = "main"
 	branchMaster = "master"
+	// originRemote is the default git remote name used for fetch/push fallbacks.
+	originRemote = "origin"
 	// Strategy name constants
 	StrategyNameManualCommit = "manual-commit"
 )
