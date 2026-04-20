@@ -283,9 +283,9 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 
 	repo, repoErr := openRepository(ctx)
 	if repoErr != nil {
-		// Surface both errors so the user isn't misled by the stale
-		// "checkpoint not found" message when the real problem is repo access.
-		return errors.Join(checkpointErr, fmt.Errorf("failed to reopen repository for commit fallback: %w", repoErr))
+		// Composed message beats errors.Join here — the latter renders
+		// two lines (one per error) and users act on the first/stale one.
+		return fmt.Errorf("no checkpoint matched %q, and commit fallback failed: %w", target, repoErr)
 	}
 	hash, resolveErr := repo.ResolveRevision(plumbing.Revision(target))
 	if resolveErr != nil {

@@ -207,6 +207,7 @@ func TestFormatCheckpointSummaryError_Unknown(t *testing.T) {
 // The bare-positional happy path (auto-resolution to a checkpoint ID or commit
 // ref) is covered by the TestRunExplainAuto_* tests in this file.
 func TestExplainCmd_PositionalArgConflictsWithFlags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		args []string
@@ -219,6 +220,7 @@ func TestExplainCmd_PositionalArgConflictsWithFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cmd := newExplainCmd()
 			var stdout, stderr bytes.Buffer
 			cmd.SetOut(&stdout)
