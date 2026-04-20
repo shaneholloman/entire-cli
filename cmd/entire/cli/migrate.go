@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
-	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -441,19 +439,6 @@ func compactTranscriptForStartLine(ctx context.Context, transcript []byte, m che
 		return nil
 	}
 
-	if ag, err := agent.GetByAgentType(m.Agent); err == nil {
-		if compactor, ok := agent.AsTranscriptCompactor(ag); ok {
-			return compactTranscriptForMigrationExternalAgent(ctx, compactor, transcript, m)
-		}
-		if _, ok := ag.(agent.CapabilityDeclarer); ok {
-			logging.Warn(ctx, "compact transcript skipped during migration: external agent does not declare compact_transcript",
-				slog.String("checkpoint_id", string(m.CheckpointID)),
-				slog.String("agent", string(m.Agent)),
-			)
-			return nil
-		}
-	}
-
 	// transcript is read from persisted checkpoint storage and already redacted.
 	compacted, err := compact.Compact(redact.AlreadyRedacted(transcript), compact.MetadataFields{
 		Agent:      string(m.Agent),
@@ -477,69 +462,6 @@ func compactTranscriptForStartLine(ctx context.Context, transcript []byte, m che
 		return nil
 	}
 	return compacted
-}
-
-func compactTranscriptForMigrationExternalAgent(
-	ctx context.Context,
-	compactor agent.TranscriptCompactor,
-	transcript []byte,
-	m checkpoint.CommittedMetadata,
-) []byte {
-	tmpFile, err := os.CreateTemp("", "entire-migrate-transcript-*")
-	if err != nil {
-		logging.Warn(ctx, "compact transcript generation failed during migration",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", fmt.Sprintf("create temp transcript: %v", err)),
-		)
-		return nil
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.Write(transcript); err != nil {
-		_ = tmpFile.Close()
-		logging.Warn(ctx, "compact transcript generation failed during migration",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", fmt.Sprintf("write temp transcript: %v", err)),
-		)
-		return nil
-	}
-	if err := tmpFile.Close(); err != nil {
-		logging.Warn(ctx, "compact transcript generation failed during migration",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", fmt.Sprintf("close temp transcript: %v", err)),
-		)
-		return nil
-	}
-
-	compacted, err := compactor.CompactTranscript(ctx, tmpPath)
-	if err != nil {
-		logging.Warn(ctx, "compact transcript generation failed during migration",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", err.Error()),
-		)
-		return nil
-	}
-	if len(compacted.Assets) > 0 {
-		logging.Warn(ctx, "external transcript compaction returned assets that are not yet persisted",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(compactor.Name())),
-			slog.Int("asset_count", len(compacted.Assets)),
-		)
-	}
-	if len(compacted.Transcript) == 0 {
-		logging.Warn(ctx, "transcript.jsonl generation produced no output",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.Int("input_bytes", len(transcript)),
-		)
-		return nil
-	}
-	return compacted.Transcript
 }
 
 // computeCompactOffset determines the transcript.jsonl line offset for a checkpoint

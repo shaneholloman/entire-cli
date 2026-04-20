@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -24,53 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type fakeMigrateTranscriptCompactorAgent struct {
-	name        types.AgentName
-	agentType   types.AgentType
-	fullCompact []byte
-	compactErr  error
-	caps        agent.DeclaredCaps
-}
-
-func (f *fakeMigrateTranscriptCompactorAgent) Name() types.AgentName { return f.name }
-func (f *fakeMigrateTranscriptCompactorAgent) Type() types.AgentType { return f.agentType }
-func (f *fakeMigrateTranscriptCompactorAgent) Description() string {
-	return "fake migrate transcript compactor"
-}
-func (f *fakeMigrateTranscriptCompactorAgent) IsPreview() bool { return false }
-func (f *fakeMigrateTranscriptCompactorAgent) DetectPresence(context.Context) (bool, error) {
-	return true, nil
-}
-func (f *fakeMigrateTranscriptCompactorAgent) ProtectedDirs() []string               { return nil }
-func (f *fakeMigrateTranscriptCompactorAgent) ReadTranscript(string) ([]byte, error) { return nil, nil }
-func (f *fakeMigrateTranscriptCompactorAgent) ChunkTranscript(context.Context, []byte, int) ([][]byte, error) {
-	return nil, nil
-}
-func (f *fakeMigrateTranscriptCompactorAgent) ReassembleTranscript([][]byte) ([]byte, error) {
-	return nil, nil
-}
-func (f *fakeMigrateTranscriptCompactorAgent) GetSessionID(*agent.HookInput) string { return "" }
-func (f *fakeMigrateTranscriptCompactorAgent) GetSessionDir(string) (string, error) { return "", nil }
-func (f *fakeMigrateTranscriptCompactorAgent) ResolveSessionFile(_, sessionID string) string {
-	return sessionID
-}
-func (f *fakeMigrateTranscriptCompactorAgent) ReadSession(*agent.HookInput) (*agent.AgentSession, error) {
-	return nil, nil //nolint:nilnil // test stub
-}
-func (f *fakeMigrateTranscriptCompactorAgent) WriteSession(context.Context, *agent.AgentSession) error {
-	return nil
-}
-func (f *fakeMigrateTranscriptCompactorAgent) FormatResumeCommand(string) string { return "" }
-func (f *fakeMigrateTranscriptCompactorAgent) DeclaredCapabilities() agent.DeclaredCaps {
-	return f.caps
-}
-func (f *fakeMigrateTranscriptCompactorAgent) CompactTranscript(context.Context, string) (*agent.CompactedTranscript, error) {
-	if f.compactErr != nil {
-		return nil, f.compactErr
-	}
-	return &agent.CompactedTranscript{Transcript: f.fullCompact}, nil
-}
 
 // initMigrateTestRepo creates a repo with an initial commit.
 func initMigrateTestRepo(t *testing.T) *git.Repository {
@@ -457,95 +409,6 @@ func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, summary2)
 	assert.NotEmpty(t, summary2.Sessions[0].Transcript, "should have compact transcript after backfill")
-}
-
-func TestMigrateCheckpointsV2_UsesExternalTranscriptCompactor(t *testing.T) {
-	t.Parallel()
-	repo := initMigrateTestRepo(t)
-	v1Store, v2Store := newMigrateStores(repo)
-
-	agentName := types.AgentName("test-external-migrate-compactor")
-	agentType := types.AgentType("Test External Migrate Compactor")
-	fakeAgent := &fakeMigrateTranscriptCompactorAgent{
-		name:        agentName,
-		agentType:   agentType,
-		fullCompact: []byte("{\"v\":1,\"type\":\"assistant\",\"text\":\"external migrate\"}\n"),
-		caps:        agent.DeclaredCaps{CompactTranscript: true},
-	}
-	agent.Register(agentName, func() agent.Agent { return fakeAgent })
-
-	cpID := id.MustCheckpointID("bbccddeeff11")
-	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-external-migrate",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte("not-jsonl-but-external-agent-handles-it")),
-		Prompts:      []string{"hello"},
-		Agent:        agentType,
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	var stdout bytes.Buffer
-	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
-	require.NoError(t, migrateErr)
-	assert.Equal(t, 1, result.migrated)
-
-	storedCompact, err := v2Store.ReadSessionCompactTranscript(context.Background(), cpID, 0)
-	require.NoError(t, err)
-	assert.Equal(t, fakeAgent.fullCompact, storedCompact)
-}
-
-func TestMigrateCheckpointsV2_BackfillCompactTranscript_UsesExternalCompactor(t *testing.T) {
-	t.Parallel()
-	repo := initMigrateTestRepo(t)
-	v1Store, v2Store := newMigrateStores(repo)
-
-	agentName := types.AgentName("test-external-backfill-compactor")
-	agentType := types.AgentType("Test External Backfill Compactor")
-	fakeAgent := &fakeMigrateTranscriptCompactorAgent{
-		name:        agentName,
-		agentType:   agentType,
-		fullCompact: []byte("{\"v\":1,\"type\":\"assistant\",\"text\":\"external backfill\"}\n"),
-		caps:        agent.DeclaredCaps{CompactTranscript: true},
-	}
-	agent.Register(agentName, func() agent.Agent { return fakeAgent })
-
-	cpID := id.MustCheckpointID("ccddeeff1122")
-	err := v1Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-external-backfill",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte("not-jsonl-but-external-agent-handles-it")),
-		Prompts:      []string{"hello"},
-		Agent:        agentType,
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	err = v2Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-external-backfill",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte("not-jsonl-but-external-agent-handles-it")),
-		Prompts:      []string{"hello"},
-		Agent:        agentType,
-		AuthorName:   "Test",
-		AuthorEmail:  "test@test.com",
-	})
-	require.NoError(t, err)
-
-	var stdout bytes.Buffer
-	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
-	require.NoError(t, migrateErr)
-	assert.Equal(t, 1, result.migrated)
-	assert.Contains(t, stdout.String(), "added transcript.jsonl")
-
-	storedCompact, err := v2Store.ReadSessionCompactTranscript(context.Background(), cpID, 0)
-	require.NoError(t, err)
-	assert.Equal(t, fakeAgent.fullCompact, storedCompact)
 }
 
 func TestMigrateCheckpointsV2_UsesComputedCompactTranscriptStart(t *testing.T) {
