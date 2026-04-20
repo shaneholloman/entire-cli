@@ -97,7 +97,7 @@ func TestCalculateTokenUsage_CursorReturnsNil(t *testing.T) {
 	}
 }
 
-func TestBuildCompactTranscript_UsesAgentTranscriptCompactor(t *testing.T) {
+func TestBuildCompactTranscript_UsesAgentTranscriptCompactor(t *testing.T) { //nolint:paralleltest // uses t.Chdir
 	dir := t.TempDir()
 	t.Chdir(dir)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".entire"), 0o755))
@@ -122,7 +122,7 @@ func TestBuildCompactTranscript_UsesAgentTranscriptCompactor(t *testing.T) {
 	require.Equal(t, 0, writeOpts.CompactTranscriptStart)
 }
 
-func TestBuildCompactTranscript_UsesExistingCompactOffsetForAgentTranscriptCompactor(t *testing.T) {
+func TestBuildCompactTranscript_UsesExistingCompactOffsetForAgentTranscriptCompactor(t *testing.T) { //nolint:paralleltest // uses t.Chdir
 	dir := t.TempDir()
 	t.Chdir(dir)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".entire"), 0o755))

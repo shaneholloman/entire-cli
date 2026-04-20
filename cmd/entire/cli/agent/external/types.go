@@ -137,7 +137,13 @@ func (r *CompactTranscriptResponse) toCompactedTranscript() (*agent.CompactedTra
 	}
 
 	result.Assets = make([]agent.CompactedTranscriptAsset, 0, len(r.Assets))
-	for _, asset := range r.Assets {
+	for i, asset := range r.Assets {
+		if asset.Name == "" {
+			return nil, fmt.Errorf("compact-transcript: asset[%d] missing name", i)
+		}
+		if asset.MediaType == "" {
+			return nil, fmt.Errorf("compact-transcript: asset %q missing media_type", asset.Name)
+		}
 		data, decodeErr := base64.StdEncoding.DecodeString(asset.Data)
 		if decodeErr != nil {
 			return nil, fmt.Errorf("compact-transcript: decode asset %q base64: %w", asset.Name, decodeErr)
