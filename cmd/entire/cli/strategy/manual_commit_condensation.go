@@ -426,7 +426,18 @@ func buildCompactTranscript(ctx context.Context, ag agent.Agent, redacted redact
 		if compactor, ok := agent.AsTranscriptCompactor(ag); ok {
 			if compacted := compactTranscriptForExternalAgent(compactCtx, compactor, state.SessionID, state.TranscriptPath); compacted != nil {
 				writeOpts.CompactTranscript = compacted.Transcript
-				writeOpts.CompactTranscriptStart = state.CompactTranscriptStart
+				fullLines := countCompactLines(compacted.Transcript)
+				if fullLines < state.CompactTranscriptStart {
+					logging.Warn(compactCtx, "external compact transcript shorter than previous compact transcript start; resetting compact transcript start",
+						slog.String("session_id", state.SessionID),
+						slog.String("agent", string(compactor.Name())),
+						slog.Int("compact_transcript_lines", fullLines),
+						slog.Int("previous_compact_transcript_start", state.CompactTranscriptStart),
+					)
+					writeOpts.CompactTranscriptStart = 0
+				} else {
+					writeOpts.CompactTranscriptStart = state.CompactTranscriptStart
+				}
 			}
 			return time.Since(compactStart)
 		} else if _, ok := ag.(agent.CapabilityDeclarer); ok {

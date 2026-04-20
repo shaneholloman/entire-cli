@@ -153,6 +153,32 @@ func TestBuildCompactTranscript_UsesExistingCompactOffsetForAgentTranscriptCompa
 	require.Equal(t, 1, writeOpts.CompactTranscriptStart)
 }
 
+func TestBuildCompactTranscript_ExternalCompactorShorterThanOffset_ResetsStart(t *testing.T) { //nolint:paralleltest // uses t.Chdir
+	dir := t.TempDir()
+	t.Chdir(dir)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".entire", "settings.json"), []byte(testCheckpointsV2SettingsJSON), 0o644))
+
+	ag := &fakeTranscriptCompactorAgent{
+		name:        types.AgentName("test-external-short"),
+		agentType:   types.AgentType("Test External Short"),
+		fullCompact: []byte("{\"v\":1,\"type\":\"assistant\"}\n"),
+		caps:        agent.DeclaredCaps{CompactTranscript: true},
+	}
+
+	state := &SessionState{
+		SessionID:              "sess-1",
+		AgentType:              ag.agentType,
+		TranscriptPath:         "/tmp/session.jsonl",
+		CompactTranscriptStart: 2,
+	}
+	writeOpts := &cpkg.WriteCommittedOptions{}
+
+	buildCompactTranscript(context.Background(), ag, redact.AlreadyRedacted([]byte("not-jsonl")), state, writeOpts)
+	require.Equal(t, ag.fullCompact, writeOpts.CompactTranscript)
+	require.Equal(t, 0, writeOpts.CompactTranscriptStart)
+}
+
 func TestBuildCompactTranscript_ExternalCompactorNilResultDoesNotPanic(t *testing.T) { //nolint:paralleltest // uses t.Chdir
 	dir := t.TempDir()
 	t.Chdir(dir)
