@@ -204,7 +204,7 @@ func TestCompactTranscriptForExternalAgent_AppendsTrailingNewline(t *testing.T) 
 
 	compacted := compactTranscriptForExternalAgent(context.Background(), ag, "sess-1", "/tmp/session.jsonl")
 	require.NotNil(t, compacted)
-	require.Equal(t, []byte("{\"v\":1,\"type\":\"assistant\"}\n"), compacted.Transcript)
+	require.JSONEq(t, "{\"v\":1,\"type\":\"assistant\"}\n", string(compacted.Transcript))
 }
 
 func TestCalculateTokenUsage_EmptyData(t *testing.T) {
