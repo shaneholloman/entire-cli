@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -215,7 +217,13 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 // writeAttachCheckpointV2 writes attach-created checkpoints into the v2 refs.
 func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
-	v2Store := cpkg.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "attach: using origin for v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+	}
+	v2Store := cpkg.NewV2GitStore(repo, v2URL)
 	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
 		return fmt.Errorf("v2 write committed: %w", err)
 	}

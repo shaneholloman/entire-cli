@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -219,6 +220,8 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // When force is true, regenerates even if a summary already exists.
 // When rawTranscript is true, outputs only the raw transcript file (JSONL format).
 // When searchAll is true, searches all commits without branch/depth limits (used for finding associated commits).
+//
+//nolint:maintidx // Command handler intentionally coordinates multiple checkpoint lookup/fetch paths.
 func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPrefix string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
 	repo, err := openRepository(ctx)
 	if err != nil {
@@ -226,7 +229,14 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "explain: using origin for v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = ""
+	}
+	v2Store := checkpoint.NewV2GitStore(repo, v2URL)
 	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
 
 	// First, try to find in committed checkpoints by checkpoint ID prefix
@@ -264,7 +274,14 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			if freshRepo, repoErr := openRepository(ctx); repoErr == nil {
 				repo = freshRepo
 				v1Store = checkpoint.NewGitStore(repo)
-				v2Store = checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+				v2URL, err = remote.FetchURL(ctx)
+				if err != nil {
+					logging.Debug(ctx, "explain: using origin for refreshed v2 store fetch remote",
+						slog.String("error", err.Error()),
+					)
+					v2URL = ""
+				}
+				v2Store = checkpoint.NewV2GitStore(repo, v2URL)
 				if freshCommitted, listErr := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2); listErr == nil {
 					for _, info := range freshCommitted {
 						if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
@@ -1269,7 +1286,14 @@ func getBranchCheckpoints(ctx context.Context, repo *git.Repository, limit int) 
 	strategy.WarnIfMetadataDisconnected()
 
 	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "explain: using origin for branch checkpoint v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = ""
+	}
+	v2Store := checkpoint.NewV2GitStore(repo, v2URL)
 	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
 
 	// Get all committed checkpoints for lookup (v2-aware with v1 fallback).

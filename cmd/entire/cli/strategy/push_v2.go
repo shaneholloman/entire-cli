@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -411,7 +412,13 @@ func pushV2Refs(ctx context.Context, target string) {
 	if err != nil {
 		return
 	}
-	store := checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(ctx, "origin"))
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "push-v2: using origin for archived generation fetch remote",
+			slog.String("error", err.Error()),
+		)
+	}
+	store := checkpoint.NewV2GitStore(repo, v2URL)
 	archived, err := store.ListArchivedGenerations()
 	if err != nil || len(archived) == 0 {
 		return

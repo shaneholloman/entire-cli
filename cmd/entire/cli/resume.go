@@ -14,6 +14,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -717,37 +718,37 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 	}
 
 	// Resolve checkpoint remote URL once; reuse for both fetch and error message.
-	checkpointURL, hasCheckpointRemote, resolveErr := strategy.ResolveCheckpointRemoteURL(ctx)
-	if resolveErr != nil {
-		logging.Warn(logCtx, "checkpoint_remote configured but could not resolve URL",
-			slog.String("error", resolveErr.Error()),
-		)
-	}
+	hasCheckpointRemote := remote.Configured(ctx)
 
 	// Try checkpoint_remote first if configured and resolved (that's where checkpoints are stored)
-	if hasCheckpointRemote && resolveErr == nil {
-		if fetchErr := strategy.FetchMetadataBranch(ctx, checkpointURL); fetchErr == nil {
-			freshRepo, freshErr := openRepository(ctx)
-			if freshErr != nil {
-				logging.Debug(logCtx, "checkpoint remote: open repository failed after fetch",
-					slog.String("error", freshErr.Error()),
-				)
-			} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo); treeErr != nil {
-				logging.Debug(logCtx, "checkpoint remote: fetch succeeded but tree read failed",
-					slog.String("error", treeErr.Error()),
-				)
-			} else if metadata, err := tryReadCheckpointFromTree(ctx, metadataTree, freshRepo, checkpointID); err != nil {
-				logging.Debug(logCtx, "checkpoint remote: tree read succeeded but checkpoint metadata read failed",
-					slog.String("checkpoint_id", checkpointID.String()),
-					slog.String("error", err.Error()),
-				)
+	var checkpointURL string
+	var resolveErr error
+	if hasCheckpointRemote {
+		checkpointURL, resolveErr = remote.FetchURL(ctx)
+		if resolveErr == nil {
+			if fetchErr := strategy.FetchMetadataBranch(ctx, checkpointURL); fetchErr == nil {
+				freshRepo, freshErr := openRepository(ctx)
+				if freshErr != nil {
+					logging.Debug(logCtx, "checkpoint remote: open repository failed after fetch",
+						slog.String("error", freshErr.Error()),
+					)
+				} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo); treeErr != nil {
+					logging.Debug(logCtx, "checkpoint remote: fetch succeeded but tree read failed",
+						slog.String("error", treeErr.Error()),
+					)
+				} else if metadata, err := tryReadCheckpointFromTree(ctx, metadataTree, freshRepo, checkpointID); err != nil {
+					logging.Debug(logCtx, "checkpoint remote: tree read succeeded but checkpoint metadata read failed",
+						slog.String("checkpoint_id", checkpointID.String()),
+						slog.String("error", err.Error()),
+					)
+				} else {
+					return resumeSession(ctx, w, errW, metadata, false)
+				}
 			} else {
-				return resumeSession(ctx, w, errW, metadata, false)
+				logging.Debug(logCtx, "checkpoint remote fetch failed",
+					slog.String("error", fetchErr.Error()),
+				)
 			}
-		} else {
-			logging.Debug(logCtx, "checkpoint remote fetch failed",
-				slog.String("error", fetchErr.Error()),
-			)
 		}
 	}
 
@@ -907,7 +908,14 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 	if settings.IsCheckpointsV2Enabled(ctx) {
 		repo, repoErr := openRepository(ctx)
 		if repoErr == nil {
-			v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+			v2URL, fetchRemoteErr := remote.FetchURL(ctx)
+			if fetchRemoteErr != nil {
+				logging.Debug(ctx, "resume: using origin for v2 session log fetch remote",
+					slog.String("error", fetchRemoteErr.Error()),
+				)
+				v2URL = ""
+			}
+			v2Store := checkpoint.NewV2GitStore(repo, v2URL)
 			var v2Err error
 			logContent, _, v2Err = v2Store.GetSessionLog(ctx, checkpointID)
 			if v2Err != nil {

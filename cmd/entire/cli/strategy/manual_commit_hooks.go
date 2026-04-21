@@ -20,6 +20,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/gitops"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -2749,7 +2750,14 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	// Evaluate v2 flag once before the loop to avoid re-reading settings per checkpoint
 	var v2Store *checkpoint.V2GitStore
 	if settings.IsCheckpointsV2Enabled(logCtx) {
-		v2Store = checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(logCtx, "origin"))
+		v2URL, err := remote.FetchURL(logCtx)
+		if err != nil {
+			logging.Debug(logCtx, "finalize: using origin for v2 store fetch remote",
+				slog.String("error", err.Error()),
+			)
+			v2URL = originRemote
+		}
+		v2Store = checkpoint.NewV2GitStore(repo, v2URL)
 	}
 
 	precomputed := precomputeTranscriptBlobsForFinalize(logCtx, repo, redactedTranscript, state)
