@@ -6,7 +6,7 @@ import (
 	format "github.com/go-git/go-git/v6/plumbing/format/config"
 )
 
-func TestHasSSHSignProgram(t *testing.T) {
+func TestHasCustomSSHSignProgram(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -25,13 +25,22 @@ func TestHasSSHSignProgram(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "gpg.ssh.program set",
+			name: "custom program set",
 			raw: func() *format.Config {
 				c := format.New()
 				c.Section("gpg").Subsection("ssh").SetOption("program", "/Applications/1Password.app/Contents/MacOS/op-ssh-sign")
 				return c
 			}(),
 			want: true,
+		},
+		{
+			name: "default ssh-keygen is not custom",
+			raw: func() *format.Config {
+				c := format.New()
+				c.Section("gpg").Subsection("ssh").SetOption("program", "ssh-keygen")
+				return c
+			}(),
+			want: false,
 		},
 		{
 			name: "gpg section exists but no ssh.program",
@@ -48,9 +57,9 @@ func TestHasSSHSignProgram(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := hasSSHSignProgram(tt.raw)
+			got := hasCustomSSHSignProgram(tt.raw)
 			if got != tt.want {
-				t.Errorf("hasSSHSignProgram() = %v, want %v", got, tt.want)
+				t.Errorf("hasCustomSSHSignProgram() = %v, want %v", got, tt.want)
 			}
 		})
 	}

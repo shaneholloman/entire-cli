@@ -37,12 +37,14 @@ func RegisterObjectSigner() {
 				return nil
 			}
 
-			// When gpg.ssh.program is configured (e.g. 1Password's op-ssh-sign),
-			// signing happens via an external binary that go-git cannot invoke.
-			// Skip native signing silently — checkpoint commits will be unsigned,
-			// which is acceptable since signing is best-effort.
-			if auto.Format(merged.GPG.Format) == auto.FormatSSH && hasSSHSignProgram(merged.Raw) {
-				logging.Debug(context.Background(), "skipping native SSH commit signing: gpg.ssh.program is configured")
+			// When a custom gpg.ssh.program is configured (e.g. 1Password's
+			// op-ssh-sign), signing happens via an external binary that go-git
+			// cannot invoke. Skip native signing silently — checkpoint commits
+			// will be unsigned, which is acceptable since signing is best-effort.
+			// The default program is "ssh-keygen", which works with go-git's
+			// native SSH agent signing and does not need to be skipped.
+			if auto.Format(merged.GPG.Format) == auto.FormatSSH && hasCustomSSHSignProgram(merged.Raw) {
+				logging.Debug(context.Background(), "skipping native SSH commit signing: custom gpg.ssh.program is configured")
 				return nil
 			}
 
@@ -85,14 +87,20 @@ var scopeName = map[config.Scope]string{
 	config.SystemScope: "system",
 }
 
-// hasSSHSignProgram checks whether gpg.ssh.program is set in the raw config.
+// hasCustomSSHSignProgram checks whether gpg.ssh.program is set to a
+// non-default value in the raw config. The git default is "ssh-keygen",
+// which works with go-git's native SSH agent signing. Custom programs
+// (e.g. 1Password's op-ssh-sign) use a separate signing mechanism that
+// go-git cannot invoke.
 // go-git's Config struct does not expose this field, so we read it directly.
-func hasSSHSignProgram(raw *format.Config) bool {
+func hasCustomSSHSignProgram(raw *format.Config) bool {
 	if raw == nil {
 		return false
 	}
 
-	return raw.Section("gpg").Subsection("ssh").Option("program") != ""
+	program := raw.Section("gpg").Subsection("ssh").Option("program")
+
+	return program != "" && program != "ssh-keygen"
 }
 
 func loadScopedConfig(source plugin.ConfigSource, scope config.Scope) *config.Config {
