@@ -2777,7 +2777,12 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 		// Generate compact transcript for v2 /main
 		if v2Store != nil && redactedTranscript.Len() > 0 {
-			updateOpts.CompactTranscript = buildFinalizeCompactTranscript(logCtx, state, redactedTranscript)
+			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil; compactTranscriptForV2 handles nil
+			if extCompact := finalizeExternalCompactTranscript(logCtx, finalAg, state); extCompact != nil {
+				updateOpts.CompactTranscript = extCompact
+			} else {
+				updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, 0)
+			}
 		}
 
 		if !v2Only {
@@ -2823,39 +2828,37 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 	return errCount
 }
 
-// buildFinalizeCompactTranscript generates the compact transcript for a single checkpoint
-// during turn-end finalization. Finalization always writes the full cumulative
-// transcript.jsonl for the turn, so compaction starts at line 0.
-func buildFinalizeCompactTranscript(
-	ctx context.Context,
-	state *SessionState,
-	redactedTranscript redact.RedactedBytes,
-) []byte {
-	finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
-
-	if compactor, ok := agent.AsTranscriptCompactor(finalAg); ok {
-		if compacted := compactTranscriptForExternalAgent(ctx, compactor, state.SessionID, state.TranscriptPath); compacted != nil {
-			redacted, err := redactSessionJSONLBytes(compacted.Transcript)
-			if err != nil {
-				logging.Warn(ctx, "failed to redact external compact transcript in finalization, dropping",
-					slog.String("session_id", state.SessionID),
-					slog.String("agent", string(compactor.Name())),
-					slog.String("error", err.Error()),
-				)
-				return nil
-			}
-			return redacted.Bytes()
+// finalizeExternalCompactTranscript produces the redacted compact transcript
+// for external agents during turn-end finalization. Returns nil if the agent
+// is not external (caller should fall through to compactTranscriptForV2).
+func finalizeExternalCompactTranscript(ctx context.Context, ag agent.Agent, state *SessionState) []byte {
+	compactor, ok := agent.AsTranscriptCompactor(ag)
+	if !ok {
+		if _, isCap := ag.(agent.CapabilityDeclarer); isCap {
+			logging.Warn(ctx, "external transcript compaction unavailable, skipping transcript.jsonl finalization",
+				slog.String("session_id", state.SessionID),
+				slog.String("agent", string(ag.Name())),
+			)
+			return []byte{}
 		}
 		return nil
 	}
-	if _, ok := finalAg.(agent.CapabilityDeclarer); ok {
-		logging.Warn(ctx, "external transcript compaction unavailable, skipping transcript.jsonl finalization",
-			slog.String("session_id", state.SessionID),
-			slog.String("agent", string(finalAg.Name())),
-		)
-		return nil
+
+	compacted := compactTranscriptForExternalAgent(ctx, compactor, state.SessionID, state.TranscriptPath)
+	if compacted == nil {
+		return []byte{}
 	}
-	return compactTranscriptForV2(ctx, finalAg, redactedTranscript, 0)
+
+	redacted, err := redactSessionJSONLBytes(compacted.Transcript)
+	if err != nil {
+		logging.Warn(ctx, "failed to redact external compact transcript in finalization, dropping",
+			slog.String("session_id", state.SessionID),
+			slog.String("agent", string(compactor.Name())),
+			slog.String("error", err.Error()),
+		)
+		return []byte{}
+	}
+	return redacted.Bytes()
 }
 
 // filesChangedInCommit returns the set of files changed in a commit using git diff-tree.
