@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/entireio/cli/cmd/entire/cli/logging"
@@ -48,7 +47,7 @@ func RegisterObjectSigner() {
 			}
 
 			cfg := auto.Config{
-				SigningKey: normalizeSigningKey(merged.User.SigningKey, auto.Format(merged.GPG.Format)),
+				SigningKey: merged.User.SigningKey,
 				Format:     auto.Format(merged.GPG.Format),
 				SSHAgent:   connectSSHAgent(),
 			}
@@ -94,28 +93,6 @@ func hasSSHSignProgram(raw *format.Config) bool {
 	}
 
 	return raw.Section("gpg").Subsection("ssh").Option("program") != ""
-}
-
-// sshKeyTypePrefixes are the key type identifiers that can appear at the start
-// of an OpenSSH authorized_keys entry. File paths never start with these.
-var sshKeyTypePrefixes = []string{"ssh-", "ecdsa-sha2-", "sk-ssh-", "sk-ecdsa-sha2-"}
-
-// normalizeSigningKey prepends "key::" to bare SSH public key literals so that
-// the auto signer library routes them through the SSH agent matching path.
-// Tools like 1Password set user.signingKey to a bare public key string
-// (e.g. "ssh-ed25519 AAAA...") rather than a file path or key:: literal.
-func normalizeSigningKey(key string, format auto.Format) string {
-	if format != auto.FormatSSH || strings.HasPrefix(key, "key::") {
-		return key
-	}
-
-	for _, prefix := range sshKeyTypePrefixes {
-		if strings.HasPrefix(key, prefix) {
-			return "key::" + key
-		}
-	}
-
-	return key
 }
 
 func loadScopedConfig(source plugin.ConfigSource, scope config.Scope) *config.Config {
