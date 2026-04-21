@@ -2835,7 +2835,16 @@ func buildFinalizeCompactTranscript(
 
 	if compactor, ok := agent.AsTranscriptCompactor(finalAg); ok {
 		if compacted := compactTranscriptForExternalAgent(ctx, compactor, state.SessionID, state.TranscriptPath); compacted != nil {
-			return compacted.Transcript
+			redacted, err := redactSessionJSONLBytes(compacted.Transcript)
+			if err != nil {
+				logging.Warn(ctx, "failed to redact external compact transcript in finalization, dropping",
+					slog.String("session_id", state.SessionID),
+					slog.String("agent", string(compactor.Name())),
+					slog.String("error", err.Error()),
+				)
+				return nil
+			}
+			return redacted.Bytes()
 		}
 		return nil
 	}
