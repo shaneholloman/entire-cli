@@ -365,7 +365,7 @@ Those bytes must satisfy the checkpoints v2 format requirements:
 {"v":1,"agent":"opencode","cli_version":"0.42.0","type":"user","ts":"2026-01-13T12:00:00Z","content":[{"text":"Fix the login bug"}]}
 ```
 
-`assistant` entries use `content` as either a string or an array of assistant blocks. The structured array form supports at least:
+`assistant` entries use `content` as either a string or an array of assistant blocks. They may optionally include `input_tokens` and `output_tokens` fields for token usage tracking. The structured array form supports at least:
 
 - `{"type":"text","text":"..."}`
 - `{"type":"tool_use","id":"...","name":"...","input":{...}}`
@@ -378,8 +378,10 @@ Examples:
 
 ```json
 {"v":1,"agent":"opencode","cli_version":"0.42.0","type":"user","ts":"2026-01-13T12:00:00Z","content":[{"text":"Fix the login bug"}]}
-{"v":1,"agent":"opencode","cli_version":"0.42.0","type":"assistant","ts":"2026-01-13T12:00:02Z","id":"msg_123","content":[{"type":"text","text":"I updated the file."},{"type":"tool_use","id":"toolu_123","name":"Read","input":{"file_path":"src/main.go"},"result":{"output":"package main","status":"success","file":{"filePath":"src/main.go","numLines":1}}}]}
+{"v":1,"agent":"opencode","cli_version":"0.42.0","type":"assistant","ts":"2026-01-13T12:00:02Z","id":"msg_123","input_tokens":150,"output_tokens":42,"content":[{"type":"text","text":"I updated the file."},{"type":"tool_use","id":"toolu_123","name":"Read","input":{"file_path":"src/main.go"},"result":{"output":"package main","status":"success","file":{"filePath":"src/main.go","numLines":1}}}]}
 ```
+
+For complete examples of the expected output format, see the [compact transcript test fixtures](../../cmd/entire/cli/transcript/compact/testdata/).
 
 The compact transcript should exclude agent-native envelope/progress/system noise and retain only the normalized content needed by Entire's checkpoint readers.
 
