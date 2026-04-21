@@ -53,6 +53,14 @@ var generateTranscriptSummary = summarize.GenerateFromTranscript
 // to resolving the target as a git commit ref.
 var errCannotGenerateTemporaryCheckpoint = errors.New("cannot generate summary for temporary checkpoint")
 
+type explainCheckpointLookup struct {
+	repo                *git.Repository
+	v1Store             *checkpoint.GitStore
+	v2Store             *checkpoint.V2GitStore
+	preferCheckpointsV2 bool
+	committed           []checkpoint.CommittedInfo
+}
+
 // generateOrRawLabel returns the user-facing verb for the action the user
 // requested, used in error messages when a commit target has no trailer.
 func generateOrRawLabel(generate bool) string {
@@ -91,6 +99,7 @@ func commitHashesWithPrefix(repo *git.Repository, prefix string) []plumbing.Hash
 	if !ok {
 		return nil
 	}
+	// Truncate to even length for byte-aligned hex decoding.
 	evenHex := prefix[:len(prefix)&^1]
 	decoded, err := hex.DecodeString(evenHex)
 	if err != nil || len(decoded) == 0 {
@@ -135,7 +144,7 @@ func resolveCommitUnambiguous(repo *git.Repository, ref string) (plumbing.Hash, 
 	for i := 0; i < len(matches) && i < 5; i++ {
 		examples = append(examples, abbreviateCommitHash(repo, matches[i]))
 	}
-	return plumbing.ZeroHash, fmt.Errorf("%w %q matches %d commits: %s\nUse a longer prefix or a full SHA", errAmbiguousCommitPrefix, ref, len(matches), strings.Join(examples, ", "))
+	return plumbing.ZeroHash, fmt.Errorf("%w: %q matches %d commits: %s\nUse a longer prefix or a full SHA", errAmbiguousCommitPrefix, ref, len(matches), strings.Join(examples, ", "))
 }
 
 // abbreviateCommitHash returns the shortest prefix of hash unique among
@@ -349,12 +358,13 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // an ambiguity pre-check to avoid writing a summary to the wrong
 // checkpoint on short-prefix collisions.
 func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
+	lookup, lookupErr := newExplainCheckpointLookup(ctx, nil)
 	if generate {
-		if err := runExplainAutoAmbiguityGuard(ctx, target); err != nil {
+		if err := runExplainAutoAmbiguityGuard(ctx, target, lookup, lookupErr); err != nil {
 			return err
 		}
 	}
-	checkpointErr := runExplainCheckpoint(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll)
+	checkpointErr := runExplainCheckpointWithLookup(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll, lookup, lookupErr)
 	if checkpointErr == nil {
 		return nil
 	}
@@ -370,13 +380,12 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 		slog.String("target", target),
 		slog.String("checkpoint_error", checkpointErr.Error()))
 
-	repo, repoErr := openRepository(ctx)
-	if repoErr != nil {
+	if lookupErr != nil {
 		// Composed message beats errors.Join here — the latter renders
 		// two lines (one per error) and users act on the first/stale one.
-		return fmt.Errorf("no checkpoint matched %q, and commit fallback failed: %w", target, repoErr)
+		return fmt.Errorf("no checkpoint matched %q, and commit fallback failed: %w", target, lookupErr)
 	}
-	hash, resolveErr := resolveCommitUnambiguous(repo, target)
+	hash, resolveErr := resolveCommitUnambiguous(lookup.repo, target)
 	if resolveErr != nil {
 		if errors.Is(resolveErr, errAmbiguousCommitPrefix) {
 			return resolveErr
@@ -386,25 +395,25 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 			slog.String("error", resolveErr.Error()))
 		return fmt.Errorf("no checkpoint or commit found matching %q", target)
 	}
-	commit, commitErr := repo.CommitObject(hash)
+	commit, commitErr := lookup.repo.CommitObject(hash)
 	if commitErr != nil {
-		return fmt.Errorf("failed to get commit %s: %w", abbreviateCommitHash(repo, hash), commitErr)
+		return fmt.Errorf("failed to get commit %s: %w", abbreviateCommitHash(lookup.repo, hash), commitErr)
 	}
 	cpID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
 	if !hasCheckpoint {
 		// Side-effect modes must error — silently succeeding would leave
 		// scripts unable to distinguish "done" from "didn't happen".
 		if generate || rawTranscript {
-			return fmt.Errorf("cannot %s: commit %s has no Entire-Checkpoint trailer", generateOrRawLabel(generate), abbreviateCommitHash(repo, hash))
+			return fmt.Errorf("cannot %s: commit %s has no Entire-Checkpoint trailer", generateOrRawLabel(generate), abbreviateCommitHash(lookup.repo, hash))
 		}
-		printNoTrailerMessage(w, repo, hash)
+		printNoTrailerMessage(w, lookup.repo, hash)
 		return nil
 	}
 	logging.Debug(ctx, "explain auto: resolved commit to checkpoint via trailer",
 		slog.String("target", target),
-		slog.String("commit", abbreviateCommitHash(repo, hash)),
+		slog.String("commit", abbreviateCommitHash(lookup.repo, hash)),
 		slog.String("checkpoint_id", cpID.String()))
-	return runExplainCheckpoint(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll)
+	return runExplainCheckpointWithLookup(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll, lookup, nil)
 }
 
 // runExplainAutoAmbiguityGuard refuses --generate when the positional
@@ -414,28 +423,36 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 //
 // Best-effort: on repo/list failures we return nil so the main flow
 // surfaces the real error instead of double-reporting.
-func runExplainAutoAmbiguityGuard(ctx context.Context, target string) error {
+func runExplainAutoAmbiguityGuard(ctx context.Context, target string, lookup *explainCheckpointLookup, lookupErr error) error {
 	// Targets longer than a checkpoint ID can't prefix-match one.
+	// This is coupled to checkpoint IDs being fixed-width; longer targets
+	// cannot be prefixes of committed checkpoint IDs.
 	if len(target) > id.ShortIDLength {
 		return nil
 	}
-	repo, err := openRepository(ctx)
-	if err != nil {
-		return nil //nolint:nilerr // best-effort guard
+	if lookupErr != nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: failed to prepare checkpoint lookup",
+			"target", target,
+			"error", lookupErr)
+		return nil
 	}
-	hash, err := repo.ResolveRevision(plumbing.Revision(target))
+	hash, err := lookup.repo.ResolveRevision(plumbing.Revision(target))
 	if err != nil {
 		return nil //nolint:nilerr // target isn't a git ref
 	}
-	v1Store := checkpoint.NewGitStore(repo)
-	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
-	committed, err := listCommittedForExplain(ctx, v1Store, v2Store, settings.IsCheckpointsV2Enabled(ctx))
-	if err != nil {
-		return nil //nolint:nilerr // best-effort guard
+	if lookup == nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: checkpoint lookup unavailable",
+			"target", target)
+		return nil
 	}
-	for _, info := range committed {
+	if lookup.committed == nil {
+		logging.Warn(ctx, "explain ambiguity guard degraded: committed checkpoint list unavailable",
+			"target", target)
+		return nil
+	}
+	for _, info := range lookup.committed {
 		if strings.HasPrefix(info.CheckpointID.String(), target) {
-			return fmt.Errorf("ambiguous target %q with --generate: matches both git revision %s and checkpoint prefix (e.g. %s)\nUse --commit <ref> or --checkpoint <id> to disambiguate", target, abbreviateCommitHash(repo, *hash), info.CheckpointID)
+			return fmt.Errorf("ambiguous target %q with --generate: matches both git revision %s and checkpoint prefix (e.g. %s)\nUse --commit <ref> or --checkpoint <id> to disambiguate", target, abbreviateCommitHash(lookup.repo, *hash), info.CheckpointID)
 		}
 	}
 	return nil
@@ -449,33 +466,25 @@ func runExplainAutoAmbiguityGuard(ctx context.Context, target string) error {
 // When rawTranscript is true, outputs only the raw transcript file (JSONL format).
 // When searchAll is true, searches all commits without branch/depth limits (used for finding associated commits).
 //
-//nolint:maintidx // Command handler intentionally coordinates multiple checkpoint lookup/fetch paths.
+
 func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPrefix string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
-	repo, err := openRepository(ctx)
-	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
+	return runExplainCheckpointWithLookup(ctx, w, errW, checkpointIDPrefix, noPager, verbose, full, rawTranscript, generate, force, searchAll, nil, nil)
+}
 
-	v1Store := checkpoint.NewGitStore(repo)
-	v2URL, err := remote.FetchURL(ctx)
-	if err != nil {
-		logging.Debug(ctx, "explain: using origin for v2 store fetch remote",
-			slog.String("error", err.Error()),
-		)
-		v2URL = ""
-	}
-	v2Store := checkpoint.NewV2GitStore(repo, v2URL)
-	preferCheckpointsV2 := settings.IsCheckpointsV2Enabled(ctx)
-
-	// First, try to find in committed checkpoints by checkpoint ID prefix
-	committed, err := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2)
-	if err != nil {
-		return fmt.Errorf("failed to list checkpoints: %w", err)
+func runExplainCheckpointWithLookup(ctx context.Context, w, errW io.Writer, checkpointIDPrefix string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool, lookup *explainCheckpointLookup, lookupErr error) error {
+	if lookup == nil {
+		var err error
+		lookup, err = newExplainCheckpointLookup(ctx, nil)
+		if err != nil {
+			return err
+		}
+	} else if lookupErr != nil {
+		return lookupErr
 	}
 
 	// Collect all matching checkpoint IDs to detect ambiguity
 	var matches []id.CheckpointID
-	for _, info := range committed {
+	for _, info := range lookup.committed {
 		if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
 			matches = append(matches, info.CheckpointID)
 		}
@@ -491,7 +500,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		if !anyFetched {
 			anyFetched = FetchMetadataFromCheckpointRemote(ctx) == nil
 		}
-		if preferCheckpointsV2 {
+		if lookup.preferCheckpointsV2 {
 			v2Fetched := FetchV2MainTreeOnly(ctx) == nil
 			if !v2Fetched {
 				v2Fetched = FetchV2MetadataFromCheckpointRemote(ctx) == nil
@@ -499,18 +508,9 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			anyFetched = anyFetched || v2Fetched
 		}
 		if anyFetched {
-			if freshRepo, repoErr := openRepository(ctx); repoErr == nil {
-				repo = freshRepo
-				v1Store = checkpoint.NewGitStore(repo)
-				v2URL, err = remote.FetchURL(ctx)
-				if err != nil {
-					logging.Debug(ctx, "explain: using origin for refreshed v2 store fetch remote",
-						slog.String("error", err.Error()),
-					)
-					v2URL = ""
-				}
-				v2Store = checkpoint.NewV2GitStore(repo, v2URL)
-				if freshCommitted, listErr := listCommittedForExplain(ctx, v1Store, v2Store, preferCheckpointsV2); listErr == nil {
+			if freshLookup, freshErr := newExplainCheckpointLookup(ctx, nil); freshErr == nil {
+				lookup = freshLookup
+				if freshCommitted := lookup.committed; freshCommitted != nil {
 					for _, info := range freshCommitted {
 						if strings.HasPrefix(info.CheckpointID.String(), checkpointIDPrefix) {
 							matches = append(matches, info.CheckpointID)
@@ -536,7 +536,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		// layer, so rawTranscript is always false when generate is true; the
 		// direct-to-w write path inside explainTemporaryCheckpoint is not
 		// reachable here and won't leak partial output on error.
-		output, found := explainTemporaryCheckpoint(ctx, w, repo, v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
+		output, found := explainTemporaryCheckpoint(ctx, w, lookup.repo, lookup.v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
 		if found {
 			if generate {
 				return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
@@ -561,7 +561,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	// Resolve store and load checkpoint summary with v2 -> v1 fallback.
-	resolvedReader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
+	resolvedReader, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, fullCheckpointID, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint: %w", err)
 	}
@@ -588,7 +588,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 
 	// Handle summary generation — uses raw transcript.
 	if generate {
-		if err := generateCheckpointSummary(ctx, w, errW, v1Store, v2Store, fullCheckpointID, summary, content, force); err != nil {
+		if err := generateCheckpointSummary(ctx, w, errW, lookup.v1Store, lookup.v2Store, fullCheckpointID, summary, content, force); err != nil {
 			return err
 		}
 		// Reload to get the updated summary. After generation we only need
@@ -605,7 +605,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 
 	// Handle raw transcript output
 	if rawTranscript {
-		rawLog, _, rawErr := checkpoint.ResolveRawSessionLogForCheckpoint(ctx, fullCheckpointID, v1Store, v2Store, preferCheckpointsV2)
+		rawLog, _, rawErr := checkpoint.ResolveRawSessionLogForCheckpoint(ctx, fullCheckpointID, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
 		if rawErr != nil {
 			return fmt.Errorf("failed to read raw transcript: %w", rawErr)
 		}
@@ -620,7 +620,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	// Find associated commits (git commits with matching Entire-Checkpoint trailer)
-	associatedCommits, _ := getAssociatedCommits(ctx, repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
+	associatedCommits, _ := getAssociatedCommits(ctx, lookup.repo, fullCheckpointID, searchAll) //nolint:errcheck // Best-effort
 
 	// Derive author from the first associated commit (the user who made the commit).
 	// Fall back to GetCheckpointAuthor (walks entire/checkpoints/v1) for checkpoints
@@ -632,13 +632,45 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			Email: associatedCommits[0].Email,
 		}
 	} else {
-		author, _ = v1Store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
+		author, _ = lookup.v1Store.GetCheckpointAuthor(ctx, fullCheckpointID) //nolint:errcheck // Author is optional
 	}
 
 	// Format and output
 	output := formatCheckpointOutput(summary, content, fullCheckpointID, associatedCommits, author, verbose, full)
 	outputExplainContent(w, output, noPager)
 	return nil
+}
+
+func newExplainCheckpointLookup(ctx context.Context, repo *git.Repository) (*explainCheckpointLookup, error) {
+	if repo == nil {
+		var err error
+		repo, err = openRepository(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("not a git repository: %w", err)
+		}
+	}
+
+	v2URL, err := remote.FetchURL(ctx)
+	if err != nil {
+		logging.Debug(ctx, "explain: using origin for v2 store fetch remote",
+			slog.String("error", err.Error()),
+		)
+		v2URL = ""
+	}
+
+	lookup := &explainCheckpointLookup{
+		repo:                repo,
+		v1Store:             checkpoint.NewGitStore(repo),
+		v2Store:             checkpoint.NewV2GitStore(repo, v2URL),
+		preferCheckpointsV2: settings.IsCheckpointsV2Enabled(ctx),
+	}
+
+	committed, err := listCommittedForExplain(ctx, lookup.v1Store, lookup.v2Store, lookup.preferCheckpointsV2)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+	lookup.committed = committed
+	return lookup, nil
 }
 
 func listCommittedForExplain(ctx context.Context, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, preferCheckpointsV2 bool) ([]checkpoint.CommittedInfo, error) {

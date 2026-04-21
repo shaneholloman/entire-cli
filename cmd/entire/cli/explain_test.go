@@ -36,6 +36,9 @@ func TestNewExplainCmd(t *testing.T) {
 	if cmd.Name() != "explain" {
 		t.Errorf("expected command name to be 'explain', got %s", cmd.Name())
 	}
+	if cmd.Use != "explain [checkpoint-id | commit-sha]" {
+		t.Errorf("expected Use %q, got %q", "explain [checkpoint-id | commit-sha]", cmd.Use)
+	}
 
 	// Verify flags exist
 	sessionFlag := cmd.Flags().Lookup("session")
@@ -360,6 +363,65 @@ func TestRunExplainCheckpoint_NotFoundSentinels(t *testing.T) {
 				"sentinel must not fire unless a real temp checkpoint was matched")
 		})
 	}
+}
+
+func writeTemporaryCheckpointForExplainTest(t *testing.T) string {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repo, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+
+	testFile := filepath.Join(tmpDir, "temp.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+	_, err = wt.Add("temp.txt")
+	require.NoError(t, err)
+	initialCommit, err := wt.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	sessionID := "2026-01-27-temp-session"
+	metadataDir := filepath.Join(tmpDir, ".entire", "metadata", sessionID)
+	require.NoError(t, os.MkdirAll(metadataDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDir, paths.PromptFileName), []byte("temporary checkpoint prompt"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(metadataDir, "full.jsonl"), []byte(`{"type":"user","message":{"content":[{"type":"text","text":"temporary checkpoint"}]}}`+"\n"), 0o644))
+
+	require.NoError(t, os.WriteFile(testFile, []byte("updated content"), 0o644))
+
+	result, err := checkpoint.NewGitStore(repo).WriteTemporary(context.Background(), checkpoint.WriteTemporaryOptions{
+		SessionID:         sessionID,
+		BaseCommit:        initialCommit.String()[:7],
+		ModifiedFiles:     []string{"temp.txt"},
+		MetadataDir:       ".entire/metadata/" + sessionID,
+		MetadataDirAbs:    metadataDir,
+		CommitMessage:     "temporary checkpoint with code changes",
+		AuthorName:        "Test",
+		AuthorEmail:       "test@example.com",
+		IsFirstCheckpoint: false,
+	})
+	require.NoError(t, err)
+	require.False(t, result.Skipped)
+
+	return result.CommitHash.String()
+}
+
+func TestRunExplainAuto_GenerateTemporaryCheckpointDoesNotFallBackToCommit(t *testing.T) {
+	tempCheckpointSHA := writeTemporaryCheckpointForExplainTest(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, tempCheckpointSHA, true, false, false, false, true, false, false)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errCannotGenerateTemporaryCheckpoint)
+	require.NotErrorIs(t, err, checkpoint.ErrCheckpointNotFound)
+	require.NotContains(t, err.Error(), "no Entire-Checkpoint trailer")
 }
 
 // collidingShaPrefix creates commits until two share a 2-char SHA prefix
