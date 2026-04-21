@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/go-git/go-git/v6/config"
+	format "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/go-git/v6/x/plugin"
 	"github.com/go-git/x/plugin/objectsigner/auto"
 	"golang.org/x/crypto/ssh/agent"
@@ -33,6 +35,15 @@ func RegisterObjectSigner() {
 			merged := config.Merge(sysCfg, globalCfg)
 
 			if !merged.Commit.GpgSign.IsTrue() {
+				return nil
+			}
+
+			// When gpg.ssh.program is configured (e.g. 1Password's op-ssh-sign),
+			// signing happens via an external binary that go-git cannot invoke.
+			// Skip native signing silently — checkpoint commits will be unsigned,
+			// which is acceptable since signing is best-effort.
+			if auto.Format(merged.GPG.Format) == auto.FormatSSH && hasSSHSignProgram(merged.Raw) {
+				logging.Debug(context.Background(), "skipping native SSH commit signing: gpg.ssh.program is configured")
 				return nil
 			}
 
@@ -73,6 +84,16 @@ func connectSSHAgent() agent.Agent { //nolint:ireturn // must return the ssh age
 var scopeName = map[config.Scope]string{
 	config.GlobalScope: "global",
 	config.SystemScope: "system",
+}
+
+// hasSSHSignProgram checks whether gpg.ssh.program is set in the raw config.
+// go-git's Config struct does not expose this field, so we read it directly.
+func hasSSHSignProgram(raw *format.Config) bool {
+	if raw == nil {
+		return false
+	}
+
+	return raw.Section("gpg").Subsection("ssh").Option("program") != ""
 }
 
 // sshKeyTypePrefixes are the key type identifiers that can appear at the start

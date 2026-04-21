@@ -3,6 +3,7 @@ package cli
 import (
 	"testing"
 
+	format "github.com/go-git/go-git/v6/plumbing/format/config"
 	"github.com/go-git/x/plugin/objectsigner/auto"
 )
 
@@ -96,6 +97,56 @@ func TestNormalizeSigningKey(t *testing.T) {
 			got := normalizeSigningKey(tt.key, tt.format)
 			if got != tt.want {
 				t.Errorf("normalizeSigningKey(%q, %q) = %q, want %q", tt.key, tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasSSHSignProgram(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  *format.Config
+		want bool
+	}{
+		{
+			name: "nil raw config",
+			raw:  nil,
+			want: false,
+		},
+		{
+			name: "empty raw config",
+			raw:  format.New(),
+			want: false,
+		},
+		{
+			name: "gpg.ssh.program set",
+			raw: func() *format.Config {
+				c := format.New()
+				c.Section("gpg").Subsection("ssh").SetOption("program", "/Applications/1Password.app/Contents/MacOS/op-ssh-sign")
+				return c
+			}(),
+			want: true,
+		},
+		{
+			name: "gpg section exists but no ssh.program",
+			raw: func() *format.Config {
+				c := format.New()
+				c.Section("gpg").SetOption("format", "ssh")
+				return c
+			}(),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := hasSSHSignProgram(tt.raw)
+			if got != tt.want {
+				t.Errorf("hasSSHSignProgram() = %v, want %v", got, tt.want)
 			}
 		})
 	}
