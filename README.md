@@ -233,8 +233,66 @@ go test -tags=integration ./cmd/entire/cli/integration_test -run TestLogin
 | `entire resume`  | Switch to a branch, restore latest checkpointed session metadata, and show command(s) to continue |
 | `entire rewind`  | Rewind to a previous checkpoint                                                                   |
 | `entire status`  | Show current session info                                                                         |
-| `entire sessions stop` | Mark one or more active sessions as ended                                                   |
+| `entire sessions` | View and manage agent sessions tracked by Entire                                                 |
 | `entire version` | Show Entire CLI version                                                                           |
+
+### `entire sessions`
+
+View and manage agent sessions tracked by Entire.
+
+```bash
+entire sessions <subcommand>
+```
+
+Available subcommands:
+
+- `entire sessions list` lists all sessions across all worktrees, including ended sessions.
+- `entire sessions info <session-id>` shows detailed information for a specific session.
+- `entire sessions stop [session-id]` stops one or more active sessions.
+
+#### `entire sessions list`
+
+List all sessions tracked by Entire, including ended sessions.
+
+```bash
+entire sessions list
+```
+
+For active sessions only, use `entire status`.
+
+#### `entire sessions info`
+
+Show detailed information for a specific session.
+
+```bash
+entire sessions info <session-id> [flags]
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--json` | Output as JSON |
+
+This command shows agent, model, status, worktree, timing, token usage, checkpoint linkage, and files touched.
+
+#### `entire sessions stop`
+
+Stop one or more active sessions.
+
+```bash
+entire sessions stop [session-id] [flags]
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--all` | Stop all active sessions |
+| `-f, --force` | Skip confirmation prompt |
+
+```bash
+entire sessions list
+entire sessions info 2026-04-10-uuid --json
+entire sessions stop 2026-04-10-uuid
+entire sessions stop --all --force
+```
 
 ### `entire enable` Flags
 
