@@ -1,7 +1,5 @@
-// Package lockfile provides a tiny cross-platform file-lock primitive
-// built on OS advisory locks (flock on Unix, LockFileEx on Windows).
-// The lock is auto-released by the kernel when the holding process
-// exits, so there is no stale-lock recovery problem.
+// Package lockfile provides cross-process file locks. The OS releases
+// the lock on process exit, so there's no stale-lock recovery problem.
 package lockfile
 
 import (
@@ -15,19 +13,17 @@ import (
 // ErrLocked is returned by Acquire when another process holds the lock.
 var ErrLocked = errors.New("lockfile already held")
 
-// Lock represents an acquired exclusive lock on a path. Release exactly
-// once when done; the OS will also release on process exit.
+// Lock represents an acquired exclusive lock. The OS releases on
+// process exit if Release is not called.
 type Lock struct {
 	f *os.File
 }
 
-// Acquire opens path with O_CREATE|O_RDWR mode 0600, attempts a
-// non-blocking exclusive OS-level lock, and on success writes the
-// current PID into the file (advisory diagnostic only). Returns
-// ErrLocked if another process holds the lock; non-ErrLocked errors
-// indicate I/O or permission failures and should be reported with
-// context. The Go runtime sets FD_CLOEXEC on os.OpenFile, so the FD is
-// not inherited by subprocesses.
+// Acquire takes an exclusive OS-level lock on path. Returns ErrLocked
+// if another process holds the lock; other errors indicate I/O or
+// permission failures. The PID written into the file is advisory
+// diagnostic only — see ReadHolderPID. FD_CLOEXEC is set so
+// subprocesses don't inherit the lock FD.
 func Acquire(path string) (*Lock, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // G304: lock path is supplied by the caller (trusted)
 	if err != nil {
@@ -45,8 +41,7 @@ func Acquire(path string) (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
-// Release releases the OS lock and closes the underlying file handle.
-// Safe to call exactly once; subsequent calls are no-ops.
+// Release releases the OS lock and closes the file. Idempotent.
 func (l *Lock) Release() error {
 	if l == nil || l.f == nil {
 		return nil
@@ -79,9 +74,6 @@ func ReadHolderPID(path string) int {
 	return pid
 }
 
-// writePID truncates the lock file and writes the current PID. The lock
-// must already be held when this is called — callers in this package
-// invoke it only after a successful tryLockExclusive.
 func writePID(f *os.File) error {
 	if _, err := f.Seek(0, 0); err != nil {
 		return fmt.Errorf("seek: %w", err)
@@ -91,9 +83,6 @@ func writePID(f *os.File) error {
 	}
 	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
 		return fmt.Errorf("write PID: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync: %w", err)
 	}
 	return nil
 }

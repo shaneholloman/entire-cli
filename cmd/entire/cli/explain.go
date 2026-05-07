@@ -2553,6 +2553,21 @@ func upsertEnv(env []string, key, value string) []string {
 	return result
 }
 
+// removeEnvKey returns env with every entry for key dropped. Useful when a
+// caller wants to guarantee a child process inherits no value for key, even
+// if the parent's environment has one set.
+func removeEnvKey(env []string, key string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
+}
+
 // outputWithPager outputs content through a pager if stdout is a terminal and content is long.
 func outputWithPager(w io.Writer, content string) {
 	// Check if we're writing to stdout and it's a terminal

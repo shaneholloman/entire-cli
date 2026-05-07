@@ -23,7 +23,6 @@ func TestAcquire_ProcessExitReleases(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("LOCKFILE_TEST_CHILD") == "1" {
-		// Child role: acquire, print marker, exit.
 		path := os.Getenv("LOCKFILE_TEST_PATH")
 		_, err := lockfile.Acquire(path)
 		if err != nil {

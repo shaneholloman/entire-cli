@@ -12,9 +12,9 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/creack/pty v1.1.24
 	github.com/denisbrodbeck/machineid v1.0.1
-	github.com/go-git/go-billy/v6 v6.0.0-20260328065524-593ae452e14d
-	github.com/go-git/go-git/v6 v6.0.0-alpha.2
-	github.com/go-git/x/plugin/objectsigner/auto v0.0.0-20260330134459-33df49246da9
+	github.com/go-git/go-billy/v6 v6.0.0-20260424211911-732291493fb8
+	github.com/go-git/go-git/v6 v6.0.0-alpha.3
+	github.com/go-git/x/plugin/objectsigner/auto v0.1.0
 	github.com/go-git/x/plugin/objectsigner/program v0.0.0-20260506121155-e7fc238fcab6
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-isatty v0.0.22
@@ -105,7 +105,7 @@ require (
 	github.com/nwaples/rardecode/v2 v2.2.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
-	github.com/pjbgf/sha1cd v0.5.0 // indirect
+	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkoukk/tiktoken-go v0.1.8 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

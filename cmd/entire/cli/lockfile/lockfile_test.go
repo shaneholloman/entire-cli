@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -23,7 +24,9 @@ func TestAcquire_FreshFileSucceeds(t *testing.T) {
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "lock file must be 0600")
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "lock file must be 0600")
+	}
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)

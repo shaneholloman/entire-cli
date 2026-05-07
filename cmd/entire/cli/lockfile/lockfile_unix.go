@@ -10,8 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// tryLockExclusive returns ErrLocked on contention (EWOULDBLOCK), nil on
-// success, other errors on I/O failures.
 func tryLockExclusive(f *os.File) error {
 	err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) //nolint:gosec // G115: uintptr->int is safe for fd
 	if err == nil {
