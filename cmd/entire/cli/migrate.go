@@ -275,11 +275,23 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 
 	batchSize := migrateFullBatchSize()
 	pendingFull := make([]migratedFullCheckpoint, 0, batchSize)
+	pendingMain := make([]checkpoint.WriteCommittedOptions, 0, batchSize)
 	var writtenRefs []plumbing.ReferenceName
 	nextGeneration := 0
 
+	flushMain := func() error {
+		if len(pendingMain) == 0 {
+			return nil
+		}
+		if _, err := v2Store.WriteCommittedMainBatch(ctx, pendingMain); err != nil {
+			return fmt.Errorf("v2 /main batch write: %w", err)
+		}
+		pendingMain = pendingMain[:0]
+		return nil
+	}
+
 	for _, info := range v1List {
-		fullCheckpoint, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force, fullArtifactsIndex)
+		fullCheckpoint, mainOpts, outcome, migrateErr := migrateOneCheckpoint(ctx, repo, v1Store, v2Store, info, force, fullArtifactsIndex)
 		result.missingSessions += outcome.missingSessions
 		if outcome.compactTranscriptSkipped {
 			result.compactTranscriptSkipped++
@@ -304,9 +316,17 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 			continue
 		}
 
+		if len(mainOpts) > 0 {
+			pendingMain = append(pendingMain, mainOpts...)
+		}
 		if fullCheckpoint != nil {
 			pendingFull = append(pendingFull, *fullCheckpoint)
 			if len(pendingFull) == batchSize {
+				// Flush /main entries before archiving /full so the index ref
+				// can never lag behind the data ref on a mid-batch crash.
+				if err := flushMain(); err != nil {
+					return result, writtenRefs, fmt.Errorf("failed to write batched v2 /main entries: %w", err)
+				}
 				if nextGeneration == 0 {
 					// Resolve the archive slot only when the first full batch is ready;
 					// force migration may prune existing archived refs earlier in the loop.
@@ -330,6 +350,9 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	progress.Finish()
+	if err := flushMain(); err != nil {
+		return result, writtenRefs, fmt.Errorf("failed to write batched v2 /main entries: %w", err)
+	}
 	stopFinalize := startSpinner(progressOut, "Packing migrated raw transcripts")
 	if len(pendingFull) > 0 {
 		if err := writeMigratedFinalFullCurrent(ctx, repo, v2Store, pendingFull); err != nil {
@@ -392,12 +415,18 @@ type migrateCheckpointOutcome struct {
 	compactTranscriptSkipped bool
 }
 
-func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex) (*migratedFullCheckpoint, migrateCheckpointOutcome, error) {
+// migrateOneCheckpoint returns the prepared /main WriteCommittedOptions
+// alongside the in-memory full-checkpoint structure. The caller batches the
+// /main writes across many checkpoints into a single ref CAS via
+// V2GitStore.WriteCommittedMainBatch. The resume path (already-in-v2 without
+// force) returns nil mainOpts; its /main updates flow through
+// backfillCompactTranscripts which uses UpdateCommitted.
+func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, info checkpoint.CommittedInfo, force bool, fullArtifacts checkpoint.FullSessionArtifactsIndex) (*migratedFullCheckpoint, []checkpoint.WriteCommittedOptions, migrateCheckpointOutcome, error) {
 	var outcome migrateCheckpointOutcome
 
 	existing, err := v2Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
-		return nil, outcome, fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
+		return nil, nil, outcome, fmt.Errorf("failed to check v2 for checkpoint %s: %w", info.CheckpointID, err)
 	}
 
 	if existing != nil && !force {
@@ -407,35 +436,35 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 		// errAlreadyMigrated so the caller counts it as skipped.
 		fullCheckpoint, err := collectMissingFullCheckpointForPacking(ctx, repo, v1Store, v2Store, info, existing, fullArtifacts)
 		if err != nil && !errors.Is(err, errAlreadyMigrated) {
-			return nil, outcome, err
+			return nil, nil, outcome, err
 		}
 		backfilled, backfillErr := backfillCompactTranscripts(ctx, v1Store, v2Store, info, existing)
 		if errors.Is(backfillErr, errTranscriptNotGeneratable) {
 			outcome.compactTranscriptSkipped = true
 		} else if backfillErr != nil && !errors.Is(backfillErr, errAlreadyMigrated) {
-			return nil, outcome, backfillErr
+			return nil, nil, outcome, backfillErr
 		}
 		if fullCheckpoint == nil {
 			if backfilled > 0 {
-				return nil, outcome, nil
+				return nil, nil, outcome, nil
 			}
-			return nil, outcome, errAlreadyMigrated
+			return nil, nil, outcome, errAlreadyMigrated
 		}
-		return fullCheckpoint, outcome, nil
+		return fullCheckpoint, nil, outcome, nil
 	}
 
 	if existing != nil && force {
 		if pruneErr := pruneV2CheckpointForForce(ctx, repo, v2Store, info.CheckpointID); pruneErr != nil {
-			return nil, outcome, fmt.Errorf("failed to reset existing v2 checkpoint %s before force migration: %w", info.CheckpointID, pruneErr)
+			return nil, nil, outcome, fmt.Errorf("failed to reset existing v2 checkpoint %s before force migration: %w", info.CheckpointID, pruneErr)
 		}
 	}
 
 	summary, err := v1Store.ReadCommitted(ctx, info.CheckpointID)
 	if err != nil {
-		return nil, outcome, fmt.Errorf("failed to read v1 summary: %w", err)
+		return nil, nil, outcome, fmt.Errorf("failed to read v1 summary: %w", err)
 	}
 	if summary == nil {
-		return nil, outcome, fmt.Errorf("v1 checkpoint %s has no summary", info.CheckpointID)
+		return nil, nil, outcome, fmt.Errorf("v1 checkpoint %s has no summary", info.CheckpointID)
 	}
 
 	compactFailed := false
@@ -446,6 +475,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	fullCheckpoint := &migratedFullCheckpoint{
 		checkpointID: info.CheckpointID,
 	}
+	mainOptsBatch := make([]checkpoint.WriteCommittedOptions, 0, len(summary.Sessions))
 
 	for sessionIdx := range len(summary.Sessions) {
 		content, skipped, readErr := readV1SessionForMigration(ctx, v1Store, info.CheckpointID, sessionIdx)
@@ -455,7 +485,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 			continue
 		}
 		if readErr != nil {
-			return nil, outcome, fmt.Errorf("failed to read v1 session %d: %w", sessionIdx, readErr)
+			return nil, nil, outcome, fmt.Errorf("failed to read v1 session %d: %w", sessionIdx, readErr)
 		}
 		if content.Metadata.IsTask {
 			shouldCopyTaskMetadata = true
@@ -471,12 +501,17 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 			compactFailed = true
 		}
 
+		// /main entries land in the batch buffer; /full content stays in
+		// memory for the per-batch pack.
 		mainOpts := opts
 		mainOpts.Transcript = redact.AlreadyRedacted(nil)
-		v2SessionIdx, writeErr := v2Store.WriteCommittedWithSessionIndex(ctx, mainOpts)
-		if writeErr != nil {
-			return nil, outcome, fmt.Errorf("failed to write v2 session %d: %w", sessionIdx, writeErr)
-		}
+		mainOptsBatch = append(mainOptsBatch, mainOpts)
+
+		// The checkpoint is empty in v2 here (new, or just pruned by force),
+		// so WriteCommittedMainBatch will assign sessions sequentially in
+		// input order. The local migratedSessions counter is the predicted
+		// v2 session index.
+		v2SessionIdx := migratedSessions
 		v1ToV2SessionIdx[sessionIdx] = v2SessionIdx
 		fullCheckpoint.sessions = append(fullCheckpoint.sessions, migratedFullSession{
 			sessionIndex: v2SessionIdx,
@@ -486,7 +521,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 	}
 
 	if migratedSessions == 0 {
-		return nil, outcome, fmt.Errorf("%w: v1 metadata lists %d session(s), but no transcript/session content exists for any of them", errNoMigratableSessions, len(summary.Sessions))
+		return nil, nil, outcome, fmt.Errorf("%w: v1 metadata lists %d session(s), but no transcript/session content exists for any of them", errNoMigratableSessions, len(summary.Sessions))
 	}
 
 	if shouldCopyTaskMetadata {
@@ -515,7 +550,7 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 		)
 	}
 
-	return fullCheckpoint, outcome, nil
+	return fullCheckpoint, mainOptsBatch, outcome, nil
 }
 
 func migrateFullBatchSize() int {

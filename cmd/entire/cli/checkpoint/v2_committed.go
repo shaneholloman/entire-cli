@@ -59,6 +59,159 @@ func (s *V2GitStore) WriteCommittedWithSessionIndex(ctx context.Context, opts Wr
 	return sessionIndex, nil
 }
 
+// WriteCommittedMainBatch writes /main entries for every (checkpoint, session)
+// pair in batch using a single commit and a single ref CAS. The /full ref is
+// left untouched — callers handle full-transcript artifacts via the existing
+// pack flow. Returns session indexes parallel to batch.
+//
+// Matches per-session writeCommittedMain semantics within each checkpoint
+// group: existing-SessionID dedupe, slot-0 refuse-overwrite, and last-write-
+// wins for the root CheckpointSummary's combinedAttribution / HasReview.
+func (s *V2GitStore) WriteCommittedMainBatch(ctx context.Context, batch []WriteCommittedOptions) ([]int, error) {
+	if len(batch) == 0 {
+		return nil, nil
+	}
+	for i, opts := range batch {
+		if err := validateWriteOpts(opts); err != nil {
+			return nil, fmt.Errorf("batch entry %d: %w", i, err)
+		}
+	}
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	if err := s.ensureRef(ctx, refName); err != nil {
+		return nil, fmt.Errorf("failed to ensure /main ref: %w", err)
+	}
+	parentHash, rootTreeHash, err := s.GetRefState(refName)
+	if err != nil {
+		return nil, err
+	}
+
+	type cpGroup struct {
+		cpID     id.CheckpointID
+		ordinals []int
+	}
+	groups := []*cpGroup{}
+	byID := map[id.CheckpointID]*cpGroup{}
+	for i, opts := range batch {
+		g, ok := byID[opts.CheckpointID]
+		if !ok {
+			g = &cpGroup{cpID: opts.CheckpointID}
+			byID[opts.CheckpointID] = g
+			groups = append(groups, g)
+		}
+		g.ordinals = append(g.ordinals, i)
+	}
+
+	sessionIndexes := make([]int, len(batch))
+	for _, g := range groups {
+		newRoot, err := s.applyMainBatchGroup(ctx, rootTreeHash, g.cpID, g.ordinals, batch, sessionIndexes)
+		if err != nil {
+			return nil, err
+		}
+		rootTreeHash = newRoot
+	}
+
+	// One commit, one ref update for the entire batch.
+	commitMsg := fmt.Sprintf("Migrate batch: %d checkpoint(s), %d session(s)\n", len(groups), len(batch))
+	last := batch[len(batch)-1]
+	authorName, authorEmail := last.AuthorName, last.AuthorEmail
+	if authorName == "" || authorEmail == "" {
+		fallbackName, fallbackEmail := GetGitAuthorFromRepo(s.repo)
+		if authorName == "" {
+			authorName = fallbackName
+		}
+		if authorEmail == "" {
+			authorEmail = fallbackEmail
+		}
+	}
+	if err := s.updateRef(ctx, refName, rootTreeHash, parentHash, commitMsg, authorName, authorEmail); err != nil {
+		return nil, err
+	}
+	return sessionIndexes, nil
+}
+
+// applyMainBatchGroup writes every session in one checkpoint group into the
+// running root tree and returns the new root hash. Mirrors per-session
+// writeCommittedMain logic (dedupe, slot-0 guard) while letting subsequent
+// sessions in the same group see freshly-written entries.
+func (s *V2GitStore) applyMainBatchGroup(ctx context.Context, rootTreeHash plumbing.Hash, cpID id.CheckpointID, ordinals []int, batch []WriteCommittedOptions, sessionIndexes []int) (plumbing.Hash, error) {
+	basePath := cpID.Path() + "/"
+	checkpointPath := cpID.Path()
+
+	entries, err := s.gs.flattenCheckpointEntries(rootTreeHash, checkpointPath)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	var existingSummary *CheckpointSummary
+	if entry, exists := entries[basePath+paths.MetadataFileName]; exists {
+		if existing, readErr := readJSONFromBlob[CheckpointSummary](s.repo, entry.Hash); readErr == nil {
+			existingSummary = existing
+		}
+	}
+
+	// Track the sessions slice as we write so writeCheckpointSummary at the
+	// end of the group sees a complete picture and findSessionIndex on later
+	// entries in the group can dedupe against earlier ones.
+	var sessions []SessionFilePaths
+	if existingSummary != nil {
+		sessions = make([]SessionFilePaths, len(existingSummary.Sessions))
+		copy(sessions, existingSummary.Sessions)
+	}
+
+	for _, ordinal := range ordinals {
+		opts := batch[ordinal]
+
+		// findSessionIndex needs a summary whose Sessions length reflects
+		// what we've written so far in this group.
+		runningSummary := existingSummary
+		if len(sessions) > 0 {
+			runningSummary = &CheckpointSummary{Sessions: sessions}
+		}
+		sessionIndex := s.gs.findSessionIndex(ctx, basePath, runningSummary, entries, opts.SessionID)
+
+		if sessionIndex == 0 {
+			if entry, exists := entries[fmt.Sprintf("%s0/%s", basePath, paths.MetadataFileName)]; exists {
+				if existingMeta, readErr := s.gs.readMetadataFromBlob(entry.Hash); readErr == nil && existingMeta.SessionID != opts.SessionID {
+					logging.Error(ctx, "refusing v2 checkpoint write: session 0 holds a different sessionID",
+						slog.String("checkpoint_id", opts.CheckpointID.String()),
+						slog.String("existing_session_id", existingMeta.SessionID),
+						slog.String("write_session_id", opts.SessionID),
+						slog.Bool("existing_summary_nil", existingSummary == nil))
+					return plumbing.ZeroHash, fmt.Errorf(
+						"refusing to overwrite session 0 of checkpoint %s: existing session ID %q differs from write session ID %q. The v2 checkpoint tree is inconsistent (session 0 belongs to a different session than this write claims). No automated repair exists for this shape — please report it along with the output of `git ls-tree %s %s/`",
+						opts.CheckpointID, existingMeta.SessionID, opts.SessionID, paths.V2MainRefName, opts.CheckpointID.Path(),
+					)
+				}
+			}
+		}
+
+		sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
+		filePaths, err := s.writeMainSessionToSubdirectory(opts, sessionPath, entries)
+		if err != nil {
+			return plumbing.ZeroHash, err
+		}
+
+		if sessionIndex >= len(sessions) {
+			grown := make([]SessionFilePaths, sessionIndex+1)
+			copy(grown, sessions)
+			sessions = grown
+		}
+		sessions[sessionIndex] = filePaths
+		sessionIndexes[ordinal] = sessionIndex
+	}
+
+	// Last write wins for combinedAttribution / HasReview, matching the
+	// behavior of N sequential writeCommittedMain calls where each rewrites
+	// the summary blob.
+	lastOpts := batch[ordinals[len(ordinals)-1]]
+	if err := s.gs.writeCheckpointSummary(lastOpts, basePath, entries, sessions); err != nil {
+		return plumbing.ZeroHash, err
+	}
+
+	return s.gs.spliceCheckpointSubtree(ctx, rootTreeHash, cpID, basePath, entries)
+}
+
 // UpdateCommitted replaces the prompts and/or transcript for an existing v2
 // checkpoint. Called at stop time to finalize checkpoints with the complete
 // session transcript.
