@@ -364,6 +364,40 @@ func LoadAgentTypeHint(ctx context.Context, sessionID string) types.AgentType {
 	return types.AgentType(strings.TrimSpace(string(data)))
 }
 
+// RecordFilesTouched merges the given files into the session's FilesTouched.
+// Used by mid-turn lifecycle events (e.g., per-tool-use hooks) to populate
+// state.FilesTouched incrementally — without this, agents like Codex that
+// commit mid-turn have no per-tool file accounting, and the carry-forward
+// path falls back to whole-transcript extraction.
+//
+// Inputs are merged via the same dedup+normalize logic SaveStep uses, so the
+// resulting list is stable regardless of which path populated it. Paths must
+// already be repo-relative; the caller (handleLifecycleToolUse) normalizes
+// before reaching here.
+//
+// No-op when the session state doesn't exist (event arrived before
+// InitializeSession) or all input lists are empty.
+func RecordFilesTouched(ctx context.Context, sessionID string, modified, added, deleted []string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if len(modified) == 0 && len(added) == 0 && len(deleted) == 0 {
+		return nil
+	}
+	state, err := LoadSessionState(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load session state: %w", err)
+	}
+	if state == nil {
+		return nil
+	}
+	state.FilesTouched = mergeFilesTouched(state.FilesTouched, modified, added, deleted)
+	if err := SaveSessionState(ctx, state); err != nil {
+		return fmt.Errorf("save session state: %w", err)
+	}
+	return nil
+}
+
 // ClearSessionState removes the session state file for the given session ID.
 func ClearSessionState(ctx context.Context, sessionID string) error {
 	// Validate session ID to prevent path traversal

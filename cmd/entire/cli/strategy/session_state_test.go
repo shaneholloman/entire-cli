@@ -201,6 +201,71 @@ func TestLoadSessionState_WithLastInteractionTime(t *testing.T) {
 	}
 }
 
+// TestRecordFilesTouched_MergesIncrementally verifies the helper merges new
+// files into existing FilesTouched without losing prior entries — the
+// invariant per-tool-use hooks rely on so PostCommit's carry-forward decision
+// stays accurate.
+func TestRecordFilesTouched_MergesIncrementally(t *testing.T) {
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	state := &SessionState{
+		SessionID:    "ft-merge",
+		BaseCommit:   "deadbeef",
+		StartedAt:    time.Now(),
+		FilesTouched: []string{"existing.txt"},
+	}
+	require.NoError(t, SaveSessionState(context.Background(), state))
+
+	require.NoError(t, RecordFilesTouched(context.Background(), "ft-merge",
+		[]string{"updated.txt"}, []string{"new.txt"}, []string{"removed.txt"}))
+
+	loaded, err := LoadSessionState(context.Background(), "ft-merge")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.ElementsMatch(t, []string{"existing.txt", "updated.txt", "new.txt", "removed.txt"}, loaded.FilesTouched)
+}
+
+func TestRecordFilesTouched_NoStateIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	// Hook fires before InitializeSession ran — RecordFilesTouched must not
+	// fabricate a state file or error.
+	err = RecordFilesTouched(context.Background(), "missing", []string{"f.txt"}, nil, nil)
+	require.NoError(t, err)
+
+	loaded, err := LoadSessionState(context.Background(), "missing")
+	require.NoError(t, err)
+	require.Nil(t, loaded)
+}
+
+func TestRecordFilesTouched_EmptyInputsIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	state := &SessionState{
+		SessionID:    "ft-empty",
+		BaseCommit:   "deadbeef",
+		StartedAt:    time.Now(),
+		FilesTouched: []string{"keep.txt"},
+	}
+	require.NoError(t, SaveSessionState(context.Background(), state))
+
+	require.NoError(t, RecordFilesTouched(context.Background(), "ft-empty", nil, nil, nil))
+
+	loaded, err := LoadSessionState(context.Background(), "ft-empty")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	require.Equal(t, []string{"keep.txt"}, loaded.FilesTouched)
+}
+
 // TestLoadSessionState_PackageLevel_NonExistent tests loading a non-existent session.
 func TestLoadSessionState_PackageLevel_NonExistent(t *testing.T) {
 	dir := t.TempDir()

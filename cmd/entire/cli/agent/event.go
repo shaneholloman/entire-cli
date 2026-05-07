@@ -40,6 +40,13 @@ const (
 	// (e.g., Gemini CLI's BeforeModel). The framework stores the model as a hint
 	// for subsequent TurnStart/TurnEnd events in the same session.
 	ModelUpdate
+
+	// ToolUse indicates the agent ran a tool that touched files mid-turn.
+	// Carries ModifiedFiles/NewFiles/DeletedFiles so the framework can populate
+	// state.FilesTouched incrementally — without this, agents like Codex that
+	// commit mid-turn (before TurnEnd fires) have no per-tool file accounting,
+	// and the carry-forward path falls back to whole-transcript extraction.
+	ToolUse
 )
 
 // String returns a human-readable name for the event type.
@@ -61,6 +68,8 @@ func (e EventType) String() string {
 		return "SubagentEnd"
 	case ModelUpdate:
 		return "ModelUpdate"
+	case ToolUse:
+		return "ToolUse"
 	default:
 		return "Unknown"
 	}
@@ -109,10 +118,28 @@ type Event struct {
 	SubagentType    string
 	TaskDescription string
 
-	// ModifiedFiles is a list of file paths modified by a subagent.
-	// Populated on SubagentEnd events when the agent provides this data
-	// directly via hook payload (e.g., Cursor's subagentStop).
+	// ModifiedFiles is a list of file paths modified by a subagent or a tool call.
+	// Populated on:
+	//   - SubagentEnd events when the agent provides this data directly via hook
+	//     payload (e.g., Cursor's subagentStop).
+	//   - ToolUse events when the agent fires a per-tool-use hook with file paths
+	//     (e.g., Codex's PostToolUse for apply_patch).
+	// Paths may be absolute, cwd-relative, or repo-relative; the lifecycle handler
+	// normalizes them via FilterAndNormalizePaths using the event's CWD or the
+	// repo root.
 	ModifiedFiles []string
+
+	// NewFiles is a list of file paths created by a tool call (ToolUse events).
+	NewFiles []string
+
+	// DeletedFiles is a list of file paths deleted by a tool call (ToolUse events).
+	DeletedFiles []string
+
+	// CWD is the working directory the agent was running in when the event fired.
+	// Populated on ToolUse events so the lifecycle handler can resolve cwd-relative
+	// paths from the hook payload (e.g., Codex apply_patch paths) to absolute paths
+	// before normalization to repo-relative.
+	CWD string
 
 	// ResponseMessage is an optional message to display to the user via the agent.
 	ResponseMessage string
