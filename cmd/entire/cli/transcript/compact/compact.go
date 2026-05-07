@@ -114,94 +114,6 @@ func Compact(redacted redact.RedactedBytes, opts MetadataFields) ([]byte, error)
 	return compactJSONL(truncated, opts)
 }
 
-// WithOffset returns the full compact output (StartLine=0) along with the
-// line-count offset where the compact output produced from input lines
-// [0..offsetStartLine) ends. The offset is byte-identical to the value
-// computed today by:
-//
-//	full, _   := Compact(input, opts withStartLine 0)
-//	scoped, _ := Compact(input, opts withStartLine offsetStartLine)
-//	offset    := bytes.Count(full, "\n") - bytes.Count(scoped, "\n")
-//
-// Callers that need both the stored compact transcript and the per-checkpoint
-// transcript-start offset should prefer this over running Compact twice. For
-// JSONL inputs the second pass is replaced with a count-only walk over the
-// shared parsed entries — same algorithm, no JSON marshaling — which is
-// where the migration's compact_transcript savings come from.
-func WithOffset(redacted redact.RedactedBytes, opts MetadataFields, offsetStartLine int) ([]byte, int, error) {
-	content := redacted.Bytes()
-
-	// Single-object / non-line-oriented formats handle StartLine internally
-	// in ways that aren't a simple byte slice; fall back to running Compact
-	// twice to preserve their semantics exactly.
-	if isOpenCodeFormat(content) || isGeminiFormat(content) || isCodexFormat(content) {
-		return compactWithOffsetTwoCalls(redacted, opts, offsetStartLine)
-	}
-
-	// Line-oriented branch: detect format on the un-truncated bytes. Copilot
-	// and Droid have their own merge logic, so they take the two-call path
-	// for now. Everything else flows through compactJSONL — that's the path
-	// we optimize.
-	truncated := transcript.SliceFromLine(content, 0)
-	if truncated == nil {
-		truncated = []byte{}
-	}
-	if isCopilotFormat(truncated) || isDroidFormat(truncated) {
-		return compactWithOffsetTwoCalls(redacted, opts, offsetStartLine)
-	}
-
-	// Shared-parse fast path for the standard JSONL compactor (Claude/Cursor).
-	entries, err := parseJSONLEntries(content, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	full := emitJSONLEntries(entries, withStartLineCopy(opts, 0))
-	if offsetStartLine == 0 || len(full) == 0 {
-		return full, 0, nil
-	}
-
-	// Find the entry index whose sourceLine first reaches offsetStartLine —
-	// this matches what parsing SliceFromLine(content, offsetStartLine) would
-	// have produced.
-	cut := len(entries)
-	for i, e := range entries {
-		if e.sourceLine >= offsetStartLine {
-			cut = i
-			break
-		}
-	}
-	scopedLines := countJSONLEntries(entries[cut:])
-	offset := bytes.Count(full, []byte{'\n'}) - scopedLines
-	if offset < 0 {
-		offset = 0
-	}
-	return full, offset, nil
-}
-
-func compactWithOffsetTwoCalls(redacted redact.RedactedBytes, opts MetadataFields, offsetStartLine int) ([]byte, int, error) {
-	full, err := Compact(redacted, withStartLineCopy(opts, 0))
-	if err != nil {
-		return nil, 0, err
-	}
-	if offsetStartLine == 0 || len(full) == 0 {
-		return full, 0, nil
-	}
-	scoped, err := Compact(redacted, withStartLineCopy(opts, offsetStartLine))
-	if err != nil {
-		return nil, 0, err
-	}
-	offset := bytes.Count(full, []byte{'\n'}) - bytes.Count(scoped, []byte{'\n'})
-	if offset < 0 {
-		offset = 0
-	}
-	return full, offset, nil
-}
-
-func withStartLineCopy(opts MetadataFields, startLine int) MetadataFields {
-	opts.StartLine = startLine
-	return opts
-}
-
 // droppedTypes are JSONL entry types that carry no parser-relevant data.
 var droppedTypes = map[string]bool{
 	"progress":              true,
@@ -254,7 +166,6 @@ type parsedEntry struct {
 	userText     string            // extracted user text
 	userImages   []json.RawMessage // image blocks from user messages
 	toolResults  []toolResultEntry // user tool_result entries
-	sourceLine   int               // 0-indexed input line this entry was parsed from
 }
 
 // compactJSONL converts JSONL transcripts (Claude Code, Cursor) into the
@@ -264,43 +175,16 @@ func compactJSONL(content []byte, opts MetadataFields) ([]byte, error) {
 }
 
 func compactJSONLWith(content []byte, opts MetadataFields, preprocess linePreprocessor) ([]byte, error) {
+	base := newTranscriptLine(opts)
+
+	// Pass 1: parse all lines into intermediate entries.
 	entries, err := parseJSONLEntries(content, preprocess)
 	if err != nil {
 		return nil, err
 	}
-	return emitJSONLEntries(entries, opts), nil
-}
 
-// emitJSONLEntries runs the JSONL merge-and-emit pass over entries and
-// returns the produced compact bytes.
-func emitJSONLEntries(entries []parsedEntry, opts MetadataFields) []byte {
-	base := newTranscriptLine(opts)
+	// Pass 2: merge and emit.
 	var result []byte
-	walkJSONLEntries(entries, func(e parsedEntry) {
-		emitAssistant(&result, base, e)
-	}, func(e parsedEntry) {
-		emitUser(&result, base, e)
-	})
-	return result
-}
-
-// countJSONLEntries runs the JSONL merge-and-emit pass over entries and
-// returns the number of output lines that emission would produce, without
-// allocating or marshaling the lines themselves. Equivalent to
-// `bytes.Count(emitJSONLEntries(entries, opts), "\n")` but skips the
-// json.Marshal cost of every output line.
-func countJSONLEntries(entries []parsedEntry) int {
-	count := 0
-	bump := func(parsedEntry) { count++ }
-	walkJSONLEntries(entries, bump, bump)
-	return count
-}
-
-// walkJSONLEntries iterates entries with the same merge logic as
-// compactJSONLWith and invokes the supplied callbacks for each emitted
-// assistant/user line. Callers vary only in what they do with the line
-// (write bytes vs. count).
-func walkJSONLEntries(entries []parsedEntry, onAssistant, onUser func(parsedEntry)) {
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
 
@@ -322,8 +206,8 @@ func walkJSONLEntries(entries []parsedEntry, onAssistant, onUser func(parsedEntr
 				// If the consumed user entry also had text or image content, emit it
 				// as a separate user line after the assistant.
 				if userEntry.userText != "" || len(userEntry.userImages) > 0 {
-					onAssistant(merged)
-					onUser(userEntry)
+					emitAssistant(&result, base, merged)
+					emitUser(&result, base, userEntry)
 					continue
 				}
 			}
@@ -332,7 +216,7 @@ func walkJSONLEntries(entries []parsedEntry, onAssistant, onUser func(parsedEntr
 				continue
 			}
 
-			onAssistant(merged)
+			emitAssistant(&result, base, merged)
 
 		case transcript.TypeUser:
 			// User entries that are purely tool results were already consumed
@@ -342,9 +226,11 @@ func walkJSONLEntries(entries []parsedEntry, onAssistant, onUser func(parsedEntr
 			if hasToolResults(e) && e.userText == "" && len(e.userImages) == 0 {
 				continue
 			}
-			onUser(e)
+			emitUser(&result, base, e)
 		}
 	}
+
+	return result, nil
 }
 
 func emitAssistant(result *[]byte, base transcriptLine, e parsedEntry) {
@@ -396,14 +282,11 @@ func appendLine(result *[]byte, line transcriptLine) {
 }
 
 // parseJSONLEntries parses all JSONL lines into intermediate entries,
-// filtering dropped types and malformed lines. Each entry's sourceLine
-// records the 0-indexed input line it came from, so callers like
-// CompactWithOffset can match SliceFromLine semantics without re-parsing.
+// filtering dropped types and malformed lines.
 func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEntry, error) {
 	reader := bufio.NewReader(bytes.NewReader(content))
 	var entries []parsedEntry
 
-	sourceLine := 0
 	for {
 		lineBytes, err := reader.ReadBytes('\n')
 		if err != nil && err != io.EOF {
@@ -412,7 +295,6 @@ func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEnt
 
 		if len(bytes.TrimSpace(lineBytes)) > 0 {
 			if e, ok := parseLine(lineBytes, preprocess); ok {
-				e.sourceLine = sourceLine
 				entries = append(entries, e)
 			}
 		}
@@ -420,7 +302,6 @@ func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEnt
 		if err == io.EOF {
 			break
 		}
-		sourceLine++
 	}
 
 	return entries, nil

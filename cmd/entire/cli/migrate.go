@@ -602,10 +602,10 @@ func migrateOneCheckpoint(ctx context.Context, repo *git.Repository, v1Store *ch
 
 		opts := buildMigrateWriteOpts(content, info, summary.CombinedAttribution)
 
-		compacted, offset := tryCompactTranscriptWithOffset(ctx, content.Transcript, content.Metadata)
+		compacted := tryCompactTranscript(ctx, content.Transcript, content.Metadata)
 		if compacted != nil {
 			opts.CompactTranscript = compacted
-			opts.CompactTranscriptStart = offset
+			opts.CompactTranscriptStart = computeCompactOffset(ctx, content.Transcript, compacted, content.Metadata)
 		} else if len(content.Transcript) > 0 {
 			compactFailed = true
 		}
@@ -1210,45 +1210,6 @@ func buildMigrateWriteOpts(content *checkpoint.SessionContent, info checkpoint.C
 
 func tryCompactTranscript(ctx context.Context, transcript []byte, m checkpoint.CommittedMetadata) []byte {
 	return compactTranscriptForStartLine(ctx, transcript, m, 0)
-}
-
-// tryCompactTranscriptWithOffset runs the compact + offset computation in a
-// single pass via compact.CompactWithOffset. Equivalent to calling
-// tryCompactTranscript followed by computeCompactOffset, but skips the
-// second compact's emit phase on JSONL inputs (the migration's hot path).
-// Returns (nil, 0) on any failure, mirroring tryCompactTranscript so callers
-// can keep the same compact-skipped accounting.
-func tryCompactTranscriptWithOffset(ctx context.Context, transcriptBytes []byte, m checkpoint.CommittedMetadata) ([]byte, int) {
-	if len(transcriptBytes) == 0 {
-		return nil, 0
-	}
-	if m.Agent == "" {
-		logging.Warn(ctx, "compact transcript skipped: no agent type in checkpoint metadata",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-		)
-		return nil, 0
-	}
-	bytes, offset, err := compact.WithOffset(redact.AlreadyRedacted(transcriptBytes), compact.MetadataFields{
-		Agent:      string(m.Agent),
-		CLIVersion: versioninfo.Version,
-	}, m.GetTranscriptStart())
-	if err != nil {
-		logging.Warn(ctx, "compact transcript generation failed during migration",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", err.Error()),
-		)
-		return nil, 0
-	}
-	if len(bytes) == 0 {
-		logging.Warn(ctx, "transcript.jsonl generation produced no output",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.Int("input_bytes", len(transcriptBytes)),
-		)
-		return nil, 0
-	}
-	return bytes, offset
 }
 
 func compactTranscriptForStartLine(ctx context.Context, transcript []byte, m checkpoint.CommittedMetadata, startLine int) []byte {
