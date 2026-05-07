@@ -55,7 +55,7 @@ func TestReviewCmd_Help(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"review", "--edit", "--agent", "attach", "Labs entry"} {
+	for _, want := range []string{"review", "--edit", "--findings", "--fix", "--all", "--agent", "attach", "Labs entry"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--help output missing %q: %s", want, out)
 		}
@@ -78,6 +78,48 @@ func TestNewReviewCmd_NoHiddenFlags(t *testing.T) {
 		if reviewCmd.Flags().Lookup(name) != nil {
 			t.Errorf("found removed flag: --%s", name)
 		}
+	}
+}
+
+func TestReviewFindings_NotGitRepoReturnsSilentError(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	rootCmd := cli.NewRootCmd()
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review", "--findings"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error outside a git repo")
+	}
+	var silentErr *cli.SilentError
+	if !errors.As(err, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", err, err)
+	}
+	if got := strings.Count(errBuf.String(), "Not a git repository"); got != 1 {
+		t.Fatalf("not-git message count = %d, want 1; stderr:\n%s", got, errBuf.String())
+	}
+}
+
+func TestReviewFix_NotGitRepoReturnsSilentError(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	rootCmd := cli.NewRootCmd()
+	errBuf := &bytes.Buffer{}
+	rootCmd.SetErr(errBuf)
+	rootCmd.SetArgs([]string{"review", "--fix", "review-session"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error outside a git repo")
+	}
+	var silentErr *cli.SilentError
+	if !errors.As(err, &silentErr) {
+		t.Fatalf("expected SilentError, got %T: %v", err, err)
+	}
+	if got := strings.Count(errBuf.String(), "Not a git repository"); got != 1 {
+		t.Fatalf("not-git message count = %d, want 1; stderr:\n%s", got, errBuf.String())
 	}
 }
 
@@ -460,7 +502,7 @@ func TestDispatchFork_MultiAgentPassesPerAgentConfigs(t *testing.T) {
 			Skills: []string{"/review"},
 			Prompt: "Claude saved prompt.",
 		},
-		"codex": {
+		testCodexAgent: {
 			Skills: []string{"/review"},
 			Prompt: "Codex saved prompt.",
 		},
@@ -469,17 +511,17 @@ func TestDispatchFork_MultiAgentPassesPerAgentConfigs(t *testing.T) {
 	}
 
 	claudeReviewer := &captureRunConfigReviewer{name: "claude-code"}
-	codexReviewer := &captureRunConfigReviewer{name: "codex"}
+	codexReviewer := &captureRunConfigReviewer{name: testCodexAgent}
 	multiPickerFn := func(_ context.Context, _ []review.AgentChoice) (review.PickedAgents, error) {
 		return review.PickedAgents{
-			Names:  []string{"claude-code", "codex"},
+			Names:  []string{"claude-code", testCodexAgent},
 			PerRun: "Focus this run on regressions.",
 		}, nil
 	}
 
 	deps := review.Deps{
 		GetAgentsWithHooksInstalled: func(_ context.Context) []types.AgentName {
-			return []types.AgentName{"claude-code", "codex"}
+			return []types.AgentName{"claude-code", testCodexAgent}
 		},
 		NewSilentError: func(err error) error { return err },
 		MultiPickerFn:  multiPickerFn,
@@ -490,7 +532,7 @@ func TestDispatchFork_MultiAgentPassesPerAgentConfigs(t *testing.T) {
 			switch agentName {
 			case "claude-code":
 				return claudeReviewer
-			case "codex":
+			case testCodexAgent:
 				return codexReviewer
 			default:
 				return nil
