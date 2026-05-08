@@ -193,14 +193,18 @@ func handleLifecycleSessionStart(ctx context.Context, ag agent.Agent, event *age
 	}
 
 	// Fire EventSessionStart for the current session (if state exists).
-	if mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
+	// SessionStart can fire before InitializeSession creates the state file,
+	// so ErrStateNotFound is the normal first-session path — only warn on
+	// genuinely unexpected errors, matching the rest of this file.
+	mutErr := strategy.MutateSessionState(ctx, event.SessionID, func(state *strategy.SessionState) error {
 		persistEventMetadataToState(event, state)
 		if transErr := strategy.TransitionAndLog(ctx, state, session.EventSessionStart, session.TransitionContext{}, session.NoOpActionHandler{}); transErr != nil {
 			logging.Warn(logCtx, "session start transition failed",
 				slog.String("error", transErr.Error()))
 		}
 		return nil
-	}); mutErr != nil {
+	})
+	if mutErr != nil && !errors.Is(mutErr, strategy.ErrStateNotFound) {
 		logging.Warn(logCtx, "failed to update session state on start",
 			slog.String("error", mutErr.Error()))
 	}

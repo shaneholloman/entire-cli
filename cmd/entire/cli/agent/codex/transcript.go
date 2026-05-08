@@ -237,9 +237,13 @@ func classifyApplyPatchPaths(input string) (added, modified, deleted []string) {
 				continue
 			}
 			if lastUpdate != "" {
-				bucket[lastUpdate] = applyPatchVerbDelete
+				if existing, ok := bucket[lastUpdate]; !ok || (existing != applyPatchVerbAdd && existing != applyPatchVerbDelete) {
+					bucket[lastUpdate] = applyPatchVerbDelete
+				}
 			}
-			bucket[target] = applyPatchVerbAdd
+			if existing, ok := bucket[target]; !ok || (existing != applyPatchVerbAdd && existing != applyPatchVerbDelete) {
+				bucket[target] = applyPatchVerbAdd
+			}
 			lastUpdate = ""
 		}
 	}

@@ -285,6 +285,28 @@ func TestClassifyApplyPatchPaths_MoveToWithSiblingHunks(t *testing.T) {
 	require.Equal(t, []string{"a.rs", "gone.txt"}, deleted)
 }
 
+// TestClassifyApplyPatchPaths_MoveDoesNotOverwriteStickyAdd pins the
+// sticky-verb invariant against the Move-to handler. A path already
+// classified as Add must survive a later Update+Move-to that names it
+// as the source. Codex itself doesn't emit envelopes shaped like this,
+// but the invariant is documented and we don't want a quiet downgrade
+// if the grammar ever loosens.
+func TestClassifyApplyPatchPaths_MoveDoesNotOverwriteStickyAdd(t *testing.T) {
+	t.Parallel()
+	added, modified, deleted := classifyApplyPatchPaths(
+		"*** Begin Patch\n" +
+			"*** Add File: foo.txt\n" +
+			"+content\n" +
+			"*** Update File: foo.txt\n" +
+			"*** Move to: bar.txt\n" +
+			"@@\n-x\n+y\n" +
+			"*** End Patch\n",
+	)
+	require.Equal(t, []string{"bar.txt", "foo.txt"}, added)
+	require.Empty(t, modified)
+	require.Empty(t, deleted)
+}
+
 func TestSplitJSONL(t *testing.T) {
 	t.Parallel()
 
