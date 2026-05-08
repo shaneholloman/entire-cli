@@ -269,6 +269,42 @@ func TestRecordFilesTouched_EmptyInputsIsNoop(t *testing.T) {
 	require.Equal(t, []string{"keep.txt"}, loaded.FilesTouched)
 }
 
+// TestClearSessionState_PreservesLockFile pins the rule that ClearSessionState
+// must NOT unlink the per-session lock file. Unlinking the lock path while
+// another process holds an advisory lock on the inode would let a third
+// caller recreate the file and acquire an independent lock — losing mutual
+// exclusion. The lock file is a 0-byte sentinel; leaving it on disk after
+// state-file removal is harmless.
+func TestClearSessionState_PreservesLockFile(t *testing.T) {
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	t.Chdir(dir)
+
+	sessionID := "ft-clear-keeps-lock"
+	state := &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "deadbeef",
+		StartedAt:  time.Now(),
+	}
+	require.NoError(t, SaveSessionState(context.Background(), state))
+
+	// Touch the lock file by entering MutateSessionState once.
+	require.NoError(t, MutateSessionState(context.Background(), sessionID, func(_ *SessionState) error {
+		return ErrMutationSkip
+	}))
+
+	lockPath, err := stateLockPath(context.Background(), sessionID)
+	require.NoError(t, err)
+	_, statErr := os.Stat(lockPath)
+	require.NoError(t, statErr, "lock file must exist after a MutateSessionState call")
+
+	require.NoError(t, ClearSessionState(context.Background(), sessionID))
+
+	_, statErr = os.Stat(lockPath)
+	require.NoError(t, statErr, "ClearSessionState must not unlink the lock file (would break flock semantics)")
+}
+
 // TestMutateSessionState_DoesNotClobberRicherStateUnderRace simulates the
 // TOCTOU window between an existence check and a default-state init: a
 // caller observes "no state", but a concurrent richer write lands before

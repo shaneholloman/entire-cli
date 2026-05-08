@@ -595,11 +595,12 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 		_ = os.Remove(f)
 	}
 
-	// Lock files live under entire-session-locks/ — sweep them too so a
-	// re-created session for the same ID starts with a fresh lock file.
-	if commonDir, cdErr := GetGitCommonDir(ctx); cdErr == nil {
-		_ = os.Remove(filepath.Join(commonDir, "entire-session-locks", sessionID+".lock"))
-	}
-
+	// Intentionally do NOT remove the per-session lock file under
+	// entire-session-locks/. POSIX flock and Windows LockFileEx are bound to
+	// the inode/file-handle: unlinking the lock path while another process
+	// holds it lets a third caller recreate the file and acquire an
+	// independent lock, breaking mutual exclusion. Lock files are 0-byte
+	// sentinels and session IDs aren't reused, so leaving them in place is
+	// harmless. Bulk cleanup happens via RemoveAll on uninstall.
 	return nil
 }
