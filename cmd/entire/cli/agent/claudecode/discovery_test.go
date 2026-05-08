@@ -381,13 +381,6 @@ func TestDiscoverReviewSkills_UserSkillsDir(t *testing.T) {
 	}
 }
 
-// TestDiscoverReviewSkills_DedupesSkillAndCommandSameName covers the
-// real-world paxos plugin shape: a `skills/<name>/SKILL.md` (the actual
-// implementation) plus a thin `commands/<name>.md` wrapper that forwards
-// $ARGUMENTS to the skill. Both produce the same `/<plugin>:<name>`
-// invocation, so the picker would otherwise show two identical rows.
-// First-seen wins, and skills are scanned before commands, so the skill
-// is the entry kept.
 func TestDiscoverReviewSkills_DedupesSkillAndCommandSameName(t *testing.T) {
 	home := withFakeHome(t)
 	versionDir := filepath.Join(home, ".claude", "plugins", "cache",
@@ -423,6 +416,6 @@ func TestDiscoverReviewSkills_DedupesSkillAndCommandSameName(t *testing.T) {
 		t.Errorf("Name = %q, want /paxos:review", skills[0].Name)
 	}
 	if skills[0].Description != "real review skill" {
-		t.Errorf("Description = %q; want skill description (skills scanned before commands, first-seen wins)", skills[0].Description)
+		t.Errorf("Description = %q; want skill description", skills[0].Description)
 	}
 }

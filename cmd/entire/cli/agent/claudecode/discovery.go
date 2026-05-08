@@ -52,14 +52,9 @@ func (c *ClaudeCodeAgent) DiscoverReviewSkills(ctx context.Context) ([]agent.Dis
 	return found, nil
 }
 
-// dedupeByInvocation collapses entries that share an invocation name. A
-// single plugin commonly ships both `skills/<name>/SKILL.md` (the real
-// implementation) and `commands/<name>.md` (a thin wrapper that forwards
-// args to the skill); both produce the same `/<plugin>:<name>` invocation
-// and would otherwise show up as duplicate rows in the picker. First-seen
-// wins, which — given scan order skills/ → commands/ → agents/, then user
-// skills/ → user commands/ → user agents/ — keeps the skill (the real
-// implementation) over its command wrapper.
+// dedupeByInvocation collapses entries sharing an invocation name. Plugins
+// can ship a skill and a same-named command wrapper that forwards to it;
+// scan order keeps the skill over its wrapper.
 func dedupeByInvocation(in []agent.DiscoveredSkill) []agent.DiscoveredSkill {
 	if len(in) < 2 {
 		return in
