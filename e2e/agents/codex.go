@@ -239,7 +239,7 @@ func seedCodexHome(home, projectDir string) error {
 	if model == "" {
 		model = "gpt-5.4"
 	}
-	config := fmt.Sprintf("model = %q\n\n[features]\ncodex_hooks = true\n\n[projects.%q]\ntrust_level = \"trusted\"\n", model, projectDir)
+	config := fmt.Sprintf("model = %q\n\n[features]\nhooks = true\n\n[projects.%q]\ntrust_level = \"trusted\"\n", model, projectDir)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 		return err
 	}

@@ -349,11 +349,19 @@ func removeEntireHooks(groups []MatcherGroup) []MatcherGroup {
 // configFileName is the Codex config file name.
 const configFileName = "config.toml"
 
-// featureLine is the TOML line that enables the codex_hooks feature.
-const featureLine = "codex_hooks = true"
+// featureLine is the TOML line that enables the hooks feature. The flag was
+// renamed from `codex_hooks` to `hooks` in Codex 0.129.0; the old name is
+// still accepted as a legacy alias but emits a deprecation warning at
+// every startup. ensureProjectFeatureEnabled rewrites the legacy form when
+// it sees it.
+const (
+	featureLine       = "hooks = true"
+	legacyFeatureLine = "codex_hooks = true"
+)
 
-// ensureProjectFeatureEnabled writes features.codex_hooks = true to the
+// ensureProjectFeatureEnabled writes features.hooks = true to the
 // project-level .codex/config.toml. This keeps the feature flag per-repo.
+// Replaces the deprecated codex_hooks = true line if it's present.
 func ensureProjectFeatureEnabled(repoRoot string) error {
 	configPath := filepath.Join(repoRoot, ".codex", configFileName)
 
@@ -363,13 +371,18 @@ func ensureProjectFeatureEnabled(repoRoot string) error {
 	}
 
 	content := string(data)
-	if strings.Contains(content, featureLine) {
+	hasNew := containsFeatureLine(content, featureLine)
+	hasLegacy := containsFeatureLine(content, legacyFeatureLine)
+	switch {
+	case hasNew && hasLegacy:
+		content = stripLegacyFeatureLine(content)
+	case hasNew:
 		return nil
-	}
-
-	if strings.Contains(content, "[features]") {
+	case hasLegacy:
+		content = strings.Replace(content, legacyFeatureLine, featureLine, 1)
+	case strings.Contains(content, "[features]"):
 		content = strings.Replace(content, "[features]", "[features]\n"+featureLine, 1)
-	} else {
+	default:
 		if len(content) > 0 && !strings.HasSuffix(content, "\n") {
 			content += "\n"
 		}
@@ -383,4 +396,32 @@ func ensureProjectFeatureEnabled(repoRoot string) error {
 		return fmt.Errorf("failed to write config.toml: %w", err)
 	}
 	return nil
+}
+
+// containsFeatureLine checks for an exact line match. A plain
+// strings.Contains is wrong because "hooks = true" is a substring of
+// "codex_hooks = true" — without the line-boundary anchor we'd treat the
+// legacy form as if the new form was already present.
+func containsFeatureLine(content, line string) bool {
+	for _, raw := range strings.Split(content, "\n") {
+		if strings.TrimSpace(raw) == line {
+			return true
+		}
+	}
+	return false
+}
+
+// stripLegacyFeatureLine removes the deprecated `codex_hooks = true` line
+// from a TOML config string, dropping a trailing blank line so the file
+// stays tidy. The new `hooks = true` is added separately by the caller.
+func stripLegacyFeatureLine(content string) string {
+	idx := strings.Index(content, legacyFeatureLine)
+	if idx < 0 {
+		return content
+	}
+	end := idx + len(legacyFeatureLine)
+	if end < len(content) && content[end] == '\n' {
+		end++
+	}
+	return content[:idx] + content[end:]
 }

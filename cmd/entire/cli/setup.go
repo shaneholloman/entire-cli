@@ -1491,6 +1491,11 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 			msg += " (Preview)"
 		}
 		fmt.Fprintf(w, "  %s\n", msg)
+		// Codex 0.129+ gates unmanaged hooks on per-user trust review. The
+		// hooks won't actually run until the user approves them once.
+		if ag.Type() == agent.AgentTypeCodex {
+			fmt.Fprintln(w, "    Codex 0.129+ requires you to approve new hooks once: run /hooks inside Codex to trust them.")
+		}
 	}
 
 	fmt.Fprintln(w, "  ✓ Configured project")
