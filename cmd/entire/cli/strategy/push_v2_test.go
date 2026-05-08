@@ -109,6 +109,26 @@ func v2CheckpointCountInRef(t *testing.T, repo *git.Repository, refName plumbing
 	return count
 }
 
+func writeV2ArchiveRef(t *testing.T, repo *git.Repository, refName plumbing.ReferenceName, marker string) plumbing.Hash {
+	t.Helper()
+
+	blobHash, err := checkpoint.CreateBlobFromContent(repo, []byte(marker))
+	require.NoError(t, err)
+	treeHash, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
+		paths.GenerationFileName: {
+			Name: paths.GenerationFileName,
+			Mode: 0o100644,
+			Hash: blobHash,
+		},
+	})
+	require.NoError(t, err)
+	commitHash, err := checkpoint.CreateCommit(context.Background(), repo, treeHash, plumbing.ZeroHash,
+		"Archive generation", "Test", "test@test.com")
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)))
+	return commitHash
+}
+
 // TestFetchAndMergeRef_MergesTrees verifies that fetchAndMergeRef correctly
 // merges divergent trees from two repos sharing a common ref.
 // Not parallel: uses t.Chdir()
@@ -287,6 +307,40 @@ func TestPushV2Refs_LocalRotationDoesNotRehydrateArchivedCurrent(t *testing.T) {
 	assert.Equal(t, 3, v2CheckpointCountInRef(t, bareRepo, archiveRef))
 	assert.Equal(t, 0, v2CheckpointCountInRef(t, bareRepo, fullCurrentRef),
 		"remote /full/current must stay fresh after publishing a local rotation")
+}
+
+func TestDetectRemoteRotationArchives_IncludesSameNameDifferentHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	archiveRef := plumbing.ReferenceName(paths.V2FullRefPrefix + "0000000000001")
+
+	localDir := setupRepoWithV2Ref(t)
+	localRepo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	localHash := writeV2ArchiveRef(t, localRepo, archiveRef, "local archive")
+
+	remoteDir := setupRepoWithV2Ref(t)
+	remoteRepo, err := git.PlainOpen(remoteDir)
+	require.NoError(t, err)
+	remoteHash := writeV2ArchiveRef(t, remoteRepo, archiveRef, "remote archive")
+	require.NotEqual(t, localHash, remoteHash)
+
+	bareDir := t.TempDir()
+	initCmd := exec.CommandContext(ctx, "git", "init", "--bare")
+	initCmd.Dir = bareDir
+	initCmd.Env = testutil.GitIsolatedEnv()
+	out, err := initCmd.CombinedOutput()
+	require.NoError(t, err, "git init --bare failed: %s", out)
+
+	pushArchive := exec.CommandContext(ctx, "git", "push", bareDir,
+		string(archiveRef)+":"+string(archiveRef))
+	pushArchive.Dir = remoteDir
+	out, err = pushArchive.CombinedOutput()
+	require.NoError(t, err, "archive push failed: %s", out)
+
+	archives, err := detectRemoteRotationArchives(ctx, bareDir, localRepo)
+	require.NoError(t, err)
+	assert.Contains(t, archives, "0000000000001")
 }
 
 func TestPrintV2PartialPushResult(t *testing.T) {

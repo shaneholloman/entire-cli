@@ -361,9 +361,9 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 
 	// Check for rotation conflict on /full/current
 	if refName == plumbing.ReferenceName(paths.V2FullCurrentRefName) {
-		remoteOnlyArchives, detectErr := detectRemoteOnlyArchives(ctx, target, repo)
-		if detectErr == nil && len(remoteOnlyArchives) > 0 {
-			return handleRotationConflict(ctx, target, fetchTarget, repo, refName, tmpRefName, remoteOnlyArchives)
+		remoteRotationArchives, detectErr := detectRemoteRotationArchives(ctx, target, repo)
+		if detectErr == nil && len(remoteRotationArchives) > 0 {
+			return handleRotationConflict(ctx, target, fetchTarget, repo, refName, tmpRefName, remoteRotationArchives)
 		}
 	}
 
@@ -422,9 +422,10 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	return nil
 }
 
-// detectRemoteOnlyArchives discovers archived generation refs on the remote
-// that don't exist locally. Returns them sorted ascending (oldest first).
-func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repository) ([]string, error) {
+// detectRemoteRotationArchives discovers archived generation refs on the remote
+// that are missing locally or whose local ref hash differs from the remote ref
+// hash. Returns them sorted ascending (oldest first).
+func detectRemoteRotationArchives(ctx context.Context, target string, repo *git.Repository) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -433,7 +434,7 @@ func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repo
 		return nil, fmt.Errorf("ls-remote failed: %w", err)
 	}
 
-	var remoteOnly []string
+	var remoteRotationArchives []string
 	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		if line == "" {
 			continue
@@ -447,16 +448,18 @@ func detectRemoteOnlyArchives(ctx context.Context, target string, repo *git.Repo
 		if suffix == "current" || !checkpoint.GenerationRefPattern.MatchString(suffix) {
 			continue
 		}
-		// Only check for existence, not hash equality. A locally-present archive
-		// could be stale if another machine updated it via rotation conflict recovery,
-		// but that's unlikely and the checkpoints are still on /main regardless.
-		if _, err := repo.Reference(plumbing.ReferenceName(refName), true); err != nil {
-			remoteOnly = append(remoteOnly, suffix)
+		if len(parts[0]) != 40 {
+			return nil, fmt.Errorf("invalid remote archive hash %q for %s", parts[0], refName)
+		}
+		remoteHash := plumbing.NewHash(parts[0])
+		localRef, err := repo.Reference(plumbing.ReferenceName(refName), true)
+		if err != nil || localRef.Hash() != remoteHash {
+			remoteRotationArchives = append(remoteRotationArchives, suffix)
 		}
 	}
 
-	sort.Strings(remoteOnly)
-	return remoteOnly, nil
+	sort.Strings(remoteRotationArchives)
+	return remoteRotationArchives, nil
 }
 
 // handleRotationConflict handles the case where remote /full/current was rotated.
