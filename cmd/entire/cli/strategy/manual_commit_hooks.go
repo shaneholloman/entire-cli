@@ -995,7 +995,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		sessionID := sess.SessionID
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		mutErr := MutateSessionState(iterCtx, sessionID, func(state *SessionState) error {
-			s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
+			s.postCommitProcessSessionLocked(iterCtx, repo, state, &transitionCtx, checkpointID,
 				head, commit, newHead, worktreePath, headTree, parentTree,
 				committedFileSet, shadowBranchesToDelete, uncondensedActiveOnBranch, allAgentFiles,
 				sessionsWithCommittedFiles)
@@ -1155,14 +1155,14 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 	return nil
 }
 
-// postCommitProcessSession handles a single session within the PostCommit loop.
+// postCommitProcessSessionLocked handles a single session within the PostCommit loop.
 // Pre-resolved git objects (headTree, parentTree) are shared across all sessions;
 // per-session shadow ref/tree are resolved once here and threaded through sub-calls.
 //
 // MUST be called from inside MutateSessionState. Mutations to state are persisted
 // by the caller's outer save — calling this function standalone silently loses
 // every field change (StepCount, FilesTouched, CheckpointTranscriptStart, …).
-func (s *ManualCommitStrategy) postCommitProcessSession(
+func (s *ManualCommitStrategy) postCommitProcessSessionLocked(
 	ctx context.Context,
 	repo *git.Repository,
 	state *SessionState,

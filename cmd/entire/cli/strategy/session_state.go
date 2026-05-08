@@ -393,23 +393,26 @@ type sessionGate struct {
 
 // goroutineID extracts the runtime goroutine ID from the stack header. Used
 // only as a reentrancy key for the session mutation gate — never as a
-// security boundary or for application logic.
+// security boundary or for application logic. Returns -1 if the stack
+// header doesn't parse: real goroutine IDs are positive, and gate.owner is
+// initialised to 0, so a -1 sentinel can't falsely match the freshly-
+// constructed gate (or a freshly-released one).
 func goroutineID() int64 {
 	var buf [64]byte
 	n := runtime.Stack(buf[:], false)
 	const prefix = "goroutine "
 	s := string(buf[:n])
 	if !strings.HasPrefix(s, prefix) {
-		return 0
+		return -1
 	}
 	s = s[len(prefix):]
 	end := strings.IndexByte(s, ' ')
 	if end < 0 {
-		return 0
+		return -1
 	}
 	id, err := strconv.ParseInt(s[:end], 10, 64)
 	if err != nil {
-		return 0
+		return -1
 	}
 	return id
 }

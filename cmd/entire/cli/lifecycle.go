@@ -999,11 +999,9 @@ func transitionSessionTurnEnd(ctx context.Context, sessionID string, event *agen
 			logging.Warn(logCtx, "turn-end transition failed",
 				slog.String("error", err.Error()))
 		}
-		// HandleTurnEnd may itself call into session-state APIs; today it
-		// uses s.saveSessionState internally, which is being migrated to
-		// MutateSessionState. The lock is reentrant within this process
-		// because each call opens its own FD; cross-process safety is
-		// preserved.
+		// HandleTurnEnd mutates state in-place; the outer MutateSessionState
+		// save flushes those changes. Any reentrant MutateSessionState calls
+		// it makes on this session ID share this state pointer via the gate.
 		strat := GetStrategy(ctx)
 		if err := strat.HandleTurnEnd(ctx, state); err != nil {
 			logging.Warn(logCtx, "turn-end action dispatch failed",
