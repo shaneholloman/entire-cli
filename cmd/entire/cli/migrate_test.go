@@ -741,7 +741,7 @@ func TestMigrateCmd_RepairsArchivedGenerationMetadata(t *testing.T) {
 	repo := initMigrateTestRepo(t)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
-	t.Chdir(wt.Filesystem.Root())
+	t.Chdir(wt.Filesystem().Root())
 	paths.ClearWorktreeRootCache()
 
 	// A pre-existing archived generation with wrong generation.json
@@ -787,7 +787,7 @@ func TestMigrateCmd_NoOpRerunSkipsGenerationMetadataRepair(t *testing.T) {
 	repo := initMigrateTestRepo(t)
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
-	t.Chdir(wt.Filesystem.Root())
+	t.Chdir(wt.Filesystem().Root())
 	paths.ClearWorktreeRootCache()
 
 	v1Store, v2Store := newMigrateStores(repo)
