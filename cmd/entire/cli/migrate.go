@@ -344,12 +344,13 @@ func migrateCheckpointsV2(ctx context.Context, repo *git.Repository, v1Store *ch
 					nextGeneration = next
 				}
 				refName := checkpoint.ArchivedGenerationRefName(nextGeneration)
-				if packErr := writeMigratedFullGeneration(ctx, repo, v2Store, refName, pendingFull); packErr != nil {
+				archiveCommitHash, packErr := writeMigratedFullGeneration(ctx, repo, v2Store, refName, pendingFull)
+				if packErr != nil {
 					processSpan.RecordError(packErr)
 					processSpan.End()
 					return result, writtenRefs, fmt.Errorf("failed to pack migrated raw transcripts: %w", packErr)
 				}
-				if queueErr := queueMigratedFullGenerationPublication(ctx, repo, v2Store, refName); queueErr != nil {
+				if queueErr := queueMigratedFullGenerationPublication(ctx, v2Store, refName, archiveCommitHash); queueErr != nil {
 					// The archive ref and pending publication record must move together.
 					// If queueing fails, leave no archive ref behind so a retry can
 					// repack the generation and queue it again.
@@ -679,17 +680,17 @@ func repoWorktreeRoot(repo *git.Repository) (string, error) {
 	return root, nil
 }
 
-func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, checkpoints []migratedFullCheckpoint) error {
+func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, checkpoints []migratedFullCheckpoint) (plumbing.Hash, error) {
 	fullEntries, err := buildMigratedFullEntrySet(ctx, repo, checkpoints)
 	if err != nil {
-		return fmt.Errorf("write migrated generation entries: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("write migrated generation entries: %w", err)
 	}
 
 	entries := make(map[string]object.TreeEntry, len(fullEntries.rawEntries)+len(fullEntries.taskEntries))
 	fullEntries.mergeInto(entries)
 	treeHash, err := checkpoint.BuildTreeFromEntries(ctx, repo, entries)
 	if err != nil {
-		return fmt.Errorf("build migrated generation tree: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("build migrated generation tree: %w", err)
 	}
 
 	// Reuse the transcripts already in memory rather than walking the tree
@@ -699,44 +700,40 @@ func writeMigratedFullGeneration(ctx context.Context, repo *git.Repository, v2St
 		var err error
 		gen, found, err = v2Store.ComputeGenerationCheckpointTimestamps(treeHash)
 		if err != nil {
-			return fmt.Errorf("compute checkpoint timestamps: %w", err)
+			return plumbing.ZeroHash, fmt.Errorf("compute checkpoint timestamps: %w", err)
 		}
 	}
 	if !found {
 		gen, found = generationMetadataFromMigratedSessions(checkpoints)
 	}
 	if !found {
-		return fmt.Errorf("no timestamps found for migrated generation %s", refName)
+		return plumbing.ZeroHash, fmt.Errorf("no timestamps found for migrated generation %s", refName)
 	}
 
 	treeHash, err = v2Store.AddGenerationJSONToTree(treeHash, gen)
 	if err != nil {
-		return fmt.Errorf("add generation metadata: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("add generation metadata: %w", err)
 	}
 
 	commitHash, err := checkpoint.CreateCommit(ctx, repo, treeHash, plumbing.ZeroHash,
 		fmt.Sprintf("Archive migrated generation: %s\n", refName),
 		migrateAuthorName, migrateAuthorEmail)
 	if err != nil {
-		return fmt.Errorf("create migrated generation commit: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("create migrated generation commit: %w", err)
 	}
 
 	if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, commitHash)); err != nil {
-		return fmt.Errorf("update migrated generation ref %s: %w", refName, err)
+		return plumbing.ZeroHash, fmt.Errorf("update migrated generation ref %s: %w", refName, err)
 	}
-	return nil
+	return commitHash, nil
 }
 
-func queueMigratedFullGenerationPublication(ctx context.Context, repo *git.Repository, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName) error {
-	ref, err := repo.Reference(refName, true)
-	if err != nil {
-		return fmt.Errorf("read migrated generation ref %s: %w", refName, err)
-	}
-	if err := v2Store.AppendPendingFullGenerationPublications(ctx, []checkpoint.PendingV2FullGenerationPublication{{
+func queueMigratedFullGenerationPublication(ctx context.Context, v2Store *checkpoint.V2GitStore, refName plumbing.ReferenceName, archiveCommitHash plumbing.Hash) error {
+	if err := v2Store.AppendPendingFullGenerationPublication(ctx, checkpoint.PendingV2FullGenerationPublication{
 		ArchiveRefName:    refName.String(),
-		ArchiveCommitHash: ref.Hash().String(),
+		ArchiveCommitHash: archiveCommitHash.String(),
 		QueuedAt:          time.Now().UTC(),
-	}}); err != nil {
+	}); err != nil {
 		return fmt.Errorf("append pending archive publication for %s: %w", refName, err)
 	}
 	return nil

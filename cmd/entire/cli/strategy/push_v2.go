@@ -532,12 +532,16 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 		return fetchedRemoteRotationArchive{}, fmt.Errorf("fetch archived generations failed: %s", output)
 	}
 
+	localCurrentAncestors, ok := currentGenerationAncestors(ctx, repo, localCurrentHash)
+	if !ok {
+		return fetchedRemoteRotationArchive{}, errors.New("failed to read local /full/current history")
+	}
 	for _, archive := range archives {
 		fetched, err := readFetchedRemoteRotationArchive(repo, archive)
 		if err != nil {
 			return fetchedRemoteRotationArchive{}, err
 		}
-		if archiveContainsCurrentGenerationBase(ctx, repo, localCurrentHash, fetched.ref.Hash()) {
+		if archiveSharesHistoryWithCurrentGeneration(ctx, repo, localCurrentAncestors, fetched.ref.Hash()) {
 			return fetched, nil
 		}
 		_ = repo.Storer.RemoveReference(fetched.tmpRefName) //nolint:errcheck // cleanup is best-effort
@@ -545,16 +549,14 @@ func fetchRelatedRemoteRotationArchive(ctx context.Context, fetchTarget string, 
 	return fetchedRemoteRotationArchive{}, errors.New("no remote archive shares history with local /full/current")
 }
 
-func archiveContainsCurrentGenerationBase(ctx context.Context, repo *git.Repository, currentHash, archiveHash plumbing.Hash) bool {
-	if currentHash == archiveHash {
-		return true
-	}
-
+func currentGenerationAncestors(ctx context.Context, repo *git.Repository, currentHash plumbing.Hash) (map[plumbing.Hash]struct{}, bool) {
 	ancestors := make(map[plumbing.Hash]struct{})
 	iter, err := repo.Log(&git.LogOptions{From: currentHash})
 	if err != nil {
-		return false
+		return nil, false
 	}
+	defer iter.Close()
+
 	count := 0
 	_ = iter.ForEach(func(c *object.Commit) error { //nolint:errcheck // Best-effort search, errors are non-fatal
 		if err := ctx.Err(); err != nil {
@@ -567,16 +569,22 @@ func archiveContainsCurrentGenerationBase(ctx context.Context, repo *git.Reposit
 		ancestors[c.Hash] = struct{}{}
 		return nil
 	})
-	iter.Close()
+	return ancestors, true
+}
 
-	iter, err = repo.Log(&git.LogOptions{From: archiveHash})
+func archiveSharesHistoryWithCurrentGeneration(ctx context.Context, repo *git.Repository, currentAncestors map[plumbing.Hash]struct{}, archiveHash plumbing.Hash) bool {
+	if _, ok := currentAncestors[archiveHash]; ok {
+		return true
+	}
+
+	iter, err := repo.Log(&git.LogOptions{From: archiveHash})
 	if err != nil {
 		return false
 	}
 	defer iter.Close()
 
 	found := false
-	count = 0
+	count := 0
 	_ = iter.ForEach(func(c *object.Commit) error { //nolint:errcheck // Best-effort search, errors are non-fatal
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // Propagating context cancellation
@@ -585,7 +593,7 @@ func archiveContainsCurrentGenerationBase(ctx context.Context, repo *git.Reposit
 		if count > MaxCommitTraversalDepth {
 			return errStop
 		}
-		if _, ok := ancestors[c.Hash]; ok {
+		if _, ok := currentAncestors[c.Hash]; ok {
 			found = true
 			return errStop
 		}
