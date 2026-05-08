@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"charm.land/huh/v2"
+	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -40,7 +43,13 @@ Checks performed:
   4. v2 checkpoint counts: verifies /main and /full/current checkpoint counts are consistent.
   5. v2 generation health: checks archived generations for valid metadata.
 
-  6. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
+  When Codex hooks are installed:
+  6. Codex hook trust: warn when hooks declared in .codex/hooks.json
+     lack a trusted_hash entry in the user's Codex config (i.e. /hooks
+     review hasn't run yet on this machine, or a newer entire release
+     added a hook the user hasn't approved yet).
+
+  7. Stuck sessions: sessions stuck in ACTIVE or ENDED phase that need cleanup.
 
 A session is considered stuck if:
   - It is in ACTIVE phase with no interaction for over 1 hour
@@ -138,6 +147,9 @@ func runSessionsFix(cmd *cobra.Command, force bool) error {
 
 		fmt.Fprintln(cmd.OutOrStdout())
 	}
+
+	// Agent-specific: Codex hook trust state.
+	checkCodexHookTrust(cmd)
 
 	// Stuck sessions
 	// Load all session states
@@ -665,6 +677,40 @@ func checkV2RefExistence(cmd *cobra.Command, repo *git.Repository) error {
 	}
 
 	return nil
+}
+
+// checkCodexHookTrust warns when Codex hooks declared in
+// <repo>/.codex/hooks.json lack a `trusted_hash` entry in the user's
+// Codex config — either a fresh-clone first-run before the user has
+// opened /hooks, or a newer entire release that added a hook the user
+// trusted on an older version.
+//
+// Detection is structural (key presence in the user's config.toml).
+// Stays silent when this repo doesn't have codex hooks installed or
+// when we can't resolve the worktree root. There's no fix we can
+// apply: the user has to approve via Codex's /hooks UI. Warn-only.
+func checkCodexHookTrust(cmd *cobra.Command) {
+	repoRoot, err := paths.WorktreeRoot(cmd.Context())
+	if err != nil {
+		return
+	}
+	if _, statErr := os.Stat(filepath.Join(repoRoot, ".codex", "hooks.json")); statErr != nil {
+		return
+	}
+
+	w := cmd.OutOrStdout()
+	gaps := codex.HookTrustGaps(repoRoot)
+	if len(gaps) == 0 {
+		fmt.Fprintln(w, "✓ Codex hook trust: OK")
+		return
+	}
+
+	fmt.Fprintln(w, "Codex hook trust: REVIEW NEEDED")
+	fmt.Fprintf(w, "  %d hook(s) declared in .codex/hooks.json have no trusted_hash entry yet:\n", len(gaps))
+	for _, ev := range gaps {
+		fmt.Fprintf(w, "    - %s\n", ev)
+	}
+	fmt.Fprintln(w, "  Open /hooks inside Codex to approve them.")
 }
 
 // canDeleteShadowBranch checks if a shadow branch can be safely deleted.

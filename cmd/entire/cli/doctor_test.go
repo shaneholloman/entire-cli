@@ -865,3 +865,87 @@ func TestRunSessionsFix_V2ChecksRunWhenEnabled(t *testing.T) {
 	assert.Contains(t, output, "v2 /main ref: OK (no remote to compare)")
 	assert.Contains(t, output, "v2 refs: OK")
 }
+
+// TestCheckCodexHookTrust_SilentWhenCodexNotInstalled — `entire doctor`
+// shouldn't print anything Codex-related when this repo doesn't have
+// .codex/hooks.json. Other agents (Claude, Cursor) keep their existing
+// quiet behavior; the codex check has to be opt-in by file presence.
+func TestCheckCodexHookTrust_SilentWhenCodexNotInstalled(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	cmd, stdout, _ := newTestCmd(t)
+	checkCodexHookTrust(cmd)
+	require.NotContains(t, stdout.String(), "Codex hook trust")
+}
+
+// resolvedHooksPath returns the .codex/hooks.json path under dir using the
+// symlink-resolved form `git rev-parse --show-toplevel` would return. Test
+// fixtures need this because t.TempDir() can produce a /var path while git
+// hands back the /private/var equivalent on macOS — divergence between the
+// two breaks the trust-state key match the production code uses.
+func resolvedHooksPath(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	return filepath.Join(resolved, ".codex", "hooks.json")
+}
+
+// TestCheckCodexHookTrust_OKWhenAllTrusted prints "✓ Codex hook trust: OK"
+// when every event declared in hooks.json has a matching state entry.
+func TestCheckCodexHookTrust_OKWhenAllTrusted(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	codexDir := filepath.Join(dir, ".codex")
+	require.NoError(t, os.MkdirAll(codexDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(`{"hooks":{"SessionStart":[{"matcher":null,"hooks":[{"type":"command","command":"x","timeout":30}]}]}}`), 0o600))
+
+	hooksPath := resolvedHooksPath(t, dir)
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	require.NoError(t, os.MkdirAll(codexHome, 0o750))
+	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
+trusted_hash = "sha256:aaa"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cmd, stdout, _ := newTestCmd(t)
+	checkCodexHookTrust(cmd)
+	require.Contains(t, stdout.String(), "✓ Codex hook trust: OK")
+}
+
+// TestCheckCodexHookTrust_ListsMissingEvents prints the gap list when a
+// hook event has no corresponding trusted_hash. Pinning the format
+// keeps the doctor output script-grep-friendly.
+func TestCheckCodexHookTrust_ListsMissingEvents(t *testing.T) {
+	dir := setupGitRepoForPhaseTest(t)
+	t.Chdir(dir)
+
+	codexDir := filepath.Join(dir, ".codex")
+	require.NoError(t, os.MkdirAll(codexDir, 0o750))
+	hooksJSON := `{"hooks":{
+		"SessionStart":[{"matcher":null,"hooks":[{"type":"command","command":"x","timeout":30}]}],
+		"PostToolUse":[{"matcher":null,"hooks":[{"type":"command","command":"x","timeout":30}]}]
+	}}`
+	require.NoError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), []byte(hooksJSON), 0o600))
+
+	hooksPath := resolvedHooksPath(t, dir)
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	require.NoError(t, os.MkdirAll(codexHome, 0o750))
+	// Trust SessionStart only — PostToolUse is the gap.
+	configTOML := `[hooks.state."` + hooksPath + `:session_start:0:0"]
+trusted_hash = "sha256:aaa"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(configTOML), 0o600))
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cmd, stdout, _ := newTestCmd(t)
+	checkCodexHookTrust(cmd)
+
+	out := stdout.String()
+	require.Contains(t, out, "Codex hook trust: REVIEW NEEDED")
+	require.Contains(t, out, "1 hook(s) declared")
+	require.Contains(t, out, "- post_tool_use")
+	require.Contains(t, out, "Open /hooks inside Codex")
+}
