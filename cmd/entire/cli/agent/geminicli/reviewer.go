@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/review"
 	reviewtypes "github.com/entireio/cli/cmd/entire/cli/review/types"
@@ -29,15 +28,14 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 
 // buildGeminiReviewCmd builds the exec.Cmd for a gemini review run.
 // Exposed at package level for test inspection of argv, stdin, and env.
+//
+// The argv shape and stdin wiring live in geminiSpawner.BuildCmd so they can
+// be reused by `entire investigate`; this wrapper composes review-specific
+// prompt + env and delegates the spawn.
 func buildGeminiReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
 	prompt := review.ComposeReviewPrompt(cfg)
-	// Per the existing GenerateText implementation: pass "-p " " " as the
-	// argv placeholder to trigger headless (non-interactive) mode, and pipe
-	// the actual prompt via stdin to avoid argv size limits.
-	cmd := exec.CommandContext(ctx, "gemini", "-p", " ")
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = review.AppendReviewEnv(os.Environ(), "gemini-cli", cfg, prompt)
-	return cmd
+	env := review.AppendReviewEnv(os.Environ(), "gemini-cli", cfg, prompt)
+	return NewSpawner().BuildCmd(ctx, env, prompt)
 }
 
 // parseGeminiOutput converts gemini's -p mode stdout into a stream of Events.

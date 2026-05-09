@@ -312,6 +312,7 @@ type checkpointExportJSON struct {
 	CheckpointsCount int                     `json:"checkpoints_count"`
 	FilesTouched     []string                `json:"files_touched,omitempty"`
 	HasReview        bool                    `json:"has_review,omitempty"`
+	HasInvestigation bool                    `json:"has_investigation,omitempty"`
 	SessionCount     int                     `json:"session_count"`
 	Sessions         []checkpointSessionJSON `json:"sessions"`
 	Partial          bool                    `json:"partial,omitempty"`
@@ -331,6 +332,15 @@ type checkpointSessionJSON struct {
 	FilesTouched []string                  `json:"files_touched,omitempty"`
 	TokenUsage   *checkpointSessionTokens  `json:"token_usage,omitempty"`
 	Summary      *checkpointSessionSummary `json:"summary,omitempty"`
+
+	// Investigation tagging — set only on sessions whose Kind is an
+	// investigate kind. Mirrors review's choice to keep the prompt body
+	// (InvestigatePrompt) out of the export envelope; consumers that need
+	// it can read the metadata directly.
+	InvestigateRunID string `json:"investigate_run_id,omitempty"`
+	InvestigateRound int    `json:"investigate_round,omitempty"`
+	InvestigateTurn  int    `json:"investigate_turn,omitempty"`
+	InvestigateTopic string `json:"investigate_topic,omitempty"`
 
 	// Error is set when this session's metadata could not be read. The Index
 	// field remains valid; all other content fields are zero. Consumers can
@@ -399,6 +409,7 @@ func buildCheckpointJSONEnvelope(ctx context.Context, reader checkpoint.Committe
 		CheckpointsCount: summary.CheckpointsCount,
 		FilesTouched:     summary.FilesTouched,
 		HasReview:        summary.HasReview,
+		HasInvestigation: summary.HasInvestigation,
 		SessionCount:     len(summary.Sessions),
 	}
 
@@ -458,16 +469,20 @@ func readSessionMetadataForExport(ctx context.Context, reader checkpoint.Committ
 
 func sessionMetadataToJSON(idx int, meta *checkpoint.CommittedMetadata) checkpointSessionJSON {
 	out := checkpointSessionJSON{
-		Index:        idx,
-		SessionID:    meta.SessionID,
-		Agent:        string(meta.Agent),
-		Model:        meta.Model,
-		Kind:         meta.Kind,
-		ReviewSkills: meta.ReviewSkills,
-		TurnID:       meta.TurnID,
-		IsTask:       meta.IsTask,
-		ToolUseID:    meta.ToolUseID,
-		FilesTouched: meta.FilesTouched,
+		Index:            idx,
+		SessionID:        meta.SessionID,
+		Agent:            string(meta.Agent),
+		Model:            meta.Model,
+		Kind:             meta.Kind,
+		ReviewSkills:     meta.ReviewSkills,
+		TurnID:           meta.TurnID,
+		IsTask:           meta.IsTask,
+		ToolUseID:        meta.ToolUseID,
+		FilesTouched:     meta.FilesTouched,
+		InvestigateRunID: meta.InvestigateRunID,
+		InvestigateRound: meta.InvestigateRound,
+		InvestigateTurn:  meta.InvestigateTurn,
+		InvestigateTopic: meta.InvestigateTopic,
 	}
 	if !meta.CreatedAt.IsZero() {
 		ts := meta.CreatedAt

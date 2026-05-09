@@ -29,15 +29,17 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 
 // buildCodexReviewCmd builds the exec.Cmd for a codex review run.
 // Exposed at package level for test inspection of argv, stdin, and env.
+//
+// The argv shape and stdin wiring live in codexSpawner.BuildCmd so they can be
+// reused by `entire investigate`; this wrapper expands the codex-specific
+// `/review` builtin into a scoped exec prompt before composing env, then
+// delegates the spawn.
 func buildCodexReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
 	promptCfg := cfg
 	promptCfg.Skills = expandCodexBuiltinReview(cfg.Skills)
-	args := []string{codexExecCommand, "--skip-git-repo-check", "-"}
 	prompt := review.ComposeReviewPrompt(promptCfg)
-	cmd := exec.CommandContext(ctx, "codex", args...)
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = review.AppendReviewEnv(os.Environ(), "codex", cfg, prompt)
-	return cmd
+	env := review.AppendReviewEnv(os.Environ(), "codex", cfg, prompt)
+	return NewSpawner().BuildCmd(ctx, env, prompt)
 }
 
 // Codex's native `exec review --base <branch>` rejects an additional prompt,

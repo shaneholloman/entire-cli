@@ -27,11 +27,14 @@ func NewReviewer() *reviewtypes.ReviewerTemplate {
 
 // buildReviewCmd builds the exec.Cmd for a claude review run.
 // Exposed at package level for test inspection of argv and env.
+//
+// The argv shape lives in claudeCodeSpawner.BuildCmd so it can be reused by
+// `entire investigate`; this wrapper composes review-specific prompt + env
+// and delegates the spawn.
 func buildReviewCmd(ctx context.Context, cfg reviewtypes.RunConfig) *exec.Cmd {
 	prompt := review.ComposeReviewPrompt(cfg)
-	cmd := exec.CommandContext(ctx, "claude", "-p", prompt)
-	cmd.Env = review.AppendReviewEnv(os.Environ(), "claude-code", cfg, prompt)
-	return cmd
+	env := review.AppendReviewEnv(os.Environ(), "claude-code", cfg, prompt)
+	return NewSpawner().BuildCmd(ctx, env, prompt)
 }
 
 // parseClaudeOutput converts claude's -p mode stdout into a stream of Events.

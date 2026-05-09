@@ -458,6 +458,11 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		Kind:                        opts.Kind,
 		ReviewSkills:                opts.ReviewSkills,
 		ReviewPrompt:                opts.ReviewPrompt,
+		InvestigateRunID:            opts.InvestigateRunID,
+		InvestigateRound:            opts.InvestigateRound,
+		InvestigateTurn:             opts.InvestigateTurn,
+		InvestigateTopic:            opts.InvestigateTopic,
+		InvestigatePrompt:           opts.InvestigatePrompt,
 	}
 
 	metadataJSON, err := jsonutil.MarshalIndentWithNewline(sessionMetadata, "", "  ")
@@ -488,6 +493,7 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 
 	combinedAttribution := opts.CombinedAttribution
 	hasReview := opts.HasReview
+	hasInvestigation := opts.HasInvestigation
 	rootMetadataPath := basePath + paths.MetadataFileName
 	if entry, exists := entries[rootMetadataPath]; exists {
 		existingSummary, readErr := s.readSummaryFromBlob(entry.Hash)
@@ -497,6 +503,9 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 			}
 			if !hasReview {
 				hasReview = existingSummary.HasReview
+			}
+			if !hasInvestigation {
+				hasInvestigation = existingSummary.HasInvestigation
 			}
 		}
 	}
@@ -512,6 +521,7 @@ func (s *GitStore) writeCheckpointSummary(opts WriteCommittedOptions, basePath s
 		TokenUsage:          tokenUsage,
 		CombinedAttribution: combinedAttribution,
 		HasReview:           hasReview,
+		HasInvestigation:    hasInvestigation,
 	}
 
 	metadataJSON, err := jsonutil.MarshalIndentWithNewline(summary, "", "  ")

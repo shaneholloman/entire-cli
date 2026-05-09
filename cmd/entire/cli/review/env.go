@@ -95,7 +95,7 @@ func AppendReviewEnv(base []string, agentName string, cfg reviewtypes.RunConfig,
 	skillsJSON, _ := EncodeSkills(cfg.Skills) //nolint:errcheck // EncodeSkills only fails on json.Marshal([]string), which is infallible
 	out := make([]string, 0, len(base)+5)
 	for _, kv := range base {
-		if isReviewEnvEntry(kv) {
+		if IsReviewEnvEntry(kv) {
 			continue
 		}
 		out = append(out, kv)
@@ -109,20 +109,10 @@ func AppendReviewEnv(base []string, agentName string, cfg reviewtypes.RunConfig,
 	)
 }
 
-func withoutReviewEnv(base []string) []string {
-	out := make([]string, 0, len(base))
-	for _, kv := range base {
-		if isReviewEnvEntry(kv) {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-// isReviewEnvEntry reports whether kv is a "KEY=VALUE" entry whose key is
-// one of the ENTIRE_REVIEW_* contract variables.
-func isReviewEnvEntry(kv string) bool {
+// IsReviewEnvEntry reports whether kv is a "KEY=VALUE" entry whose key is
+// one of the ENTIRE_REVIEW_* contract variables. Exported for symmetry
+// with investigate.IsInvestigateEnvEntry.
+func IsReviewEnvEntry(kv string) bool {
 	for _, prefix := range []string{
 		EnvSession + "=",
 		EnvAgent + "=",

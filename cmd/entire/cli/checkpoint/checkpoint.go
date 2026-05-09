@@ -336,6 +336,34 @@ type WriteCommittedOptions struct {
 	// session.Kind.IsReview) because checkpoint can't import session
 	// — the session package imports checkpoint, creating a cycle.
 	HasReview bool
+
+	// InvestigateRunID is the 12-hex-char ID of the parent investigation
+	// run (only meaningful when Kind is an investigate kind).
+	InvestigateRunID string
+
+	// InvestigateRound is the round number (1-indexed) within the
+	// investigation run (only meaningful when Kind is an investigate kind).
+	InvestigateRound int
+
+	// InvestigateTurn is the overall turn index (1-indexed) within the
+	// investigation run (only meaningful when Kind is an investigate kind).
+	InvestigateTurn int
+
+	// InvestigateTopic is the human-readable topic the investigation was
+	// asked to investigate (only meaningful when Kind is an investigate
+	// kind).
+	InvestigateTopic string
+
+	// InvestigatePrompt is the actual text of the investigation request
+	// (composed prompt sent to the agent for this turn). Only meaningful
+	// when Kind is an investigate kind.
+	InvestigatePrompt string
+
+	// HasInvestigation is set by the caller when this session should mark
+	// its checkpoint as part of an investigation. The caller computes this
+	// (e.g. via session.Kind.IsInvestigate) because checkpoint can't import
+	// session — the session package imports checkpoint, creating a cycle.
+	HasInvestigation bool
 }
 
 // UpdateCommittedOptions contains options for updating an existing committed checkpoint.
@@ -512,6 +540,27 @@ type CommittedMetadata struct {
 	// for spawn, first user prompt for attach). Only set when Kind is a
 	// review kind.
 	ReviewPrompt string `json:"review_prompt,omitempty"`
+
+	// InvestigateRunID is the 12-hex-char ID of the parent investigation
+	// run. Only set when Kind is an investigate kind.
+	InvestigateRunID string `json:"investigate_run_id,omitempty"`
+
+	// InvestigateRound is the round number (1-indexed) within the
+	// investigation run. Only set when Kind is an investigate kind.
+	InvestigateRound int `json:"investigate_round,omitempty"`
+
+	// InvestigateTurn is the overall turn index (1-indexed) within the
+	// investigation run. Only set when Kind is an investigate kind.
+	InvestigateTurn int `json:"investigate_turn,omitempty"`
+
+	// InvestigateTopic is the human-readable topic the investigation was
+	// asked to investigate. Only set when Kind is an investigate kind.
+	InvestigateTopic string `json:"investigate_topic,omitempty"`
+
+	// InvestigatePrompt is the actual text of the investigation request
+	// (composed prompt sent to the agent for this turn). Only set when
+	// Kind is an investigate kind.
+	InvestigatePrompt string `json:"investigate_prompt,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.
@@ -569,6 +618,14 @@ type CheckpointSummary struct {
 	// cause this flag to be set so callers can keep asking "was this reviewed
 	// in any way?" without caring about the variant.
 	HasReview bool `json:"has_review,omitempty"`
+
+	// HasInvestigation is the umbrella "any investigation happened" flag:
+	// true when at least one session in this checkpoint has an
+	// investigate-kind Kind (currently "agent_investigate"). When new
+	// investigate kinds are introduced they should also cause this flag to
+	// be set so callers can keep asking "was this investigated in any way?"
+	// without caring about the variant.
+	HasInvestigation bool `json:"has_investigation,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report

@@ -1,0 +1,168 @@
+package investigate
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+)
+
+// defaultFixAgent is the agent registry name used when FixDeps.FixAgent is
+// empty. Hard-coded for now; the cobra wiring task layers on an --agent
+// flag and a settings-backed default.
+//
+// TODO: layer on `entire investigate fix --agent <name>` and settings
+// override in the cobra wiring task.
+const defaultFixAgent = "claude-code"
+
+// FixDeps collects what RunFix needs that's injectable for tests.
+type FixDeps struct {
+	// ManifestStore loads local manifests by run ID.
+	ManifestStore *LocalManifestStore
+
+	// FixAgent is the agent registry name to launch. When empty, RunFix
+	// falls back to defaultFixAgent.
+	FixAgent string
+
+	// Launch runs the actual coding agent session. Production wires this
+	// to agentlaunch.LaunchFixAgent. Tests inject a stub.
+	Launch func(ctx context.Context, agentName string, prompt string) error
+
+	// ReadFile, when non-nil, replaces os.ReadFile. Useful for tests that
+	// want to control which doc bodies the prompt sees without touching
+	// the filesystem.
+	ReadFile func(name string) ([]byte, error)
+}
+
+// FixInput drives RunFix.
+type FixInput struct {
+	// RunID resolves a specific run; empty means "pick the most recent".
+	RunID string
+
+	// Out is the user-facing stream for the launch banner.
+	Out io.Writer
+
+	// ErrOut is the user-facing stream for warnings (e.g. missing doc).
+	ErrOut io.Writer
+}
+
+// RunFix resolves a saved investigation, composes the follow-up prompt,
+// and launches a coding agent session via deps.Launch.
+//
+// The prompt body says "use these findings as grounded context, do not
+// re-investigate". The composed prompt embeds the findings doc + timeline
+// doc bodies verbatim so the agent has full access without needing to
+// re-read disk.
+func RunFix(ctx context.Context, in FixInput, deps FixDeps) error {
+	if deps.ManifestStore == nil {
+		return errors.New("fix: manifest store is required")
+	}
+	if deps.Launch == nil {
+		return errors.New("fix: launch function is required")
+	}
+
+	manifest, err := resolveFixManifest(ctx, deps.ManifestStore, in.RunID)
+	if err != nil {
+		return err
+	}
+
+	readFile := deps.ReadFile
+	if readFile == nil {
+		readFile = os.ReadFile
+	}
+
+	findingsBody := readDocOrWarn(readFile, manifest.FindingsDoc, "findings", in.ErrOut)
+	timelineBody := readDocOrWarn(readFile, manifest.TimelineDoc, "timeline", in.ErrOut)
+
+	prompt := composeFixPrompt(manifest, findingsBody, timelineBody)
+
+	fixAgent := deps.FixAgent
+	if fixAgent == "" {
+		fixAgent = defaultFixAgent
+	}
+
+	if in.Out != nil {
+		fmt.Fprintf(in.Out, "Launching %s with findings from run %s ...\n", fixAgent, manifest.RunID)
+	}
+
+	return deps.Launch(ctx, fixAgent, prompt)
+}
+
+// resolveFixManifest picks the manifest to feed the fix agent. Empty
+// runID means "use the most recent run"; a specific runID requires an
+// exact match.
+func resolveFixManifest(ctx context.Context, store *LocalManifestStore, runID string) (LocalManifest, error) {
+	if runID != "" {
+		manifest, ok, err := store.FindByRunID(ctx, runID)
+		if err != nil {
+			return LocalManifest{}, err
+		}
+		if !ok {
+			return LocalManifest{}, fmt.Errorf("no investigation found with run id %q", runID)
+		}
+		return manifest, nil
+	}
+	manifests, err := store.List(ctx)
+	if err != nil {
+		return LocalManifest{}, err
+	}
+	if len(manifests) == 0 {
+		return LocalManifest{}, errors.New("no local investigations found")
+	}
+	return manifests[0], nil
+}
+
+// readDocOrWarn reads path with the supplied reader. A missing or
+// unreadable path yields an empty string and a warning to errOut (when
+// non-nil); the caller is expected to handle empty doc bodies gracefully
+// in the composed prompt. An empty path yields "" without a warning,
+// since the manifest legitimately may not record both documents.
+func readDocOrWarn(read func(string) ([]byte, error), path string, label string, errOut io.Writer) string {
+	if path == "" {
+		return ""
+	}
+	b, err := read(path)
+	if err != nil {
+		if errOut != nil {
+			fmt.Fprintf(errOut, "warning: could not read %s doc %q: %v\n", label, path, err)
+		}
+		return ""
+	}
+	return string(b)
+}
+
+// composeFixPrompt builds the follow-up prompt sent to the fix agent.
+// Layout matches the plan's §10 contract: a "do not re-investigate"
+// preamble, the run identity, and the two doc bodies verbatim under
+// section headings. Empty doc bodies are still emitted with a placeholder
+// line so the agent sees the section structure consistently.
+func composeFixPrompt(manifest LocalManifest, findings, timeline string) string {
+	var b strings.Builder
+	b.WriteString("A prior multi-agent investigation produced these findings. Use them as\n")
+	b.WriteString("grounded context to plan the next step. Do not re-investigate the same\n")
+	b.WriteString("question — assume the findings are correct unless you find direct\n")
+	b.WriteString("evidence to the contrary.\n\n")
+	if topic := strings.TrimSpace(manifest.Topic); topic != "" {
+		fmt.Fprintf(&b, "Topic: %s\n", topic)
+	}
+	if manifest.RunID != "" {
+		fmt.Fprintf(&b, "Run ID: %s\n", manifest.RunID)
+	}
+	b.WriteString("\n## Investigation findings\n\n")
+	if body := strings.TrimSpace(findings); body != "" {
+		b.WriteString(body)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(no findings recorded)\n")
+	}
+	b.WriteString("\n## Investigation timeline\n\n")
+	if body := strings.TrimSpace(timeline); body != "" {
+		b.WriteString(body)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(no timeline recorded)\n")
+	}
+	return b.String()
+}

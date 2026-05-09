@@ -37,6 +37,140 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// AttachKind selects what kind of attach should happen for the
+// state-tagging helper AttachSession.
+type AttachKind int
+
+const (
+	// AttachKindReview tags the session as an agent_review.
+	AttachKindReview AttachKind = iota
+
+	// AttachKindInvestigate tags the session as an agent_investigate.
+	AttachKindInvestigate
+)
+
+// String returns the session.Kind value AttachKind would set on state.
+// Used for error messages so users see the same kind names that appear
+// in stored state files.
+func (k AttachKind) String() string {
+	switch k {
+	case AttachKindReview:
+		return string(session.KindAgentReview)
+	case AttachKindInvestigate:
+		return string(session.KindAgentInvestigate)
+	default:
+		return fmt.Sprintf("attach-kind(%d)", int(k))
+	}
+}
+
+// AttachOptions parameterizes AttachSession.
+//
+// Kind selects which set of fields is meaningful:
+//   - AttachKindReview reads ReviewSkills and ReviewPrompt.
+//   - AttachKindInvestigate reads InvestigateRunID/Round/Turn/Topic/Prompt.
+//
+// AttachSession is a state-only tagger: it does not read the transcript,
+// create checkpoints, or amend commits. Use runAttach for the full
+// transcript+checkpoint flow; AttachSession is for retroactively marking
+// a session that's already tracked.
+type AttachOptions struct {
+	SessionID string
+	Kind      AttachKind
+
+	// Review-only fields (used when Kind == AttachKindReview).
+	ReviewSkills []string
+	ReviewPrompt string
+
+	// Investigate-only fields (used when Kind == AttachKindInvestigate).
+	InvestigateRunID  string
+	InvestigateRound  int
+	InvestigateTurn   int
+	InvestigateTopic  string
+	InvestigatePrompt string
+}
+
+// AttachSession tags an existing session as the specified Kind.
+//
+// Behavior:
+//   - The session must already be tracked (state file present); a missing
+//     session returns "session %q not found".
+//   - Tagging is idempotent for the same Kind: re-tagging overwrites the
+//     kind-specific fields (skills/prompt for review, run-id/round/turn/
+//     topic/prompt for investigate) and leaves state.Kind unchanged.
+//   - Cross-kind retagging is rejected: a session marked as one Kind
+//     cannot be retagged as a different Kind ("session %q is already
+//     tagged as %s; cannot retag as %s").
+func AttachSession(ctx context.Context, opts AttachOptions) error {
+	if opts.SessionID == "" {
+		return errors.New("AttachSession: SessionID is required")
+	}
+
+	store, err := session.NewStateStore(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open session store: %w", err)
+	}
+	state, err := store.Load(ctx, opts.SessionID)
+	if err != nil {
+		return fmt.Errorf("failed to load session state: %w", err)
+	}
+	if state == nil {
+		return fmt.Errorf("session %q not found", opts.SessionID)
+	}
+
+	desiredKind := attachKindToSessionKind(opts.Kind)
+	if state.Kind != "" && state.Kind != desiredKind {
+		return fmt.Errorf(
+			"session %q is already tagged as %s; cannot retag as %s",
+			opts.SessionID, string(state.Kind), desiredKind,
+		)
+	}
+
+	switch opts.Kind {
+	case AttachKindReview:
+		state.Kind = session.KindAgentReview
+		state.ReviewSkills = opts.ReviewSkills
+		state.ReviewPrompt = opts.ReviewPrompt
+	case AttachKindInvestigate:
+		state.Kind = session.KindAgentInvestigate
+		state.InvestigateRunID = opts.InvestigateRunID
+		state.InvestigateRound = opts.InvestigateRound
+		state.InvestigateTurn = opts.InvestigateTurn
+		state.InvestigateTopic = opts.InvestigateTopic
+		state.InvestigatePrompt = opts.InvestigatePrompt
+	default:
+		return fmt.Errorf("AttachSession: unknown attach kind %d", int(opts.Kind))
+	}
+
+	if err := store.Save(ctx, state); err != nil {
+		return fmt.Errorf("failed to save session state: %w", err)
+	}
+	return nil
+}
+
+// attachKindToSessionKind translates an AttachKind into the corresponding
+// session.Kind value. Kept private so callers go through AttachSession.
+func attachKindToSessionKind(k AttachKind) session.Kind {
+	switch k {
+	case AttachKindReview:
+		return session.KindAgentReview
+	case AttachKindInvestigate:
+		return session.KindAgentInvestigate
+	default:
+		return ""
+	}
+}
+
+// attachReviewSession is a thin compatibility wrapper around AttachSession
+// for the review-only path. New callers should prefer AttachSession.
+func attachReviewSession(ctx context.Context, sessionID string, skills []string, prompt string) error {
+	return AttachSession(ctx, AttachOptions{
+		SessionID:    sessionID,
+		Kind:         AttachKindReview,
+		ReviewSkills: skills,
+		ReviewPrompt: prompt,
+	})
+}
+
 // attachOptions carries optional flags for runAttach. Force is the original
 // flag; Review opts the attach into recording the session as an
 // agent_review in the checkpoint metadata.

@@ -15,12 +15,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/investigate"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/review"
@@ -408,9 +410,16 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 			slog.String("error", err.Error()))
 	}
 
-	// Best-effort: adopt ENTIRE_REVIEW_* env vars set by `entire review` on
-	// the spawned agent process. Each agent process has its own env, so there
-	// is no file race across worktrees. Errors in load/save must not fail the turn.
+	// Best-effort: adopt ENTIRE_REVIEW_* / ENTIRE_INVESTIGATE_* env vars set
+	// by `entire review` / `entire investigate` on the spawned agent process.
+	// Each agent process has its own env, so there is no file race across
+	// worktrees. Errors in load/save must not fail the turn.
+	//
+	// Review adoption runs first; if both env families are somehow set, review
+	// wins. Production strips ENTIRE_REVIEW_* in AppendInvestigateEnv before
+	// spawning each per-turn investigate agent process so this conflict cannot
+	// happen for fresh investigate spawns. Both functions short-circuit on
+	// state.Kind != "" to keep the conflict harmless if it ever arises.
 	if mutErr := strategy.MutateSessionState(ctx, sessionID, func(state *strategy.SessionState) error {
 		before := *state
 		// Slice fields share their backing array under struct copy. If
@@ -418,12 +427,20 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		// below would silently miss it. Clone to keep the comparison honest.
 		before.ReviewSkills = slices.Clone(state.ReviewSkills)
 		adoptReviewEnv(logCtx, state, string(ag.Name()))
-		if state.Kind == before.Kind && state.ReviewPrompt == before.ReviewPrompt && slices.Equal(state.ReviewSkills, before.ReviewSkills) {
+		adoptInvestigateEnv(logCtx, state, string(ag.Name()))
+		if state.Kind == before.Kind &&
+			state.ReviewPrompt == before.ReviewPrompt &&
+			slices.Equal(state.ReviewSkills, before.ReviewSkills) &&
+			state.InvestigateRunID == before.InvestigateRunID &&
+			state.InvestigateRound == before.InvestigateRound &&
+			state.InvestigateTurn == before.InvestigateTurn &&
+			state.InvestigateTopic == before.InvestigateTopic &&
+			state.InvestigatePrompt == before.InvestigatePrompt {
 			return strategy.ErrMutationSkip
 		}
 		return nil
 	}); mutErr != nil && !errors.Is(mutErr, strategy.ErrStateNotFound) {
-		logging.Warn(logCtx, "failed to save session state after review env adoption",
+		logging.Warn(logCtx, "failed to save session state after review/investigate env adoption",
 			slog.String("error", mutErr.Error()))
 	}
 	initSpan.End()
@@ -1145,4 +1162,77 @@ func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent str
 	logging.Debug(ctx, "adopted review env",
 		slog.String("agent", envAgent),
 		slog.Int("skill_count", len(skills)))
+}
+
+// adoptInvestigateEnv tags the session as an investigation session when
+// ENTIRE_INVESTIGATE_* env vars are present on the current process. Mirrors
+// adoptReviewEnv exactly, but for investigate. Idempotent: if state.Kind is
+// already set (e.g., a review session inherited from an outer process or a
+// re-invocation of this function on the same state), the function returns
+// without modifying state — a session is review OR investigate, not both.
+//
+// Adoption ordering: adoptReviewEnv runs first; if both env families are
+// somehow set on the same process, review wins. Production strips
+// ENTIRE_REVIEW_* in AppendInvestigateEnv before spawning each per-turn
+// agent process, so this conflict cannot happen for fresh investigate spawns
+// — but the short-circuit on state.Kind != "" makes the conflict harmless if
+// it ever arises.
+//
+// Failure modes are silent at the user level but logged for diagnostics:
+//   - EnvSession unset or not "1": not an investigate session; return.
+//   - EnvAgent does not match the hook agent: leave session untagged.
+//   - EnvStartingSHA does not match the session base commit: leave untagged.
+//   - EnvRound or EnvTurn not parseable as int: log warning, leave untagged.
+func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgent string) {
+	if state.Kind != "" {
+		return
+	}
+	if envSession := os.Getenv(investigate.EnvSession); envSession != "1" {
+		logging.Debug(ctx, "investigate env adoption skipped: ENTIRE_INVESTIGATE_SESSION is not \"1\"",
+			slog.String("expected_agent", expectedAgent),
+			slog.String("observed_value", envSession))
+		return
+	}
+	envAgent := os.Getenv(investigate.EnvAgent)
+	if envAgent != expectedAgent {
+		logging.Warn(ctx, "investigate env adoption skipped: agent mismatch",
+			slog.String("env_agent", envAgent),
+			slog.String("hook_agent", expectedAgent))
+		return
+	}
+	startingSHA := os.Getenv(investigate.EnvStartingSHA)
+	if startingSHA == "" || state.BaseCommit == "" || startingSHA != state.BaseCommit {
+		logging.Warn(ctx, "investigate env adoption skipped: starting SHA mismatch",
+			slog.String("env_starting_sha", startingSHA),
+			slog.String("state_base_commit", state.BaseCommit))
+		return
+	}
+	round, roundErr := strconv.Atoi(os.Getenv(investigate.EnvRound))
+	turn, turnErr := strconv.Atoi(os.Getenv(investigate.EnvTurn))
+	if roundErr != nil || turnErr != nil {
+		logging.Warn(ctx, "investigate env adoption failed: invalid round/turn",
+			slog.String("round_err", errString(roundErr)),
+			slog.String("turn_err", errString(turnErr)))
+		return
+	}
+	state.Kind = session.KindAgentInvestigate
+	state.InvestigateRunID = os.Getenv(investigate.EnvRunID)
+	state.InvestigateRound = round
+	state.InvestigateTurn = turn
+	state.InvestigateTopic = os.Getenv(investigate.EnvTopic)
+	state.InvestigatePrompt = os.Getenv(investigate.EnvPrompt)
+	logging.Debug(ctx, "adopted investigate env",
+		slog.String("agent", envAgent),
+		slog.String("run_id", state.InvestigateRunID),
+		slog.Int("round", round),
+		slog.Int("turn", turn))
+}
+
+// errString returns "" for a nil error, err.Error() otherwise. Local helper
+// to keep slog attrs tidy in the env-adoption functions above.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

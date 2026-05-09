@@ -250,6 +250,12 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		ReviewSkills:                state.ReviewSkills,
 		ReviewPrompt:                state.ReviewPrompt,
 		HasReview:                   state.Kind.IsReview(),
+		HasInvestigation:            state.Kind.IsInvestigate(),
+		InvestigateRunID:            state.InvestigateRunID,
+		InvestigateRound:            state.InvestigateRound,
+		InvestigateTurn:             state.InvestigateTurn,
+		InvestigateTopic:            state.InvestigateTopic,
+		InvestigatePrompt:           state.InvestigatePrompt,
 	}
 
 	compactResult := buildExternalCompactTranscript(ctx, ag, state)

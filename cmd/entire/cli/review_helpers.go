@@ -33,52 +33,77 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 )
 
-// headHasReviewCheckpoint checks whether HEAD's checkpoint metadata includes
-// a review session. Returns (true, infoString) if HasReview is set.
+// headCheckpointFlags returns the (HasReview, HasInvestigation, info) triple
+// for HEAD's checkpoint. Returns (false, false, "") when there is no
+// checkpoint at HEAD or when reading fails (logged via slog Debug).
+//
+// info is a human-readable string used by status / re-run guards (e.g.
+// "checkpoint abc123def456"). It applies to whichever flag is true; callers
+// display the appropriate flag's prose around it.
+//
 // Single lookup: read the Entire-Checkpoint trailer from HEAD, then resolve
 // the CheckpointSummary via ResolveCommittedReaderForCheckpoint so v2-enabled
 // repos also work (v1 alone would miss v2-written summaries).
-func headHasReviewCheckpoint(ctx context.Context) (bool, string) {
+func headCheckpointFlags(ctx context.Context) (hasReview, hasInvestigation bool, info string) {
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		logging.Debug(ctx, "head review check: locate worktree root", slog.String("error", err.Error()))
-		return false, ""
+		logging.Debug(ctx, "head checkpoint flags: locate worktree root", slog.String("error", err.Error()))
+		return false, false, ""
 	}
 	execCmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "log", "-1", "--format=%B")
 	output, err := execCmd.Output()
 	if err != nil {
-		logging.Debug(ctx, "head review check: read HEAD commit message", slog.String("error", err.Error()))
-		return false, ""
+		logging.Debug(ctx, "head checkpoint flags: read HEAD commit message", slog.String("error", err.Error()))
+		return false, false, ""
 	}
 	cpID, ok := trailers.ParseCheckpoint(string(output))
 	if !ok {
-		logging.Debug(ctx, "head review check: no Entire-Checkpoint trailer on HEAD")
-		return false, ""
+		logging.Debug(ctx, "head checkpoint flags: no Entire-Checkpoint trailer on HEAD")
+		return false, false, ""
 	}
 	repo, err := git.PlainOpen(repoRoot)
 	if err != nil {
-		logging.Debug(ctx, "head review check: open repository", slog.String("error", err.Error()))
-		return false, ""
+		logging.Debug(ctx, "head checkpoint flags: open repository", slog.String("error", err.Error()))
+		return false, false, ""
 	}
 	v1Store := checkpoint.NewGitStore(repo)
 	v2URL, urlErr := remote.FetchURL(ctx)
 	if urlErr != nil {
-		logging.Debug(ctx, "head review check: no configured v2 fetch remote", slog.String("error", urlErr.Error()))
+		logging.Debug(ctx, "head checkpoint flags: no configured v2 fetch remote", slog.String("error", urlErr.Error()))
 		v2URL = ""
 	}
 	v2Store := checkpoint.NewV2GitStore(repo, v2URL)
 	_, summary, err := checkpoint.ResolveCommittedReaderForCheckpoint(ctx, cpID, v1Store, v2Store, settings.IsCheckpointsV2Enabled(ctx))
 	if err != nil || summary == nil {
-		logging.Debug(ctx, "head review check: resolve checkpoint summary",
+		logging.Debug(ctx, "head checkpoint flags: resolve checkpoint summary",
 			slog.String("checkpoint_id", cpID.String()),
 			slog.Any("error", err))
+		return false, false, ""
+	}
+	return summary.HasReview, summary.HasInvestigation, fmt.Sprintf("checkpoint %s", cpID)
+}
+
+// headHasReviewCheckpoint checks whether HEAD's checkpoint metadata includes
+// a review session. Returns (true, infoString) if HasReview is set.
+// Thin compatibility wrapper around headCheckpointFlags so existing callers
+// (status display, review re-run guard) keep their (bool, string) signature.
+func headHasReviewCheckpoint(ctx context.Context) (bool, string) {
+	hasReview, _, info := headCheckpointFlags(ctx)
+	if !hasReview {
 		return false, ""
 	}
-	if !summary.HasReview {
-		logging.Debug(ctx, "head review check: summary HasReview is false", slog.String("checkpoint_id", cpID.String()))
+	return true, info
+}
+
+// headHasInvestigateCheckpoint reports whether HEAD's checkpoint has an
+// investigation tagged on it. Mirrors headHasReviewCheckpoint for the
+// investigation umbrella flag.
+func headHasInvestigateCheckpoint(ctx context.Context) (bool, string) {
+	_, hasInvestigation, info := headCheckpointFlags(ctx)
+	if !hasInvestigation {
 		return false, ""
 	}
-	return true, fmt.Sprintf("checkpoint %s", cpID)
+	return true, info
 }
 
 // newReviewAttachCmd is a thin wrapper around `entire attach --review`. It
