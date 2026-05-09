@@ -28,24 +28,35 @@ var runIDPattern = regexp.MustCompile(`^[a-f0-9]{12}$`)
 
 // RunState is the persisted state of an investigation run, sufficient to
 // resume after a crash, Ctrl+C, or `--continue`.
+//
+// Round semantics: CompletedRounds counts how many full passes through
+// every agent have finished — it is 0 mid-round-1, increments to 1 once
+// every agent has had its first turn, and so on. By contrast,
+// TurnStance.Round records the 1-indexed round each individual turn
+// belongs to. The two fields look similar but represent different things;
+// readers must pick the one that matches the question they're asking.
 type RunState struct {
-	RunID        string       `json:"run_id"`
-	Topic        string       `json:"topic"`
-	Agents       []string     `json:"agents"`
-	MaxTurns     int          `json:"max_turns"`
-	Quorum       int          `json:"quorum"`
-	Round        int          `json:"round"`
-	Turn         int          `json:"turn"`           // overall turn index across rounds
-	NextAgentIdx int          `json:"next_agent_idx"` // index into Agents for the NEXT turn
-	Stances      []TurnStance `json:"stances,omitempty"`
-	FindingsDoc  string       `json:"findings_doc"` // absolute path
-	TimelineDoc  string       `json:"timeline_doc"` // absolute path
-	StartingSHA  string       `json:"starting_sha"`
-	StartedAt    time.Time    `json:"started_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	RunID           string       `json:"run_id"`
+	Topic           string       `json:"topic"`
+	Agents          []string     `json:"agents"`
+	MaxTurns        int          `json:"max_turns"`
+	Quorum          int          `json:"quorum"`
+	CompletedRounds int          `json:"completed_rounds"`
+	Turn            int          `json:"turn"`           // overall turn index across rounds
+	NextAgentIdx    int          `json:"next_agent_idx"` // index into Agents for the NEXT turn
+	Stances         []TurnStance `json:"stances,omitempty"`
+	FindingsDoc     string       `json:"findings_doc"` // absolute path
+	TimelineDoc     string       `json:"timeline_doc"` // absolute path
+	StartingSHA     string       `json:"starting_sha"`
+	StartedAt       time.Time    `json:"started_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
 }
 
 // TurnStance is one agent's recorded stance for a turn.
+//
+// Round here is the 1-indexed round the turn belongs to (turn 1 of round
+// 1, turn N+1 starts round 2, etc.) — distinct from
+// RunState.CompletedRounds, which counts finished rounds.
 type TurnStance struct {
 	Round           int    `json:"round"`
 	Turn            int    `json:"turn"` // overall turn number

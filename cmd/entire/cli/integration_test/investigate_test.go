@@ -396,14 +396,14 @@ func TestInvestigate_Continue_ResumesAtRecordedAgentIdx(t *testing.T) {
 	// Pre-seed: claude-code already went, codex is next (NextAgentIdx=1).
 	const runID = "fedcba987654"
 	resume := &investigate.RunState{
-		RunID:        runID,
-		Topic:        "resume-topic",
-		Agents:       []string{"claude-code", "codex"},
-		MaxTurns:     1,
-		Quorum:       2,
-		Round:        0,
-		Turn:         1,
-		NextAgentIdx: 1,
+		RunID:           runID,
+		Topic:           "resume-topic",
+		Agents:          []string{"claude-code", "codex"},
+		MaxTurns:        1,
+		Quorum:          2,
+		CompletedRounds: 0,
+		Turn:            1,
+		NextAgentIdx:    1,
 		Stances: []investigate.TurnStance{
 			{Round: 1, Turn: 1, Agent: "claude-code", Stance: "approve"},
 		},

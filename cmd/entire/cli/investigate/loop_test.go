@@ -413,6 +413,81 @@ func TestRunInvestigateLoop_UnknownStanceWhenTimelineMissing(t *testing.T) {
 	}
 }
 
+// TestBoundedFileWriter verifies the cap-and-mark behaviour the per-turn
+// log uses to defend against agents that flood stdout. Writes report
+// len(p) so exec.Cmd never sees io.ErrShortWrite (which would tear down
+// the agent), but bytes past the limit are dropped and a single truncate
+// marker is appended.
+func TestBoundedFileWriter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("writes under cap pass through", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		w := newBoundedFileWriter(&buf, 100)
+		n, err := w.Write([]byte("hello"))
+		if err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if n != 5 {
+			t.Errorf("n = %d, want 5", n)
+		}
+		if buf.String() != "hello" {
+			t.Errorf("buf = %q, want hello", buf.String())
+		}
+	})
+
+	t.Run("write at cap is fine; next write is dropped with marker", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		w := newBoundedFileWriter(&buf, 5)
+		if _, err := w.Write([]byte("hello")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		// Subsequent write must report all bytes consumed but NOT append
+		// to the underlying buffer beyond the marker.
+		n, err := w.Write([]byte("world more bytes"))
+		if err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if n != len("world more bytes") {
+			t.Errorf("n = %d, want %d (must report full consumption to avoid io.ErrShortWrite tearing down exec.Cmd)", n, len("world more bytes"))
+		}
+		got := buf.String()
+		if !strings.HasPrefix(got, "hello") {
+			t.Errorf("buf must start with hello; got %q", got)
+		}
+		if !strings.Contains(got, "[entire: log truncated") {
+			t.Errorf("buf must contain truncation marker; got %q", got)
+		}
+		// A second overflow write must not double-append the marker.
+		if _, err := w.Write([]byte("more")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if got2 := buf.String(); strings.Count(got2, "[entire: log truncated") != 1 {
+			t.Errorf("marker emitted multiple times; got: %q", got2)
+		}
+	})
+
+	t.Run("partial write at boundary", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		w := newBoundedFileWriter(&buf, 3)
+		// Single write exceeds the cap: take the first 3 bytes, drop the
+		// rest, append the marker once.
+		n, err := w.Write([]byte("hello world"))
+		if err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if n != len("hello world") {
+			t.Errorf("n = %d, want %d", n, len("hello world"))
+		}
+		if got := buf.String(); !strings.HasPrefix(got, "hel") || !strings.Contains(got, "[entire: log truncated") {
+			t.Errorf("expected hel + marker; got %q", got)
+		}
+	})
+}
+
 // TestRunInvestigateLoop_MissingHeadingPausesAfterTwo verifies that an
 // agent that exits cleanly but writes no `## Turn N — <agent>` block
 // counts as a soft failure: two consecutive missing headings trip
@@ -522,14 +597,14 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 
 	// Pre-existing state: agent[0] has already gone in turn 1 and approved.
 	resumeState := &RunState{
-		RunID:        "777777777777",
-		Topic:        "test",
-		Agents:       []string{"claude-code", "codex"},
-		MaxTurns:     1, // Already used by claude-code, so codex's only turn closes round 1
-		Quorum:       2,
-		Round:        0,
-		Turn:         1,
-		NextAgentIdx: 1, // Next is codex.
+		RunID:           "777777777777",
+		Topic:           "test",
+		Agents:          []string{"claude-code", "codex"},
+		MaxTurns:        1, // Already used by claude-code, so codex's only turn closes round 1
+		Quorum:          2,
+		CompletedRounds: 0,
+		Turn:            1,
+		NextAgentIdx:    1, // Next is codex.
 		Stances: []TurnStance{
 			{Round: 1, Turn: 1, Agent: "claude-code", Stance: stanceApprove},
 		},

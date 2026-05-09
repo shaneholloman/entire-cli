@@ -313,7 +313,12 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		return turnOutcome{round: round, failed: true, err: err}
 	}
 
-	writers := []io.Writer{logFile}
+	// Wrap the log file in a size-capped writer so a hostile or
+	// misbehaving agent cannot fill the disk via runaway stdout. Verbose
+	// tee output is intentionally uncapped — it goes to the user's
+	// terminal where flow control + scrollback already bound it.
+	cappedLog := newBoundedFileWriter(logFile, maxTurnLogBytes)
+	writers := []io.Writer{cappedLog}
 	if deps.VerboseOut != nil {
 		writers = append(writers, deps.VerboseOut)
 	}
@@ -424,19 +429,19 @@ func initLoopState(in LoopInput, now func() time.Time, maxTurns, quorum int) *Ru
 	}
 	t := now()
 	return &RunState{
-		RunID:        in.RunID,
-		Topic:        in.Topic,
-		Agents:       append([]string(nil), in.Agents...),
-		MaxTurns:     maxTurns,
-		Quorum:       quorum,
-		Round:        0,
-		Turn:         0,
-		NextAgentIdx: 0,
-		FindingsDoc:  in.FindingsDoc,
-		TimelineDoc:  in.TimelineDoc,
-		StartingSHA:  in.StartingSHA,
-		StartedAt:    t,
-		UpdatedAt:    t,
+		RunID:           in.RunID,
+		Topic:           in.Topic,
+		Agents:          append([]string(nil), in.Agents...),
+		MaxTurns:        maxTurns,
+		Quorum:          quorum,
+		CompletedRounds: 0,
+		Turn:            0,
+		NextAgentIdx:    0,
+		FindingsDoc:     in.FindingsDoc,
+		TimelineDoc:     in.TimelineDoc,
+		StartingSHA:     in.StartingSHA,
+		StartedAt:       t,
+		UpdatedAt:       t,
 	}
 }
 
@@ -445,15 +450,17 @@ func advanceAgent(state *RunState) {
 	state.NextAgentIdx = (state.NextAgentIdx + 1) % len(state.Agents)
 }
 
-// updateRoundCounter recomputes state.Round as the COMPLETED round count
-// from the current Turn. With N agents:
+// updateRoundCounter recomputes state.CompletedRounds from the current Turn.
+// With N agents:
 //   - Turn 1..N → round 1 in progress, completed rounds = 0
 //   - Turn N+1..2N → round 2 in progress, completed rounds = 1
 //
 // Persisting completed-rounds keeps `entire investigate status` honest:
-// the user sees how many full passes have actually happened.
+// the user sees how many full passes have actually happened. The
+// per-stance Round (TurnStance.Round) is 1-indexed and tracks the round
+// each individual turn belongs to — the two fields are not interchangeable.
 func updateRoundCounter(state *RunState) {
-	state.Round = state.Turn / len(state.Agents)
+	state.CompletedRounds = state.Turn / len(state.Agents)
 }
 
 // approveCountInRound returns how many stances in the given round are
@@ -502,6 +509,79 @@ func openTurnLog(path string) (*os.File, error) {
 		return nil, fmt.Errorf("open turn log %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// maxTurnLogBytes caps how much agent stdout/stderr we persist to a
+// per-turn log file. A misbehaving or hostile agent (looping `yes`-style
+// output, runaway tool calls, prompt-injected verbose echo) can otherwise
+// fill the user's disk before the loop notices, since `cmd.Stdout` is
+// io.MultiWriter'd into an uncapped *os.File. 16 MiB is comfortably more
+// than any realistic per-turn agent transcript and small enough to stay
+// well under disk-pressure thresholds even if every concurrent worktree
+// hits the cap simultaneously.
+const maxTurnLogBytes = 16 * 1024 * 1024
+
+// boundedFileWriter wraps an io.Writer (the per-turn log file plus
+// optional verbose tee) with a hard byte cap. Writes past the cap are
+// silently discarded; on the first overflow a single "[entire: log
+// truncated at N bytes]" marker is emitted so a reader can tell that
+// truncation happened. Errors from the underlying writer are returned
+// (caller controls behaviour); we do not return io.ErrShortWrite when
+// dropping bytes because exec.Cmd treats short writes as I/O failures
+// and would tear down the agent process on every stdout write past the
+// cap. The contract is: report len(p) bytes consumed, drop the
+// out-of-budget tail.
+type boundedFileWriter struct {
+	w         io.Writer
+	limit     int
+	written   int
+	truncated bool
+}
+
+func newBoundedFileWriter(w io.Writer, limit int) *boundedFileWriter {
+	return &boundedFileWriter{w: w, limit: limit}
+}
+
+func (b *boundedFileWriter) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	remaining := b.limit - b.written
+	if remaining <= 0 {
+		// Cap already hit; emit marker on the first such call, then drop.
+		b.emitTruncationMarker()
+		return len(p), nil
+	}
+	if len(p) <= remaining {
+		n, err := b.w.Write(p)
+		b.written += n
+		if err != nil {
+			return n, fmt.Errorf("write turn log: %w", err)
+		}
+		return n, nil
+	}
+	// Partial write: take what fits, then emit the truncation marker once.
+	n, err := b.w.Write(p[:remaining])
+	b.written += n
+	if err != nil {
+		return n, fmt.Errorf("write turn log: %w", err)
+	}
+	b.emitTruncationMarker()
+	// Report full p consumed so the agent process never sees a short-write
+	// signal. The tail is intentionally dropped.
+	return len(p), nil
+}
+
+// emitTruncationMarker appends the "[entire: log truncated at N bytes]"
+// marker exactly once. Subsequent calls are no-ops, keeping the marker
+// from drowning out the actual truncated content.
+func (b *boundedFileWriter) emitTruncationMarker() {
+	if b.truncated {
+		return
+	}
+	b.truncated = true
+	marker := fmt.Sprintf("\n[entire: log truncated at %d bytes]\n", b.limit)
+	_, _ = b.w.Write([]byte(marker)) //nolint:errcheck // best-effort marker; primary write already succeeded
 }
 
 // printProgress writes msg to w when w is non-nil. Errors are intentionally

@@ -422,6 +422,111 @@ func TestNewCommand_ContinueLoadsAlwaysPromptFromSettings(t *testing.T) {
 	}
 }
 
+// TestNewCommand_ContinueRejectsAgentShrink verifies that resuming with a
+// `--agents` override shorter than the persisted NextAgentIdx is refused
+// with an actionable error rather than crashing the loop with index-out-
+// of-range. Adversarial input (hand-edited state file or careless
+// --agents) must not panic.
+func TestNewCommand_ContinueRejectsAgentShrink(t *testing.T) {
+	tmp := setupInvestigateRepo(t)
+
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	store := investigate.NewStateStoreWithDir(stateDir)
+	runID := "ababababcdcd"
+	st := &investigate.RunState{
+		RunID:        runID,
+		Topic:        "shrink test",
+		Agents:       []string{"a", "b", "c", "d"},
+		NextAgentIdx: 3, // points at "d" in the persisted list
+		MaxTurns:     2,
+		FindingsDoc:  filepath.Join(tmp, "find.md"),
+		TimelineDoc:  filepath.Join(tmp, "find-timeline.md"),
+		StartingSHA:  "deadbeef",
+	}
+	if err := store.Save(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := newTestDeps(t, []types.AgentName{"a", "b"}, []string{"a", "b"})
+	// LoopRun MUST NOT be invoked — we expect the bounds check to short-
+	// circuit before reaching the loop.
+	deps.LoopRun = func(_ context.Context, _ investigate.LoopInput, _ investigate.LoopDeps) (investigate.LoopResult, error) {
+		t.Fatal("LoopRun must not run when persisted NextAgentIdx exceeds available agents")
+		return investigate.LoopResult{}, nil
+	}
+
+	cmd := investigate.NewCommand(deps)
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"--continue", runID, "--agents", "a,b"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for agent-shrink resume")
+	}
+	if !strings.Contains(errBuf.String(), "exceeds available agents") {
+		t.Errorf("stderr should explain the bounds violation; got: %s", errBuf.String())
+	}
+}
+
+// TestNewCommand_ContinueWarnsOnSettingsLoadFailure verifies that a
+// corrupt settings file on resume surfaces a visible warning instead of
+// silently dropping the configured AlwaysPrompt. Without this, a user who
+// breaks their settings.json mid-run would see the agent's behaviour
+// change with no explanation.
+func TestNewCommand_ContinueWarnsOnSettingsLoadFailure(t *testing.T) {
+	tmp := setupInvestigateRepo(t)
+
+	// Write a malformed settings.json so settings.Load fails.
+	if err := os.MkdirAll(filepath.Join(tmp, ".entire"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".entire", "settings.json"), []byte("{broken-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	store := investigate.NewStateStoreWithDir(stateDir)
+	runID := "cdcdcdcdcdcd"
+	st := &investigate.RunState{
+		RunID:       runID,
+		Topic:       "warn test",
+		Agents:      []string{"a"},
+		MaxTurns:    1,
+		FindingsDoc: filepath.Join(tmp, "find.md"),
+		TimelineDoc: filepath.Join(tmp, "find-timeline.md"),
+		StartingSHA: "deadbeef",
+	}
+	if err := store.Save(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+
+	captured, runFn := captureLoopRun()
+	deps := newTestDeps(t, []types.AgentName{"a"}, []string{"a"})
+	deps.LoopRun = runFn
+
+	cmd := investigate.NewCommand(deps)
+	errBuf := &bytes.Buffer{}
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"--continue", runID})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v\nstderr: %s", err, errBuf.String())
+	}
+	if !strings.Contains(errBuf.String(), "could not reload settings on --continue") {
+		t.Errorf("stderr should warn about settings load failure; got: %s", errBuf.String())
+	}
+	if captured.AlwaysPrompt != "" {
+		t.Errorf("AlwaysPrompt = %q, want empty when settings unavailable", captured.AlwaysPrompt)
+	}
+}
+
 // TestNewCommand_ContinueWithMissingState surfaces an actionable error.
 func TestNewCommand_ContinueWithMissingState(t *testing.T) {
 	setupInvestigateRepo(t)

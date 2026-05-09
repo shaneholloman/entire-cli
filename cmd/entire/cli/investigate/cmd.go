@@ -317,6 +317,23 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
 		return wrapSilent(silentErr, err)
 	}
+	// state.NextAgentIdx is the index into agents the next turn will use.
+	// If --agents shrinks the list (or the persisted state is otherwise
+	// inconsistent), the loop would index out of range on the first turn.
+	// Refuse rather than crash: the user gets an actionable error and the
+	// state file is left intact for them to either fix the override or
+	// `entire investigate --findings` and start fresh.
+	if state.NextAgentIdx >= len(agents) {
+		err := fmt.Errorf(
+			"cannot resume: persisted next agent index %d exceeds available agents (%d). "+
+				"This usually means --agents was used with a shorter list than the original run. "+
+				"Either re-run with the original agents (or a superset), or remove the run state at "+
+				".git/entire-investigations/state/%s.json and start a fresh investigation",
+			state.NextAgentIdx, len(agents), state.RunID)
+		cmd.SilenceUsage = true
+		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
+		return wrapSilent(silentErr, err)
+	}
 
 	maxTurns := state.MaxTurns
 	if f.maxTurns > 0 {
@@ -330,8 +347,16 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 	// AlwaysPrompt is not persisted in RunState — it's a settings-level
 	// customization that the user controls outside the run. Load it fresh
 	// on resume so a configured "be skeptical" preamble survives Ctrl+C.
+	// If settings.Load fails (e.g. the file was hand-edited and is now
+	// malformed), surface a warning so the user notices their preamble has
+	// silently disappeared instead of letting the agent's behaviour change
+	// mid-investigation with no explanation.
 	alwaysPrompt := ""
-	if s, sErr := settings.Load(ctx); sErr == nil && s != nil && s.Investigate != nil {
+	if s, sErr := settings.Load(ctx); sErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"Warning: could not reload settings on --continue (%v). The configured "+
+				"investigate.always_prompt is not being applied to this resumed run.\n", sErr)
+	} else if s != nil && s.Investigate != nil {
 		alwaysPrompt = s.Investigate.AlwaysPrompt
 	}
 

@@ -16,14 +16,14 @@ func TestStateStore_SaveLoadRoundTrip(t *testing.T) {
 	store := NewStateStoreWithDir(dir)
 	now := time.Now().UTC().Truncate(time.Second)
 	st := &RunState{
-		RunID:        "abcdef012345",
-		Topic:        "Why is checkout flaky?",
-		Agents:       []string{"claude-code", "codex"},
-		MaxTurns:     3,
-		Quorum:       2,
-		Round:        1,
-		Turn:         2,
-		NextAgentIdx: 1,
+		RunID:           "abcdef012345",
+		Topic:           "Why is checkout flaky?",
+		Agents:          []string{"claude-code", "codex"},
+		MaxTurns:        3,
+		Quorum:          2,
+		CompletedRounds: 1,
+		Turn:            2,
+		NextAgentIdx:    1,
 		Stances: []TurnStance{
 			{Round: 1, Turn: 1, Agent: "claude-code", Stance: "approve", PlanChanged: true, TimelineChanged: true},
 		},
@@ -60,8 +60,8 @@ func TestStateStore_SaveLoadRoundTrip(t *testing.T) {
 	if got.Quorum != st.Quorum {
 		t.Errorf("Quorum = %d", got.Quorum)
 	}
-	if got.Round != st.Round || got.Turn != st.Turn || got.NextAgentIdx != st.NextAgentIdx {
-		t.Errorf("Round/Turn/NextAgentIdx = %d/%d/%d", got.Round, got.Turn, got.NextAgentIdx)
+	if got.CompletedRounds != st.CompletedRounds || got.Turn != st.Turn || got.NextAgentIdx != st.NextAgentIdx {
+		t.Errorf("CompletedRounds/Turn/NextAgentIdx = %d/%d/%d", got.CompletedRounds, got.Turn, got.NextAgentIdx)
 	}
 	if len(got.Stances) != 1 || got.Stances[0].Stance != "approve" {
 		t.Errorf("Stances = %+v", got.Stances)
