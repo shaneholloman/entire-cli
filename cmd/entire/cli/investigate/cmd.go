@@ -327,18 +327,27 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 		quorum = f.quorum
 	}
 
-	in := LoopInput{
-		RunID:       state.RunID,
-		Topic:       state.Topic,
-		Agents:      agents,
-		MaxTurns:    maxTurns,
-		Quorum:      quorum,
-		FindingsDoc: state.FindingsDoc,
-		TimelineDoc: state.TimelineDoc,
-		StartingSHA: state.StartingSHA,
-		Resume:      state,
+	// AlwaysPrompt is not persisted in RunState — it's a settings-level
+	// customization that the user controls outside the run. Load it fresh
+	// on resume so a configured "be skeptical" preamble survives Ctrl+C.
+	alwaysPrompt := ""
+	if s, sErr := settings.Load(ctx); sErr == nil && s != nil && s.Investigate != nil {
+		alwaysPrompt = s.Investigate.AlwaysPrompt
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Resuming investigation: %s (run %s)\n", state.Topic, state.RunID)
+
+	in := LoopInput{
+		RunID:        state.RunID,
+		Topic:        state.Topic,
+		Agents:       agents,
+		MaxTurns:     maxTurns,
+		Quorum:       quorum,
+		AlwaysPrompt: alwaysPrompt,
+		FindingsDoc:  state.FindingsDoc,
+		TimelineDoc:  state.TimelineDoc,
+		StartingSHA:  state.StartingSHA,
+		Resume:       state,
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Resuming investigation: %q (run %s)\n", state.Topic, state.RunID)
 	return executeLoop(ctx, cmd, in, deps)
 }
 
@@ -434,7 +443,7 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		topic = bres.Topic
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Investigating: %s (run %s)\n", topic, runID)
+	fmt.Fprintf(cmd.OutOrStdout(), "Investigating: %q (run %s)\n", topic, runID)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Findings: %s\n", findingsDoc)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Timeline: %s\n", timelineDoc)
 

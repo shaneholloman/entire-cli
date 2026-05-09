@@ -126,13 +126,19 @@ func ResolveIssueLink(ctx context.Context, rawURL string) (IssueLinkResult, erro
 		return IssueLinkResult{}, fmt.Errorf("--issue-link: unsupported resource %q", resource)
 	}
 
+	// safeURL is the redacted form of rawURL, with any user-info component
+	// (https://user:token@github.com/...) elided. Used for log/error messages
+	// so an OAuth token embedded in the URL never reaches stderr or logs.
+	// The full rawURL is still passed to gh, which terminates locally.
+	safeURL := u.Redacted()
+
 	jsonOut, err := runGhFn(ctx, subcmd, "view", rawURL,
 		"--json", "title,body,author,createdAt,labels,comments")
 	if err != nil {
 		if errors.Is(err, ErrGhNotFound) {
 			return IssueLinkResult{}, errors.New("--issue-link requires the gh CLI; install it (https://cli.github.com) or pass [seed-doc]")
 		}
-		return IssueLinkResult{}, fmt.Errorf("gh %s view %s: %w", subcmd, rawURL, err)
+		return IssueLinkResult{}, fmt.Errorf("gh %s view %s: %w", subcmd, safeURL, err)
 	}
 
 	var issue ghIssue
@@ -140,10 +146,10 @@ func ResolveIssueLink(ctx context.Context, rawURL string) (IssueLinkResult, erro
 		return IssueLinkResult{}, fmt.Errorf("decode gh %s view JSON: %w", subcmd, err)
 	}
 
-	body := renderIssueSeed(rawURL, issue)
+	body := renderIssueSeed(safeURL, issue)
 	topic := issue.Title
 	if strings.TrimSpace(topic) == "" {
-		topic = rawURL
+		topic = safeURL
 	}
 	return IssueLinkResult{
 		SeedDoc: body,

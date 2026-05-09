@@ -211,3 +211,43 @@ func TestResolveIssueLink_GhExecError(t *testing.T) {
 		t.Errorf("expected gh error to be wrapped, got %q", err.Error())
 	}
 }
+
+// TestResolveIssueLink_RedactsCredentialsInErrors verifies that when the URL
+// embeds a basic-auth credential (https://user:token@github.com/...), neither
+// the wrapped error nor the rendered seed doc body leaks the token. Tokens
+// pasted into command lines via shell history substitution should not reach
+// .entire/logs/, stderr, or the findings doc.
+func TestResolveIssueLink_RedactsCredentialsInErrors(t *testing.T) {
+	withFakeGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return nil, errors.New("HTTP 401: unauthorized")
+	})
+	const secret = "ghp_supersecrettoken"
+	urlWithToken := "https://user:" + secret + "@github.com/owner/repo/issues/42"
+
+	_, err := ResolveIssueLink(context.Background(), urlWithToken)
+	if err == nil {
+		t.Fatal("expected error on gh failure")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error must not leak credentials; got %q", err.Error())
+	}
+}
+
+// TestResolveIssueLink_RedactsCredentialsInSeedDoc verifies that on a
+// successful gh response, the rendered seed doc uses the redacted form of
+// the source URL.
+func TestResolveIssueLink_RedactsCredentialsInSeedDoc(t *testing.T) {
+	withFakeGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte(`{"title":"Investigate flaky test","body":"a body"}`), nil
+	})
+	const secret = "ghp_supersecrettoken2"
+	urlWithToken := "https://user:" + secret + "@github.com/owner/repo/issues/42"
+
+	res, err := ResolveIssueLink(context.Background(), urlWithToken)
+	if err != nil {
+		t.Fatalf("ResolveIssueLink: %v", err)
+	}
+	if strings.Contains(string(res.SeedDoc), secret) {
+		t.Errorf("seed doc must not leak credentials; got %q", res.SeedDoc)
+	}
+}

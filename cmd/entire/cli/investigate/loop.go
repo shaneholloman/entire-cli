@@ -333,7 +333,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 
 	postFindings := hashFile(ctx, in.FindingsDoc)
 	postTimeline := hashFile(ctx, in.TimelineDoc)
-	stance, note, _ := ParseStanceFromTimeline(in.TimelineDoc, agentName, state.Turn)
+	stance, note, headingFound := ParseStanceFromTimeline(in.TimelineDoc, agentName, state.Turn)
 
 	turn := TurnStance{
 		Round:           round,
@@ -367,6 +367,17 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		slogString("stance", stance),
 		slogBool("plan_changed", turn.PlanChanged),
 		slogBool("timeline_changed", turn.TimelineChanged))
+	// Treat a missing heading as a soft failure: the agent ran cleanly but
+	// produced no structured output, so it should not count toward quorum
+	// and consecutive misses must trip pause-on-failure. The TurnStance is
+	// still recorded for diagnostics, but the loop sees this as a failure
+	// for budget-control purposes.
+	if !headingFound {
+		logging.Warn(ctx, "investigate: turn missing heading",
+			sRun(in.RunID), sAgent(agentName),
+			sTurn(state.Turn), sRound(round))
+		return turnOutcome{round: round, failed: true, err: errors.New("agent did not write a turn heading")}
+	}
 	return turnOutcome{round: round, failed: false}
 }
 
@@ -478,6 +489,13 @@ func recordFailureStance(state *RunState, round int, agent string, err error, no
 // openTurnLog opens (or truncates) the per-turn log file. We always
 // truncate so re-runs of the same turn (e.g. after a crash and resume that
 // re-uses the turn number) overwrite cleanly rather than concatenating.
+//
+// Concurrency note: running two `entire investigate --continue <run-id>`
+// invocations against the same run from different shells is not supported.
+// The state file (`.git/entire-investigations/state/<run-id>.json`) uses
+// atomic temp+rename writes, but per-turn logs use O_TRUNC without file
+// locking, so concurrent writers would race here. Single-shell continue is
+// the supported path; concurrent runs must use distinct run IDs.
 func openTurnLog(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, turnLogFileMode) //nolint:gosec // path is composed from validated runID + turn + agent
 	if err != nil {

@@ -1215,8 +1215,18 @@ func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgen
 			slog.String("turn_err", errString(turnErr)))
 		return
 	}
+	runID := os.Getenv(investigate.EnvRunID)
+	// Reject empty or malformed RunID — downstream condensation joins
+	// session metadata by run ID, and tagging a session with no/invalid
+	// ID would leak into checkpoint metadata as junk data. Better to
+	// leave the session untagged and warn.
+	if !investigate.IsValidRunID(runID) {
+		logging.Warn(ctx, "investigate env adoption skipped: invalid run id",
+			slog.String("env_run_id", runID))
+		return
+	}
 	state.Kind = session.KindAgentInvestigate
-	state.InvestigateRunID = os.Getenv(investigate.EnvRunID)
+	state.InvestigateRunID = runID
 	state.InvestigateRound = round
 	state.InvestigateTurn = turn
 	state.InvestigateTopic = os.Getenv(investigate.EnvTopic)

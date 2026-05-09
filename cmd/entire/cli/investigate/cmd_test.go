@@ -371,6 +371,57 @@ func TestNewCommand_ContinueLoadsExistingState(t *testing.T) {
 	}
 }
 
+// TestNewCommand_ContinueLoadsAlwaysPromptFromSettings verifies that the
+// configured settings.Investigate.AlwaysPrompt is reloaded on resume —
+// without this, a Ctrl+C plus --continue silently loses the user's
+// "be skeptical, cite line numbers"-style preamble.
+func TestNewCommand_ContinueLoadsAlwaysPromptFromSettings(t *testing.T) {
+	tmp := setupInvestigateRepo(t)
+
+	const wantPrompt = "Be skeptical and cite line numbers."
+	if err := saveInvestigateSettings(&settings.InvestigateConfig{
+		Agents:       []string{"resumed-agent"},
+		MaxTurns:     2,
+		AlwaysPrompt: wantPrompt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	if err := os.MkdirAll(stateDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	store := investigate.NewStateStoreWithDir(stateDir)
+	runID := "fedcba654321"
+	st := &investigate.RunState{
+		RunID:       runID,
+		Topic:       "resumed topic",
+		Agents:      []string{"resumed-agent"},
+		MaxTurns:    2,
+		FindingsDoc: filepath.Join(tmp, "find.md"),
+		TimelineDoc: filepath.Join(tmp, "find-timeline.md"),
+		StartingSHA: "deadbeef",
+	}
+	if err := store.Save(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+
+	captured, runFn := captureLoopRun()
+	deps := newTestDeps(t, []types.AgentName{"resumed-agent"}, []string{"resumed-agent"})
+	deps.LoopRun = runFn
+
+	cmd := investigate.NewCommand(deps)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--continue", runID})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if captured.AlwaysPrompt != wantPrompt {
+		t.Errorf("LoopInput.AlwaysPrompt = %q, want %q (must survive --continue)", captured.AlwaysPrompt, wantPrompt)
+	}
+}
+
 // TestNewCommand_ContinueWithMissingState surfaces an actionable error.
 func TestNewCommand_ContinueWithMissingState(t *testing.T) {
 	setupInvestigateRepo(t)

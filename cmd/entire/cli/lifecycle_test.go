@@ -1839,3 +1839,57 @@ func TestAdoptInvestigateEnv_InvalidRound(t *testing.T) {
 		t.Errorf("InvestigateRound: got %d, want 0 (untouched)", state.InvestigateRound)
 	}
 }
+
+// TestAdoptInvestigateEnv_RejectsBadRunID verifies that an env var
+// handshake with a malformed (non-12-hex) or empty RunID does not tag the
+// session. This protects downstream condensation from joining on junk run
+// IDs leaked via stale shell env or hand-set vars.
+func TestAdoptInvestigateEnv_RejectsBadRunID(t *testing.T) {
+	cases := []struct {
+		name  string
+		runID string
+	}{
+		{"empty", ""},
+		{"too short", "abcdef0"},
+		{"too long", "abcdef0123456789"},
+		{"uppercase", "ABCDEF012345"},
+		{"non-hex", "notatallhex!"},
+		{"path-traversal attempt", "../../../etc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Cannot use t.Parallel(): t.Chdir + t.Setenv.
+			tmp := t.TempDir()
+			testutil.InitRepo(t, tmp)
+			testutil.WriteFile(t, tmp, "f.txt", "x")
+			testutil.GitAdd(t, tmp, "f.txt")
+			testutil.GitCommit(t, tmp, "init")
+			t.Chdir(tmp)
+			paths.ClearWorktreeRootCache()
+
+			ag := newMockAgent()
+			headSHA := testutil.GetHeadHash(t, tmp)
+			t.Setenv(investigate.EnvSession, "1")
+			t.Setenv(investigate.EnvAgent, string(ag.Name()))
+			t.Setenv(investigate.EnvStartingSHA, headSHA)
+			t.Setenv(investigate.EnvRunID, tc.runID)
+			t.Setenv(investigate.EnvRound, "1")
+			t.Setenv(investigate.EnvTurn, "1")
+			t.Setenv(investigate.EnvTopic, "topic")
+			t.Setenv(investigate.EnvPrompt, "prompt")
+
+			state := &session.State{
+				SessionID:  "test-investigate-env-bad-run-id-" + tc.name,
+				BaseCommit: headSHA,
+			}
+			adoptInvestigateEnv(context.Background(), state, string(ag.Name()))
+
+			if state.Kind != "" {
+				t.Errorf("Kind: got %q, want empty for bad run ID %q", state.Kind, tc.runID)
+			}
+			if state.InvestigateRunID != "" {
+				t.Errorf("InvestigateRunID: got %q, want empty (must not be set)", state.InvestigateRunID)
+			}
+		})
+	}
+}

@@ -413,6 +413,45 @@ func TestRunInvestigateLoop_UnknownStanceWhenTimelineMissing(t *testing.T) {
 	}
 }
 
+// TestRunInvestigateLoop_MissingHeadingPausesAfterTwo verifies that an
+// agent that exits cleanly but writes no `## Turn N — <agent>` block
+// counts as a soft failure: two consecutive missing headings trip
+// pause-on-failure rather than burning the whole turn budget silently.
+func TestRunInvestigateLoop_MissingHeadingPausesAfterTwo(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+
+	findings, timeline, transcripts := makeLoopFiles(t)
+	in := LoopInput{
+		RunID:       "777777777777",
+		Topic:       "test",
+		Agents:      []string{"claude-code", "codex"},
+		MaxTurns:    3, // 6 overall turns; pause should fire on turn 2
+		FindingsDoc: findings,
+		TimelineDoc: timeline,
+		StartingSHA: "deadbeef",
+	}
+	deps := LoopDeps{
+		SpawnerFor: stableSpawner(map[string]string{
+			"claude-code": noopScript, // exits 0, never writes timeline
+			"codex":       noopScript,
+		}),
+		States:        NewStateStoreWithDir(t.TempDir()),
+		TranscriptDir: transcripts,
+	}
+
+	res, err := RunInvestigateLoop(context.Background(), in, deps)
+	if err != nil {
+		t.Fatalf("RunInvestigateLoop: %v", err)
+	}
+	if res.Outcome != OutcomePaused {
+		t.Fatalf("Outcome = %s, want paused (two consecutive missing-heading failures should pause)", res.Outcome)
+	}
+	if got := len(res.State.Stances); got != 2 {
+		t.Fatalf("Stances = %d, want 2 (loop should pause after the second consecutive failure)", got)
+	}
+}
+
 func TestRunInvestigateLoop_PersistsStateEachTurn(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)

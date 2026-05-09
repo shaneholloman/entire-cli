@@ -226,3 +226,10 @@ func validateRunID(runID string) error {
 	}
 	return nil
 }
+
+// IsValidRunID reports whether runID matches the 12-lowercase-hex format.
+// Exposed for callers in other packages (e.g. lifecycle adoption) that need
+// to validate without taking on the error-formatting overhead.
+func IsValidRunID(runID string) bool {
+	return runID != "" && runIDPattern.MatchString(runID)
+}
