@@ -43,11 +43,10 @@ func (a *PiAgent) HookNames() []string {
 //   - session_start       → SessionStart
 //   - before_agent_start  → TurnStart
 //   - agent_end           → TurnEnd
-//   - session_shutdown    → SessionEnd
+//   - session_shutdown    → (cleanup-only, no lifecycle event — see ParseHookEvent)
 func (a *PiAgent) GetSupportedHooks() []agent.HookType {
 	return []agent.HookType{
 		agent.HookSessionStart,
-		agent.HookSessionEnd,
 		agent.HookUserPromptSubmit,
 		agent.HookStop,
 	}
@@ -131,19 +130,24 @@ func (a *PiAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.
 		}, nil
 
 	case HookNameSessionShutdown:
-		// The TS extension's session_shutdown payload carries no session_id /
-		// session_file, so recover the active session ID from the cache before
-		// clearing it. Without this the SessionEnd event would have empty
-		// SessionID and the strategy couldn't identify which session ended.
-		if sessionID == "" {
-			sessionID = readCachedSessionID(ctx)
-		}
+		// Cleanup-only: clear the cached session ID. We intentionally do NOT
+		// emit SessionEnd here.
+		//
+		// Pi fires session_shutdown and agent_end on session teardown, and the
+		// TypeScript extension dispatches both via separate `entire hooks pi …`
+		// child processes (execFile is non-blocking). Child-process startup
+		// ordering then decides which event reaches the lifecycle dispatcher
+		// first; if session_shutdown wins, an emitted SessionEnd transitions
+		// the session to "ended" before agent_end can save the linkable
+		// checkpoint, leaving prepare-commit-msg with no session to attach a
+		// trailer to and the user's commit unlinked.
+		//
+		// agent_end is the source of truth for "turn complete" (and, for Pi,
+		// effectively "session over" for any single-turn `pi -p` invocation).
+		// SessionEnd is left for the framework to derive from idle timeout or
+		// the next SessionStart's stale-state cleanup.
 		clearCachedSessionID(ctx)
-		return &agent.Event{
-			Type:      agent.SessionEnd,
-			SessionID: sessionID,
-			Timestamp: now,
-		}, nil
+		return nil, nil //nolint:nilnil // intentional: cleanup-only, no lifecycle event
 
 	default:
 		// Unknown / future hooks have no lifecycle significance.
@@ -161,19 +165,35 @@ func (a *PiAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.
 
 const activeSessionFile = "pi-active-session"
 
-// resolveSessionDir returns the per-repo Pi staging directory.
-// Mirrors GetSessionDir: <repo>/.entire/tmp/pi.
+// piHookCacheSubdir is the subdirectory under .entire/tmp/ where hook
+// flow caches the active-session ID file and the agent_end transcript
+// snapshot. Agent-specific (not just .entire/tmp/) so other agents'
+// integration tests and tooling don't shadow each other under the cache
+// root.
+const piHookCacheSubdir = "pi"
+
+// resolveSessionDir returns the per-repo hook cache directory used by
+// cacheSessionID / readCachedSessionID / clearCachedSessionID and
+// captureTranscript.
+//
+// This is intentionally distinct from PiAgent.GetSessionDir, which
+// points at Pi's native session store (~/.pi/agent/sessions/...) so
+// cold attach can resolve transcripts that were never hook-captured.
+// The cache here is hook-internal and only reachable via Pi hooks
+// firing; the framework records the cached path as SessionRef in
+// checkpoint metadata, so subsequent operations on hooked sessions go
+// through the recorded path rather than re-resolving via GetSessionDir.
 func resolveSessionDir(ctx context.Context) string {
 	root, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		//nolint:forbidigo // fallback when no git repo (tests run outside repos)
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
-			return filepath.Join(paths.EntireTmpDir, piSessionSubdir)
+			return filepath.Join(paths.EntireTmpDir, piHookCacheSubdir)
 		}
 		root = wd
 	}
-	return filepath.Join(root, paths.EntireTmpDir, piSessionSubdir)
+	return filepath.Join(root, paths.EntireTmpDir, piHookCacheSubdir)
 }
 
 func cacheSessionID(ctx context.Context, id string) {
@@ -210,7 +230,7 @@ func clearCachedSessionID(ctx context.Context) {
 // <repo>/.entire/tmp/pi/<id>.json so Entire has a stable transcript
 // reference. Returns the path to the cached file, or "" if either input is
 // missing. The pi/ namespace under .entire/tmp/ is intentional — see
-// GetSessionDir / piSessionSubdir for the rationale.
+// GetSessionDir / piHookCacheSubdir for the rationale.
 func captureTranscript(ctx context.Context, sessionID, piSessionFile string) string {
 	if sessionID == "" || piSessionFile == "" {
 		return ""

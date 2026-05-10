@@ -15,16 +15,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
-	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 )
+
+// piHomeEnvVar overrides the default Pi home directory (~/.pi/agent).
+// Pi itself reads this variable, so honoring it keeps Entire and Pi in
+// agreement when a developer points Pi at a non-default home.
+const piHomeEnvVar = "PI_CODING_AGENT_DIR"
+
+// piSessionDirEnvVar lets tests redirect Pi's session lookup without
+// touching the real ~/.pi/agent. Mirrors ENTIRE_TEST_<AGENT>_SESSION_DIR
+// used by Codex.
+const piSessionDirEnvVar = "ENTIRE_TEST_PI_SESSION_DIR"
 
 //nolint:gochecknoinits // Agent self-registration is the intended pattern
 func init() {
@@ -107,46 +116,119 @@ func (a *PiAgent) GetSessionID(input *agent.HookInput) string {
 	return input.SessionID
 }
 
-// piSessionSubdir is the per-agent subdirectory under .entire/tmp/ where
-// Pi captures session transcripts. This MUST be agent-specific (not just
-// .entire/tmp) — the framework's AgentForTranscriptPath iterates every
-// agent's session dir to identify the owner of a transcript path, and a
-// broader claim would shadow the .entire/tmp/ paths used by other agents'
-// integration tests and tooling.
-const piSessionSubdir = "pi"
-
-// GetSessionDir returns the directory where Entire stages Pi session
-// transcripts. The Pi extension forwards Pi's native JSONL path on every
-// hook event; on agent_end we copy the file into
-// <repo>/.entire/tmp/pi/<id>.json so condensation can find it
-// deterministically and survive Pi sessions being deleted by the user.
+// GetSessionDir returns the directory where Pi natively stores session
+// transcripts for repoPath: <piHome>/sessions/<encoded-repo-path>/.
 //
-// When repoPath is empty we resolve the worktree root (so callers running
-// from a subdirectory still get the repo-local staging path) and only fall
-// back to os.Getwd() if no git repo is reachable.
+// Pointing this at the native store (rather than the per-repo
+// .entire/tmp/pi/ cache populated by the agent_end hook) is what lets
+// `entire session attach <id>` resolve cold sessions — sessions that
+// were never hooked, or whose hook capture failed. attach falls through
+// to GetSessionDir + ResolveSessionFile when no SessionRef is recorded
+// in metadata, and the live Pi store is the only place that always has
+// the transcript on disk.
+//
+// Resolution order:
+//  1. ENTIRE_TEST_PI_SESSION_DIR (test override; no encoding applied)
+//  2. PI_CODING_AGENT_DIR (Pi's own override; encoding still applies)
+//  3. ~/.pi/agent (default)
+//
+// The .entire/tmp/pi/ cache stays as a hook-internal detail —
+// captureTranscript writes there and the TurnEnd event records that
+// path as SessionRef in checkpoint metadata, so subsequent operations
+// on hooked sessions go through the recorded SessionRef and never call
+// GetSessionDir.
 func (a *PiAgent) GetSessionDir(repoPath string) (string, error) {
-	if repoPath == "" {
-		root, err := paths.WorktreeRoot(context.Background())
-		if err == nil {
-			repoPath = root
-		} else {
-			logging.Debug(context.Background(), "pi: GetSessionDir falling back to cwd",
-				slog.String("err", err.Error()))
-			//nolint:forbidigo // last-resort fallback when no git repo (tests outside repos)
-			wd, wdErr := os.Getwd()
-			if wdErr != nil {
-				return "", fmt.Errorf("resolve repo root or cwd for pi session dir: %w", wdErr)
-			}
-			repoPath = wd
-		}
+	if override := os.Getenv(piSessionDirEnvVar); override != "" {
+		return override, nil
 	}
-	return filepath.Join(repoPath, paths.EntireTmpDir, piSessionSubdir), nil
+	home, err := resolvePiHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "sessions", encodeRepoPathForPi(repoPath)), nil
 }
 
-// ResolveSessionFile returns the full path to a captured Pi session JSONL
-// file for the given session ID inside sessionDir.
+// GetSessionBaseDir returns the base directory containing per-project
+// session subdirectories. Used by attach's cross-project fallback
+// (searchTranscriptInProjectDirs) when a session was started from a
+// different cwd than the current worktree root.
+func (a *PiAgent) GetSessionBaseDir() (string, error) {
+	home, err := resolvePiHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "sessions"), nil
+}
+
+// ResolveSessionFile returns the path to the Pi session file for
+// agentSessionID in sessionDir. Pi names files <timestamp>_<id>.jsonl,
+// so glob for the matching ID; on multiple matches the lexicographically
+// latest (most recent timestamp) wins.
+//
+// Absolute paths pass through unchanged so hook payloads carrying live
+// pi paths work without re-resolution. When no match exists, fall back
+// to a deterministic non-existent path so downstream stat checks fail
+// cleanly rather than panicking on an empty path.
 func (a *PiAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {
-	return filepath.Join(sessionDir, agentSessionID+".json")
+	if filepath.IsAbs(agentSessionID) {
+		return agentSessionID
+	}
+	if path := findPiSessionByID(sessionDir, agentSessionID); path != "" {
+		return path
+	}
+	if sessionDir == "" {
+		return agentSessionID
+	}
+	return filepath.Join(sessionDir, agentSessionID+".jsonl")
+}
+
+// resolvePiHome returns Pi's home directory: $PI_CODING_AGENT_DIR or
+// ~/.pi/agent.
+func resolvePiHome() (string, error) {
+	if dir := os.Getenv(piHomeEnvVar); dir != "" {
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user home: %w", err)
+	}
+	return filepath.Join(home, ".pi", "agent"), nil
+}
+
+// encodeRepoPathForPi encodes an absolute repo path into Pi's
+// session-directory naming scheme: every path separator becomes '-',
+// wrapped with '--' delimiters. /Users/foo/repo encodes as
+// --Users-foo-repo--. Leading and trailing separators are absorbed so
+// /a/b/ and /a/b encode the same way. Empty input returns "".
+//
+// Both '/' and '\\' are replaced regardless of host OS: on Windows,
+// git rev-parse --show-toplevel returns forward slashes, but native
+// Windows APIs use backslashes — a host-only replacement would leak
+// the other form through and produce nested directories instead of a
+// single name, breaking session lookup. filepath.ToSlash isn't enough
+// because it only normalises the host's separator.
+func encodeRepoPathForPi(repoPath string) string {
+	if repoPath == "" {
+		return ""
+	}
+	body := strings.NewReplacer("/", "-", `\`, "-").Replace(repoPath)
+	body = strings.Trim(body, "-")
+	return "--" + body + "--"
+}
+
+// findPiSessionByID globs sessionDir for *_<sessionID>.jsonl. Returns
+// the lexicographically latest match (most recent timestamp) or "" when
+// no match exists or sessionDir/sessionID is empty.
+func findPiSessionByID(sessionDir, sessionID string) string {
+	if sessionDir == "" || sessionID == "" {
+		return ""
+	}
+	matches, err := filepath.Glob(filepath.Join(sessionDir, "*_"+sessionID+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	sort.Strings(matches)
+	return matches[len(matches)-1]
 }
 
 // ReadSession loads a captured Pi transcript and returns it as an AgentSession.
