@@ -2,9 +2,11 @@ package strategy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -377,7 +379,7 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 		}
 		if !foundCheckpointTimes {
 			var genErr error
-			gen, genErr = store.ReadGeneration(treeHash)
+			gen, genErr = readGenerationForCleanup(ctx, store, candidate.RefName, treeHash)
 			if genErr != nil {
 				warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", candidate.Name, genErr))
 				continue
@@ -414,6 +416,49 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 	}
 
 	return cleanupItems, warnings, nil
+}
+
+func readGenerationForCleanup(
+	ctx context.Context,
+	store *checkpoint.V2GitStore,
+	refName plumbing.ReferenceName,
+	treeHash plumbing.Hash,
+) (checkpoint.GenerationMetadata, error) {
+	gen, err := store.ReadGeneration(treeHash)
+	if err != nil {
+		return checkpoint.GenerationMetadata{}, err
+	}
+	if generationMetadataHasAnyTimestamp(gen) {
+		return gen, nil
+	}
+
+	fallbackGen, fallbackFound, fallbackErr := readGenerationViaGit(ctx, refName)
+	if fallbackErr != nil {
+		return checkpoint.GenerationMetadata{}, fallbackErr
+	}
+	if fallbackFound {
+		return fallbackGen, nil
+	}
+	return gen, nil
+}
+
+func generationMetadataHasAnyTimestamp(gen checkpoint.GenerationMetadata) bool {
+	return !gen.OldestCheckpointAt.IsZero() || !gen.NewestCheckpointAt.IsZero()
+}
+
+func readGenerationViaGit(ctx context.Context, refName plumbing.ReferenceName) (checkpoint.GenerationMetadata, bool, error) {
+	spec := fmt.Sprintf("%s:%s", refName, paths.GenerationFileName)
+	cmd := exec.CommandContext(ctx, "git", "show", spec)
+	output, err := cmd.Output()
+	if err != nil {
+		return checkpoint.GenerationMetadata{}, false, nil
+	}
+
+	var gen checkpoint.GenerationMetadata
+	if err := json.Unmarshal(output, &gen); err != nil {
+		return checkpoint.GenerationMetadata{}, false, fmt.Errorf("parse git-readable %s: %w", paths.GenerationFileName, err)
+	}
+	return gen, true, nil
 }
 
 type archivedV2GenerationCandidate struct {

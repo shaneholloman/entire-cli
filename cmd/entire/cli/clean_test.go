@@ -140,12 +140,13 @@ func runCleanGit(t *testing.T, dir string, args ...string) string {
 	return string(output)
 }
 
-func addCleanBareOrigin(t *testing.T, repoRoot string) {
+func addCleanBareOrigin(t *testing.T, repoRoot string) string {
 	t.Helper()
 
 	remoteDir := filepath.Join(t.TempDir(), "origin.git")
 	runCleanGit(t, "", "init", "--bare", remoteDir)
 	runCleanGit(t, repoRoot, "remote", "add", "origin", remoteDir)
+	return remoteDir
 }
 
 func TestCleanLongDescription_DefaultIsGeneric(t *testing.T) {
@@ -340,6 +341,54 @@ func createRemoteOnlyArchivedGenerationRef(
 		t.Fatalf("failed to remove local archived generation ref %s: %v", refName, err)
 	}
 	return ref.Hash().String()
+}
+
+func createRemoteOnlyArchivedGenerationRefFromSeparateRepo(
+	t *testing.T,
+	remoteDir string,
+	generation string,
+	oldest time.Time,
+	newest time.Time,
+) string {
+	t.Helper()
+
+	producerDir := filepath.Join(t.TempDir(), "producer")
+	runCleanGit(t, "", "init", producerDir)
+	runCleanGit(t, producerDir, "config", "user.name", "test")
+	runCleanGit(t, producerDir, "config", "user.email", "test@test.com")
+	runCleanGit(t, producerDir, "config", "commit.gpgsign", "false")
+
+	gen := checkpoint.GenerationMetadata{
+		OldestCheckpointAt: oldest.UTC(),
+		NewestCheckpointAt: newest.UTC(),
+	}
+	genJSON, err := json.Marshal(gen)
+	if err != nil {
+		t.Fatalf("failed to marshal generation metadata: %v", err)
+	}
+
+	writeCleanProducerFile := func(rel string, content []byte) {
+		t.Helper()
+
+		path := filepath.Join(producerDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("failed to create parent for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("failed to write %s: %v", rel, err)
+		}
+	}
+
+	writeCleanProducerFile(paths.GenerationFileName, genJSON)
+	writeCleanProducerFile("aa/bbccddeeff/0/"+paths.TranscriptFileName, []byte(`{"transcript":"data"}`))
+
+	runCleanGit(t, producerDir, "add", ".")
+	runCleanGit(t, producerDir, "commit", "--no-gpg-sign", "-m", "archived generation")
+	commitHash := strings.TrimSpace(runCleanGit(t, producerDir, "rev-parse", "HEAD"))
+
+	refName := paths.V2FullRefPrefix + generation
+	runCleanGit(t, producerDir, "push", remoteDir, "HEAD:"+refName)
+	return commitHash
 }
 
 func createV2MainMetadataRef(t *testing.T, repo *git.Repository, cpID id.CheckpointID, createdAt time.Time) {
@@ -1061,6 +1110,52 @@ func TestCleanCmd_All_DryRunListsRemoteOnlyEligibleV2Generations(t *testing.T) {
 	}
 	if _, err := repo.Reference(plumbing.ReferenceName("refs/entire-clean-tmp/v2/full/0000000000001"), true); err == nil {
 		t.Fatal("dry-run should remove temporary fetched generation ref")
+	}
+}
+
+func TestCleanCmd_All_DryRunReadsGitMaterializedRemoteGenerationMetadata(t *testing.T) {
+	repo, _ := setupCleanTestRepo(t)
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("failed to get worktree: %v", err)
+	}
+	repoRoot := wt.Filesystem().Root()
+
+	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {"checkpoints_v2": true, "full_transcript_generation_retention_days": 14}}`)
+	remoteDir := addCleanBareOrigin(t, repoRoot)
+	runCleanGit(t, remoteDir, "config", "uploadpack.allowFilter", "true")
+	runCleanGit(t, repoRoot, "config", "protocol.file.allow", "always")
+	refName := paths.V2FullRefPrefix + "0000000000007"
+	createRemoteOnlyArchivedGenerationRefFromSeparateRepo(
+		t,
+		remoteDir,
+		"0000000000007",
+		time.Now().AddDate(0, 0, -20),
+		time.Now().AddDate(0, 0, -15),
+	)
+	runCleanGit(t, repoRoot, "-c", "protocol.file.allow=always", "fetch", "--filter=blob:none", "--depth=1", "--no-tags", "file://"+remoteDir, refName+":"+refName)
+
+	cmd := newCleanCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--all", "--dry-run"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("clean --all --dry-run error = %v", err)
+	}
+
+	if strings.Contains(stderr.String(), "missing generation.json") {
+		t.Fatalf("did not expect missing generation warning for Git-readable remote generation, got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Archived v2 generations (1):") {
+		t.Fatalf("expected archived v2 generation section, got stdout=%q stderr=%q", output, stderr.String())
+	}
+	if !strings.Contains(output, "0000000000007") {
+		t.Fatalf("expected remote generation to be eligible, got stdout=%q stderr=%q", output, stderr.String())
 	}
 }
 
