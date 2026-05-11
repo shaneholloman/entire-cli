@@ -1126,15 +1126,17 @@ func TestCleanCmd_All_DryRunReadsGitMaterializedRemoteGenerationMetadata(t *test
 	remoteDir := addCleanBareOrigin(t, repoRoot)
 	runCleanGit(t, remoteDir, "config", "uploadpack.allowFilter", "true")
 	runCleanGit(t, repoRoot, "config", "protocol.file.allow", "always")
-	refName := paths.V2FullRefPrefix + "0000000000007"
-	createRemoteOnlyArchivedGenerationRefFromSeparateRepo(
-		t,
-		remoteDir,
-		"0000000000007",
-		time.Now().AddDate(0, 0, -20),
-		time.Now().AddDate(0, 0, -15),
-	)
-	runCleanGit(t, repoRoot, "-c", "protocol.file.allow=always", "fetch", "--filter=blob:none", "--depth=1", "--no-tags", "file://"+remoteDir, refName+":"+refName)
+	for _, generation := range []string{"0000000000007", "0000000000008"} {
+		refName := paths.V2FullRefPrefix + generation
+		createRemoteOnlyArchivedGenerationRefFromSeparateRepo(
+			t,
+			remoteDir,
+			generation,
+			time.Now().AddDate(0, 0, -20),
+			time.Now().AddDate(0, 0, -15),
+		)
+		runCleanGit(t, repoRoot, "-c", "protocol.file.allow=always", "fetch", "--filter=blob:none", "--depth=1", "--no-tags", "file://"+remoteDir, refName+":"+refName)
+	}
 
 	cmd := newCleanCmd()
 	var stdout, stderr bytes.Buffer
@@ -1151,11 +1153,13 @@ func TestCleanCmd_All_DryRunReadsGitMaterializedRemoteGenerationMetadata(t *test
 	}
 
 	output := stdout.String()
-	if !strings.Contains(output, "Archived v2 generations (1):") {
+	if !strings.Contains(output, "Archived v2 generations (2):") {
 		t.Fatalf("expected archived v2 generation section, got stdout=%q stderr=%q", output, stderr.String())
 	}
-	if !strings.Contains(output, "0000000000007") {
-		t.Fatalf("expected remote generation to be eligible, got stdout=%q stderr=%q", output, stderr.String())
+	for _, generation := range []string{"0000000000007", "0000000000008"} {
+		if !strings.Contains(output, generation) {
+			t.Fatalf("expected remote generation %s to be eligible, got stdout=%q stderr=%q", generation, output, stderr.String())
+		}
 	}
 }
 
