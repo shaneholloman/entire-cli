@@ -27,6 +27,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/spawn"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -79,7 +80,6 @@ type runFlags struct {
 	cont      string
 	edit      bool
 	findings  bool
-	verbose   bool
 }
 
 // NewCommand returns the `entire investigate` cobra command wired with the
@@ -113,7 +113,6 @@ Flags:
   --continue <run-id>     resume an existing run
   --edit                  re-open the investigate config picker
   --findings              browse local investigation manifests
-  --verbose               tee per-turn agent stdout to the terminal
 
 Subcommands:
   fix [run-id]            launch a coding agent with the run's findings as
@@ -142,7 +141,6 @@ Subcommands:
 	cmd.Flags().StringVar(&flags.cont, "continue", "", "resume an existing run by id")
 	cmd.Flags().BoolVar(&flags.edit, "edit", false, "re-open the investigate config picker")
 	cmd.Flags().BoolVar(&flags.findings, "findings", false, "browse local investigation manifests")
-	cmd.Flags().BoolVar(&flags.verbose, "verbose", false, "tee per-turn agent stdout to the terminal")
 
 	cmd.AddCommand(newFixSubcommand(deps))
 	if deps.AttachCmd != nil {
@@ -635,34 +633,56 @@ func executeLoopAndCapture(ctx context.Context, cmd *cobra.Command, in LoopInput
 	}
 	transcriptDir := filepath.Join(commonDir, InvestigationsDirName, "transcripts")
 
-	verboseOut := io.Writer(nil)
-	if cmd.Flags().Changed("verbose") {
-		v, getErr := cmd.Flags().GetBool("verbose")
-		if getErr != nil {
-			return LoopResult{}, fmt.Errorf("read --verbose flag: %w", getErr)
-		}
-		if v {
-			verboseOut = cmd.OutOrStdout()
-		}
+	out := cmd.OutOrStdout()
+	progress, tuiSink, runCtx, cancelTUI := buildProgressSink(ctx, in, out)
+	if cancelTUI != nil {
+		defer cancelTUI()
+	}
+	if tuiSink != nil {
+		tuiSink.Start()
+		defer tuiSink.Wait()
 	}
 
 	ldeps := LoopDeps{
 		SpawnerFor:    deps.SpawnerFor,
 		States:        stateStore,
 		TranscriptDir: transcriptDir,
-		VerboseOut:    verboseOut,
-		ProgressOut:   cmd.OutOrStdout(),
+		Progress:      progress,
 	}
 
 	runner := deps.LoopRun
 	if runner == nil {
 		runner = RunInvestigateLoop
 	}
-	result, runErr := runner(ctx, in, ldeps)
+	result, runErr := runner(runCtx, in, ldeps)
 	if runErr != nil {
 		return result, fmt.Errorf("investigate loop: %w", runErr)
 	}
 	return result, nil
+}
+
+// buildProgressSink chooses between the Bubble Tea TUI and the plain-text
+// fallback based on terminal capability. In TTY mode we wrap ctx in a
+// cancellable child so the in-TUI Ctrl+C handler can stop the run via the
+// same cancel function the cobra root would use on SIGINT. In non-TTY mode
+// the caller's ctx is returned unchanged and cancelTUI is nil.
+//
+//nolint:ireturn // intentional: callers need the abstract ProgressSink to pass to LoopDeps, plus the concrete *tuiProgressSink to drive Start/Wait
+func buildProgressSink(ctx context.Context, in LoopInput, out io.Writer) (ProgressSink, *tuiProgressSink, context.Context, context.CancelFunc) {
+	if !interactive.IsTerminalWriter(out) || !interactive.CanPromptInteractively() {
+		return newTextProgressSink(out), nil, ctx, nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	maxTurns := in.MaxTurns
+	if maxTurns == 0 {
+		maxTurns = defaultMaxTurns
+	}
+	quorum := in.Quorum
+	if quorum == 0 {
+		quorum = len(in.Agents)
+	}
+	sink := newTUIProgressSink(in.Topic, in.RunID, in.Agents, maxTurns, quorum, cancel, out)
+	return sink, sink, runCtx, cancel
 }
 
 // gitCommonDirForTranscripts resolves the git common dir via the same

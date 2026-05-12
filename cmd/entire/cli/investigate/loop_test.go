@@ -747,12 +747,16 @@ func TestRunInvestigateLoop_CancelledContext(t *testing.T) {
 	}
 }
 
-func TestRunInvestigateLoop_VerboseTeesStdout(t *testing.T) {
+// TestRunInvestigateLoop_WritesPerTurnLogFile verifies that agent stdout is
+// captured to the per-turn log file on disk. The previous --verbose flag
+// (which also teed stdout to the terminal) was removed when the TUI became
+// the default user-facing surface; the on-disk log is now the canonical
+// place to inspect raw agent output.
+func TestRunInvestigateLoop_WritesPerTurnLogFile(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
 	findings, timeline, transcripts := makeLoopFiles(t)
-	var buf bytes.Buffer
 
 	in := LoopInput{
 		RunID:       "aaaaaaaaaaaa",
@@ -766,8 +770,6 @@ func TestRunInvestigateLoop_VerboseTeesStdout(t *testing.T) {
 	}
 	deps := LoopDeps{
 		SpawnerFor: func(agent string) spawn.Spawner {
-			// Echo a sentinel to stdout, then write an approve to the
-			// timeline so the loop concludes quickly.
 			script := `echo SENTINEL_OUTPUT
 ` + appendTurnScript(agent, "approve")
 			return &fakeSpawner{
@@ -779,16 +781,11 @@ func TestRunInvestigateLoop_VerboseTeesStdout(t *testing.T) {
 		},
 		States:        NewStateStoreWithDir(t.TempDir()),
 		TranscriptDir: transcripts,
-		VerboseOut:    &buf,
 	}
 
 	if _, err := RunInvestigateLoop(context.Background(), in, deps); err != nil {
 		t.Fatalf("RunInvestigateLoop: %v", err)
 	}
-	if !strings.Contains(buf.String(), "SENTINEL_OUTPUT") {
-		t.Errorf("VerboseOut did not capture stdout: %q", buf.String())
-	}
-	// The per-turn log file should also contain the sentinel.
 	logPath := filepath.Join(transcripts, in.RunID, "turn-1-claude-code.log")
 	body, err := os.ReadFile(logPath)
 	if err != nil {

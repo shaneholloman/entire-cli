@@ -9,12 +9,12 @@ package investigate
 //  2. Composes a prompt via ComposeInvestigatePrompt.
 //  3. Spawns the agent via Spawner.BuildCmd with ENTIRE_INVESTIGATE_* env
 //     populated by AppendInvestigateEnv.
-//  4. Tees the agent's stdout to a per-turn log file (and optionally to a
-//     verbose Writer).
+//  4. Tees the agent's stdout to a per-turn log file on disk.
 //  5. Waits for the agent to exit. Re-hashes the docs.
 //  6. Parses the timeline doc for the freshly-added "## Turn N — <agent>"
 //     block and reads its "**Stance:**" line.
-//  7. Records a TurnStance in the persisted RunState.
+//  7. Records a TurnStance in the persisted RunState and notifies the
+//     ProgressSink (TUI dashboard or headless text writer).
 //  8. Decides whether to terminate (quorum, stalled, paused, cancelled) or
 //     advance to the next agent.
 //
@@ -62,13 +62,10 @@ type LoopDeps struct {
 	// written. Layout: <TranscriptDir>/<run-id>/turn-<N>-<agent>.log
 	TranscriptDir string
 
-	// VerboseOut, when non-nil, receives a tee of every per-turn agent
-	// stdout. nil disables the tee (logs still go to per-turn files).
-	VerboseOut io.Writer
-
-	// ProgressOut, when non-nil, receives "Turn N · <agent>" banners and
-	// "Stance: <stance>" trailers. nil suppresses progress output.
-	ProgressOut io.Writer
+	// Progress receives turn lifecycle events. Production wires either a
+	// tuiProgressSink (TTY) or textProgressSink (non-TTY); tests typically
+	// inject a fake recorder. nil is treated as nullProgressSink (no-op).
+	Progress ProgressSink
 
 	// Now returns the current time. Defaults to time.Now if nil.
 	Now func() time.Time
@@ -169,6 +166,9 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 	if deps.TranscriptDir == "" {
 		return LoopResult{}, errors.New("LoopDeps.TranscriptDir is required")
 	}
+	if deps.Progress == nil {
+		deps.Progress = nullProgressSink{}
+	}
 	now := deps.Now
 	if now == nil {
 		now = time.Now
@@ -202,6 +202,7 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 		deps:             deps,
 		now:              now,
 		quorum:           quorum,
+		maxPerAgent:      maxTurnsPerAgent,
 		transcriptRunDir: transcriptRunDir,
 	}
 	consecutiveFails := 0
@@ -213,6 +214,7 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 			// LoopResult.Outcome; the linter's nilerr flag would prefer we
 			// return ctxErr, but the contract is "always-returns-result,
 			// error only for programmer bugs".
+			deps.Progress.RunFinished(OutcomeCancelled)
 			//nolint:nilerr // ctx cancellation is reported via Outcome, not the error return
 			return LoopResult{Outcome: OutcomeCancelled, State: state, Err: lastErr}, nil
 		}
@@ -222,6 +224,7 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 			lastErr = outcome.err
 			consecutiveFails++
 			if consecutiveFails >= pauseAfterConsecutiveFailures {
+				deps.Progress.RunFinished(OutcomePaused)
 				return LoopResult{Outcome: OutcomePaused, State: state, Err: lastErr}, nil
 			}
 		} else {
@@ -234,11 +237,13 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 		}
 		if state.NextAgentIdx == 0 {
 			if approveCountInRound(state.Stances, outcome.round) >= quorum {
+				deps.Progress.RunFinished(OutcomeQuorum)
 				return LoopResult{Outcome: OutcomeQuorum, State: state, Err: nil}, nil
 			}
 		}
 	}
 
+	deps.Progress.RunFinished(OutcomeStalled)
 	return LoopResult{Outcome: OutcomeStalled, State: state, Err: lastErr}, nil
 }
 
@@ -250,6 +255,7 @@ type turnConfig struct {
 	deps             LoopDeps
 	now              func() time.Time
 	quorum           int
+	maxPerAgent      int
 	transcriptRunDir string
 }
 
@@ -277,10 +283,13 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	preFindings := hashFile(ctx, in.FindingsDoc)
 	preTimeline := hashFile(ctx, in.TimelineDoc)
 
+	deps.Progress.TurnStarted(agentName, state.Turn, round, cfg.maxPerAgent)
+
 	spawner := deps.SpawnerFor(agentName)
 	if spawner == nil {
 		err := fmt.Errorf("no spawner for agent %q", agentName)
 		recordFailureStance(state, round, agentName, err, cfg.now)
+		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, 0, true, err)
 		return turnOutcome{round: round, failed: true, err: err}
 	}
 
@@ -310,27 +319,24 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	logFile, err := openTurnLog(logPath)
 	if err != nil {
 		recordFailureStance(state, round, agentName, err, cfg.now)
+		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, 0, true, err)
 		return turnOutcome{round: round, failed: true, err: err}
 	}
 
 	// Wrap the log file in a size-capped writer so a hostile or
-	// misbehaving agent cannot fill the disk via runaway stdout. Verbose
-	// tee output is intentionally uncapped — it goes to the user's
-	// terminal where flow control + scrollback already bound it.
+	// misbehaving agent cannot fill the disk via runaway stdout. The TUI
+	// dashboard owns the user-facing live view; the per-turn log file is
+	// the canonical place for inspecting raw agent stdout/stderr.
 	cappedLog := newBoundedFileWriter(logFile, maxTurnLogBytes)
-	writers := []io.Writer{cappedLog}
-	if deps.VerboseOut != nil {
-		writers = append(writers, deps.VerboseOut)
-	}
-	mw := io.MultiWriter(writers...)
-	cmd.Stdout = mw
-	cmd.Stderr = mw
+	cmd.Stdout = cappedLog
+	cmd.Stderr = cappedLog
 
-	printProgress(deps.ProgressOut, fmt.Sprintf("Turn %d · %s\n", state.Turn, agentName))
 	logging.Info(ctx, "investigate: turn start",
 		sRun(in.RunID), sAgent(agentName), sTurn(state.Turn), sRound(round))
 
+	turnStart := cfg.now()
 	runErr := cmd.Run()
+	turnDuration := cfg.now().Sub(turnStart)
 	if closeErr := logFile.Close(); closeErr != nil {
 		logging.Debug(ctx, "investigate: close turn log",
 			sErr(closeErr), sRun(in.RunID), sAgent(agentName))
@@ -359,13 +365,13 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 			sRun(in.RunID), sAgent(agentName),
 			sTurn(state.Turn), sRound(round),
 			slogString("err", runErr.Error()))
+		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, turnDuration, true, runErr)
 		return turnOutcome{round: round, failed: true, err: runErr}
 	}
 
 	state.Stances = append(state.Stances, turn)
 	updateRoundCounter(state)
 	state.UpdatedAt = cfg.now()
-	printProgress(deps.ProgressOut, fmt.Sprintf("  Stance: %s\n", stance))
 	logging.Info(ctx, "investigate: turn end",
 		sRun(in.RunID), sAgent(agentName),
 		sTurn(state.Turn), sRound(round),
@@ -381,8 +387,11 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		logging.Warn(ctx, "investigate: turn missing heading",
 			sRun(in.RunID), sAgent(agentName),
 			sTurn(state.Turn), sRound(round))
-		return turnOutcome{round: round, failed: true, err: errors.New("agent did not write a turn heading")}
+		missingHeading := errors.New("agent did not write a turn heading")
+		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, turnDuration, true, missingHeading)
+		return turnOutcome{round: round, failed: true, err: missingHeading}
 	}
+	deps.Progress.TurnFinished(agentName, state.Turn, stance, turnDuration, false, nil)
 	return turnOutcome{round: round, failed: false}
 }
 
@@ -582,16 +591,6 @@ func (b *boundedFileWriter) emitTruncationMarker() {
 	b.truncated = true
 	marker := fmt.Sprintf("\n[entire: log truncated at %d bytes]\n", b.limit)
 	_, _ = b.w.Write([]byte(marker)) //nolint:errcheck // best-effort marker; primary write already succeeded
-}
-
-// printProgress writes msg to w when w is non-nil. Errors are intentionally
-// dropped — progress output is best-effort and must never block the loop.
-func printProgress(w io.Writer, msg string) {
-	if w == nil {
-		return
-	}
-	//nolint:errcheck // progress output is best-effort; loop must not block on a slow/closed UI sink
-	_, _ = io.WriteString(w, msg)
 }
 
 // hashFile returns the SHA-256 of the file at path as a hex string. Returns
