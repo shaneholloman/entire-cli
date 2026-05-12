@@ -486,7 +486,9 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 		StartingSHA:  state.StartingSHA,
 		Resume:       state,
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Resuming investigation: %q (run %s)\n", state.Topic, state.RunID)
+	if !interactive.IsTerminalWriter(cmd.OutOrStdout()) || !interactive.CanPromptInteractively() {
+		fmt.Fprintf(cmd.OutOrStdout(), "Resuming investigation: %q (run %s)\n", state.Topic, state.RunID)
+	}
 	return executeLoop(ctx, cmd, in, deps)
 }
 
@@ -611,9 +613,15 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		topic = bres.Topic
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Investigating: %q (run %s)\n", topic, runID)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Findings: %s\n", findingsDoc)
-	fmt.Fprintf(cmd.OutOrStdout(), "  Timeline: %s\n", timelineDoc)
+	// Skip the pre-TUI banner when the dashboard will render its own title
+	// row — those three lines were echoing the TUI header and leaving stale
+	// rows above the live dashboard. In non-TTY mode the text sink shows
+	// nothing similar, so the banner remains useful there.
+	if !interactive.IsTerminalWriter(cmd.OutOrStdout()) || !interactive.CanPromptInteractively() {
+		fmt.Fprintf(cmd.OutOrStdout(), "Investigating: %q (run %s)\n", topic, runID)
+		fmt.Fprintf(cmd.OutOrStdout(), "  Findings: %s\n", findingsDoc)
+		fmt.Fprintf(cmd.OutOrStdout(), "  Timeline: %s\n", timelineDoc)
+	}
 
 	startedAt := time.Now().UTC()
 	in := LoopInput{

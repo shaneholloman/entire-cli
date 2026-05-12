@@ -161,6 +161,9 @@ linters:
       - path: ^cmd/entire/cli/review/tui_model\.go$
         linters:
           - ireturn
+      - path: ^cmd/entire/cli/investigate/cmd\.go$
+        linters:
+          - ireturn
       - text: "`strat` is a misspelling"
         linters:
           - misspell
