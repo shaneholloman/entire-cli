@@ -349,15 +349,10 @@ func readTreeEntriesViaCLI(ctx context.Context, hash plumbing.Hash) ([]object.Tr
 // WalkCheckpointShards iterates over the two-level shard structure (<id[:2]>/<id[2:]>/)
 // in a checkpoint tree, calling fn for each checkpoint found. Skips non-directory entries
 // at both levels (e.g., generation.json at the root). The callback receives the parsed
-// checkpoint ID and the tree hash of the checkpoint subtree.
-func WalkCheckpointShards(repo *git.Repository, tree *object.Tree, fn func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error) error {
-	return WalkCheckpointShardsCtx(context.Background(), repo, tree, fn)
-}
-
-// WalkCheckpointShardsCtx is the cancellable variant of WalkCheckpointShards.
-// It checks ctx between buckets and between checkpoints so long enumerations
-// (e.g. cleanup of many archived generations) abort promptly on Ctrl+C.
-func WalkCheckpointShardsCtx(ctx context.Context, repo *git.Repository, tree *object.Tree, fn func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error) error {
+// checkpoint ID and the tree hash of the checkpoint subtree. The walk honors ctx
+// cancellation between buckets and between checkpoints so long enumerations abort
+// promptly on Ctrl+C.
+func WalkCheckpointShards(ctx context.Context, repo *git.Repository, tree *object.Tree, fn func(cpID id.CheckpointID, cpTreeHash plumbing.Hash) error) error {
 	for _, bucketEntry := range tree.Entries {
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // propagate context cancellation unwrapped

@@ -382,12 +382,12 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 			continue
 		}
 
-		// Use the cancellable variant so the go-git tree walk (the slow path
-		// when generation.json is missing) honors a single Ctrl+C instead of
-		// running to completion. Cancellation surfaces as context.Canceled
-		// here, which we propagate unwrapped so the caller can map it to a
-		// SilentError and exit cleanly.
-		gen, foundCheckpointTimes, timestampErr := store.ComputeGenerationTimestampsFromTreesCtx(ctx, treeHash, nil)
+		// The go-git tree walk (the slow path when generation.json is missing)
+		// honors ctx between checkpoints, so a single Ctrl+C stops cleanup
+		// instead of running every generation to completion. Cancellation
+		// surfaces as context.Canceled here, which we propagate unwrapped so
+		// the caller can map it to a SilentError and exit cleanly.
+		gen, foundCheckpointTimes, timestampErr := store.ComputeGenerationTimestampsFromTrees(ctx, treeHash, nil)
 		if timestampErr != nil {
 			if errors.Is(timestampErr, context.Canceled) || errors.Is(timestampErr, context.DeadlineExceeded) {
 				return nil, warnings, timestampErr //nolint:wrapcheck // propagate context cancellation unwrapped
