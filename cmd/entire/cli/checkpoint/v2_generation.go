@@ -169,10 +169,7 @@ func (s *V2GitStore) ComputeGenerationCheckpointTimestamps(ctx context.Context, 
 // metadata.json is consulted before falling back to the raw transcript inside
 // the checkpoint's full-tree. Returns found=false when any checkpoint cannot
 // produce a timestamp; callers decide their own fallback (e.g. read existing
-// generation.json, recompute from in-memory data, or surface an error). The
-// underlying tree walk honors ctx between checkpoints so long enumerations
-// (e.g. `entire clean --all` across many archived generations with missing
-// generation.json files) abort promptly on Ctrl+C.
+// generation.json, recompute from in-memory data, or surface an error).
 func (s *V2GitStore) ComputeGenerationTimestampsFromTrees(ctx context.Context, rootTreeHash plumbing.Hash, mainTree *object.Tree) (GenerationMetadata, bool, error) {
 	if rootTreeHash == plumbing.ZeroHash {
 		return GenerationMetadata{}, false, nil

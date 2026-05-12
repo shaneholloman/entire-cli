@@ -18,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 )
 
 func cleanLongDescription(ctx context.Context) string {
@@ -278,49 +279,47 @@ func runCleanAll(ctx context.Context, cmd *cobra.Command, force, dryRun bool) er
 		s = &settings.EntireSettings{}
 	}
 
-	v2Ctx, cancelV2 := context.WithCancel(ctx)
-	defer cancelV2()
-
 	var (
+		items      []strategy.CleanupItem
 		v2Items    []strategy.CleanupItem
 		v2Warnings []string
-		v2Err      error
 	)
-	v2Done := make(chan struct{})
-	if s.IsCheckpointsV2Enabled() {
-		go func() {
-			defer close(v2Done)
-			v2Items, v2Warnings, v2Err = strategy.ListEligibleV2Generations(v2Ctx, s)
-		}()
-	} else {
-		close(v2Done)
-	}
-
-	// List all items (sessions, shadow branches) — not just orphaned ones
-	items, err := strategy.ListAllItems(ctx)
-	if err != nil {
-		cancelV2()
-		<-v2Done
-		return fmt.Errorf("failed to list items: %w", err)
-	}
-
-	// List temp files — skip active-session filter since --all deletes those sessions
-	tempFiles, err := listAllTempFiles(ctx)
-	if err != nil {
-		// Non-fatal: continue with other cleanup items
-		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to list temp files: %v\n", err)
-	}
-
-	<-v2Done
-	if v2Err != nil {
-		if errors.Is(v2Err, context.Canceled) {
-			return NewSilentError(v2Err)
+	g, gCtx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		items, err = strategy.ListAllItems(gCtx)
+		if err != nil {
+			return fmt.Errorf("failed to list items: %w", err)
 		}
-		return fmt.Errorf("failed to list v2 generations: %w", v2Err)
+		return nil
+	})
+	if s.IsCheckpointsV2Enabled() {
+		g.Go(func() error {
+			var err error
+			v2Items, v2Warnings, err = strategy.ListEligibleV2Generations(gCtx, s)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return err //nolint:wrapcheck // propagate cancellation unwrapped so callers map it to SilentError
+				}
+				return fmt.Errorf("failed to list v2 generations: %w", err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return NewSilentError(err)
+		}
+		return err //nolint:wrapcheck // already wrapped inside the goroutine closures
 	}
 	items = append(items, v2Items...)
 	for _, warning := range v2Warnings {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s\n", warning)
+	}
+
+	tempFiles, err := listAllTempFiles(ctx)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to list temp files: %v\n", err)
 	}
 
 	return runCleanAllWithItems(ctx, cmd, force, dryRun, items, tempFiles)
