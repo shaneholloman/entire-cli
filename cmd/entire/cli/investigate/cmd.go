@@ -76,6 +76,11 @@ type Deps struct {
 	// soft-warn against running a redundant investigation. Nil means
 	// "skip the check entirely".
 	HeadHasInvestigateCheckpoint func(ctx context.Context) (bool, string)
+
+	// InvestigateMultipicker overrides the spawn-time agent picker. Nil
+	// means "use the real PickInvestigateAgents form". Test-injectable so
+	// tests can drive the picker without a TTY.
+	InvestigateMultipicker func(ctx context.Context, choices []AgentChoice) (PickedInvestigate, error)
 }
 
 // runFlags collects the flag values the run path inspects. Captured into a
@@ -489,6 +494,35 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		return wrapSilent(silentErr, err)
 	}
 
+	// Spawn-time multipicker: when 2+ agents configured AND --agents not set,
+	// narrow the agent list and capture an optional per-run prompt.
+	perRun := ""
+	if len(agents) >= 2 && strings.TrimSpace(f.agentsCSV) == "" {
+		picker := deps.InvestigateMultipicker
+		canRun := picker != nil
+		if picker == nil {
+			picker = PickInvestigateAgents
+			canRun = interactive.CanPromptInteractively()
+		}
+		if canRun {
+			choices := make([]AgentChoice, 0, len(agents))
+			for _, name := range agents {
+				choices = append(choices, AgentChoice{Name: name, Label: name})
+			}
+			picked, pickErr := picker(ctx, choices)
+			if pickErr != nil {
+				if errors.Is(pickErr, ErrInvestigatePickerCancelled) {
+					return nil
+				}
+				cmd.SilenceUsage = true
+				fmt.Fprintln(cmd.ErrOrStderr(), pickErr.Error())
+				return wrapSilent(silentErr, pickErr)
+			}
+			agents = picked.Names
+			perRun = picked.PerRun
+		}
+	}
+
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve worktree root: %w", err)
@@ -544,7 +578,7 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		Agents:       agents,
 		MaxTurns:     maxTurns,
 		Quorum:       quorum,
-		AlwaysPrompt: s.Investigate.AlwaysPrompt,
+		AlwaysPrompt: composeAlwaysPrompt(s.Investigate.AlwaysPrompt, perRun),
 		FindingsDoc:  findingsDoc,
 		TimelineDoc:  timelineDoc,
 		StartingSHA:  headSHA,
@@ -863,6 +897,23 @@ func wrapSilent(fn func(error) error, err error) error {
 		return err
 	}
 	return fn(err)
+}
+
+// composeAlwaysPrompt joins the configured always-prompt with a per-run
+// preamble. Either may be empty.
+func composeAlwaysPrompt(configured, perRun string) string {
+	c := strings.TrimSpace(configured)
+	p := strings.TrimSpace(perRun)
+	switch {
+	case c == "" && p == "":
+		return ""
+	case c == "":
+		return p
+	case p == "":
+		return c
+	default:
+		return c + "\n\n" + p
+	}
 }
 
 // runGit runs `git <args>` in repoDir and returns stdout as a string. We

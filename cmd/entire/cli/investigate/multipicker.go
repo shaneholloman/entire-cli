@@ -40,8 +40,6 @@ var ErrInvestigateNoAgentsSelected = errors.New("no agents selected for investig
 // optional per-run prompt.
 //
 // Requires len(eligible) >= 2.
-//
-//nolint:unparam // PickedInvestigate.Names is consumed by C2 (cmd.go wiring) in the next commit; tests in C1 only assert the error path.
 func PickInvestigateAgents(ctx context.Context, eligible []AgentChoice) (PickedInvestigate, error) {
 	if len(eligible) < 2 {
 		return PickedInvestigate{}, fmt.Errorf("PickInvestigateAgents requires at least 2 eligible agents, got %d", len(eligible))

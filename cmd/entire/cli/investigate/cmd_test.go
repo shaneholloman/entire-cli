@@ -635,6 +635,86 @@ func TestRunInvestigate_SoftWarnDeclinedReturnsNil(t *testing.T) {
 	require.False(t, loopCalled, "loop must not run when user declines soft warn")
 }
 
+func TestRunFresh_SkipsMultipickerWhenAgentsFlagPresent(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmp, ".entire/settings.local.json"),
+		[]byte(`{"investigate":{"agents":["claude-code","codex"]}}`), 0o644))
+
+	var pickerCalls int
+	deps := investigate.Deps{
+		GetAgentsWithHooksInstalled: func(_ context.Context) []types.AgentName {
+			return []types.AgentName{"claude-code", "codex"}
+		},
+		NewSilentError: func(err error) error { return err },
+		SpawnerFor:     func(name string) spawn.Spawner { return stubSpawner{name: name} },
+		InvestigateMultipicker: func(_ context.Context, _ []investigate.AgentChoice) (investigate.PickedInvestigate, error) {
+			pickerCalls++
+			return investigate.PickedInvestigate{Names: []string{"claude-code"}}, nil
+		},
+		LoopRun: func(_ context.Context, _ investigate.LoopInput, _ investigate.LoopDeps) (investigate.LoopResult, error) {
+			return investigate.LoopResult{Outcome: investigate.OutcomeQuorum}, nil
+		},
+	}
+	cmd := investigate.NewCommand(deps)
+	cmd.SetArgs([]string{"--topic", "foo", "--agents", "claude-code"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	_ = cmd.ExecuteContext(context.Background()) //nolint:errcheck // contract is picker not invoked; downstream errors irrelevant
+	require.Equal(t, 0, pickerCalls, "multipicker must not run when --agents is set")
+}
+
+func TestRunFresh_InvokesMultipickerWhenTwoAgentsAndNoFlag(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	testutil.InitRepo(t, tmp)
+	testutil.WriteFile(t, tmp, "f.txt", "x")
+	testutil.GitAdd(t, tmp, "f.txt")
+	testutil.GitCommit(t, tmp, "init")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmp, ".entire/settings.local.json"),
+		[]byte(`{"investigate":{"agents":["claude-code","codex"]}}`), 0o644))
+
+	var pickerCalled bool
+	var receivedAgents []string
+	var receivedAlwaysPrompt string
+	deps := investigate.Deps{
+		GetAgentsWithHooksInstalled: func(_ context.Context) []types.AgentName {
+			return []types.AgentName{"claude-code", "codex"}
+		},
+		NewSilentError: func(err error) error { return err },
+		SpawnerFor:     func(name string) spawn.Spawner { return stubSpawner{name: name} },
+		InvestigateMultipicker: func(_ context.Context, choices []investigate.AgentChoice) (investigate.PickedInvestigate, error) {
+			pickerCalled = true
+			require.Len(t, choices, 2)
+			return investigate.PickedInvestigate{
+				Names:  []string{"claude-code"},
+				PerRun: "focus on auth",
+			}, nil
+		},
+		LoopRun: func(_ context.Context, in investigate.LoopInput, _ investigate.LoopDeps) (investigate.LoopResult, error) {
+			receivedAgents = in.Agents
+			receivedAlwaysPrompt = in.AlwaysPrompt
+			return investigate.LoopResult{Outcome: investigate.OutcomeQuorum}, nil
+		},
+	}
+	cmd := investigate.NewCommand(deps)
+	cmd.SetArgs([]string{"--topic", "foo"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	_ = cmd.ExecuteContext(context.Background()) //nolint:errcheck // contract checked via captured loop input
+	require.True(t, pickerCalled, "multipicker must run when >=2 agents and no --agents flag")
+	require.Equal(t, []string{"claude-code"}, receivedAgents, "narrowed list must reach the loop")
+	require.Contains(t, receivedAlwaysPrompt, "focus on auth", "per-run prompt must be threaded into AlwaysPrompt")
+}
+
 func TestRunInvestigate_SoftWarnAcceptedRunsLoop(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
