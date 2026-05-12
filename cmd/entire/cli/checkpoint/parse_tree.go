@@ -367,10 +367,10 @@ func WalkCheckpointShards(ctx context.Context, repo *git.Repository, tree *objec
 			continue
 		}
 
+		if err := ctx.Err(); err != nil {
+			return err //nolint:wrapcheck // propagate context cancellation unwrapped
+		}
 		for _, cpEntry := range bucketTree.Entries {
-			if err := ctx.Err(); err != nil {
-				return err //nolint:wrapcheck // propagate context cancellation unwrapped
-			}
 			if cpEntry.Mode != filemode.Dir {
 				continue
 			}
