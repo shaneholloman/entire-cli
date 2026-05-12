@@ -25,14 +25,9 @@ The fastest way to get a contribution merged is to align with maintainers before
 
 ## First-Time Contributors
 
-New to the project? Welcome! Here's how to get started:
+**New to open source or to Entire?** Start with the [First-Time Contributors Guide](docs/first-time-contributors.md). It walks through the full path — finding an issue, forking, setting up your dev environment, opening a PR, and what to expect afterwards.
 
-### Good First Issues
-
-We recommend starting with:
-- **Documentation improvements** - Fix typos, clarify explanations, add examples
-- **Test contributions** - Add test cases, improve coverage
-- **Small bug fixes** - Issues labeled `good-first-issue`
+The rest of this document is the reference for ongoing contributors.
 
 ---
 
