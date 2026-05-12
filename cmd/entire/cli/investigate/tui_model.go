@@ -105,6 +105,10 @@ type investigateTUIModel struct {
 	spinner    spinner.Model
 	termWidth  int
 	termHeight int
+
+	detailMode   bool
+	detailIdx    int
+	detailScroll int
 }
 
 // newInvestigateTUIModel builds an initial model pre-populated with one row
@@ -190,6 +194,22 @@ func (m investigateTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseWheelMsg:
+		if !m.detailMode {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			if m.detailScroll > 0 {
+				m.detailScroll--
+			}
+		case tea.MouseWheelDown:
+			if m.detailScroll < m.maxDetailScroll() {
+				m.detailScroll++
+			}
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -276,20 +296,95 @@ func (m investigateTUIModel) handleTurnFinished(msg turnFinishedMsg) investigate
 
 // handleKey processes keyboard input.
 func (m investigateTUIModel) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.finished {
+	if m.finished && !m.detailMode {
 		// Any key after finished dismisses.
 		return m, tea.Quit
 	}
-	if msg.Code == 'c' && msg.Mod == tea.ModCtrl {
+
+	switch {
+	case msg.Code == 'c' && msg.Mod == tea.ModCtrl:
+		if m.detailMode {
+			// Ctrl+C is ignored in detail mode; Esc first.
+			return m, nil
+		}
 		m.cancelOnce.Do(m.cancel)
 		return m, tea.Quit
+
+	case msg.Code == 'o' && msg.Mod == tea.ModCtrl:
+		if m.detailMode {
+			m.detailMode = false
+			return m, nil
+		}
+		m.detailMode = true
+		if m.detailIdx < 0 || m.detailIdx >= len(m.rows) {
+			m.detailIdx = 0
+		}
+		m.detailScroll = m.maxDetailScroll()
+		return m, nil
+
+	case msg.Code == tea.KeyEscape:
+		if m.detailMode {
+			m.detailMode = false
+		}
+		return m, nil
+
+	case msg.Code == tea.KeyLeft:
+		if m.detailMode && len(m.rows) > 0 {
+			m.detailIdx = (m.detailIdx - 1 + len(m.rows)) % len(m.rows)
+			m.detailScroll = m.maxDetailScroll()
+		}
+		return m, nil
+
+	case msg.Code == tea.KeyRight:
+		if m.detailMode && len(m.rows) > 0 {
+			m.detailIdx = (m.detailIdx + 1) % len(m.rows)
+			m.detailScroll = m.maxDetailScroll()
+		}
+		return m, nil
+
+	case msg.Code == tea.KeyUp:
+		if m.detailMode && m.detailScroll > 0 {
+			m.detailScroll--
+		}
+		return m, nil
+
+	case msg.Code == tea.KeyDown:
+		if m.detailMode && m.detailScroll < m.maxDetailScroll() {
+			m.detailScroll++
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
+// maxDetailScroll returns the largest valid detailScroll value for the
+// currently-focused agent's buffer (0 when the buffer is empty or no
+// rows exist).
+func (m investigateTUIModel) maxDetailScroll() int {
+	if len(m.rows) == 0 {
+		return 0
+	}
+	n := len(m.rows[m.detailIdx].buffer)
+	if n == 0 {
+		return 0
+	}
+	return n - 1
+}
+
 // View renders the current frame.
 func (m investigateTUIModel) View() tea.View {
-	return tea.NewView(m.dashboardView())
+	var content string
+	if m.detailMode && len(m.rows) > 0 {
+		content = detailView(m.rows[m.detailIdx], m.detailScroll, m.termWidth, m.termHeight)
+	} else {
+		content = m.dashboardView()
+	}
+	v := tea.NewView(content)
+	v.AltScreen = m.detailMode
+	if m.detailMode {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
+	return v
 }
 
 // dashboardWidth returns the effective rendering width (defaulted when the
@@ -318,7 +413,7 @@ func (m investigateTUIModel) dashboardView() string {
 		m.writeLine(&b, m.countsLine())
 		m.writeLine(&b, "Press any key to exit.")
 	} else {
-		m.writeLine(&b, "Ctrl+C: cancel")
+		m.writeLine(&b, "Ctrl+O: detail · Ctrl+C: cancel")
 	}
 	return b.String()
 }

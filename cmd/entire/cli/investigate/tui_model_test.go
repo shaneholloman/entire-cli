@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -229,4 +230,82 @@ func TestModel_HandleTurnFinishedFailedAppendsFailedEntry(t *testing.T) {
 	require.Len(t, got.rows[0].buffer, 1)
 	require.Equal(t, "failed", got.rows[0].buffer[0].kind)
 	require.Equal(t, "spawner exited", got.rows[0].buffer[0].errStr)
+}
+
+// updateModel sends msg to m via Update and returns the new
+// investigateTUIModel, failing the test on a type assertion mismatch.
+func updateModel(t *testing.T, m investigateTUIModel, msg tea.Msg) investigateTUIModel {
+	t.Helper()
+	next, _ := m.Update(msg)
+	got, ok := next.(investigateTUIModel)
+	require.True(t, ok, "Update returned wrong type: %T", next)
+	return got
+}
+
+func TestModel_CtrlOEntersDetail(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"claude-code", "codex"}, 3, 2, func() {})
+	got := updateModel(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	require.True(t, got.detailMode, "Ctrl+O must enter detail mode")
+	require.Equal(t, 0, got.detailIdx)
+}
+
+func TestModel_EscReturnsFromDetail(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"claude-code"}, 3, 1, func() {})
+	inDetail := updateModel(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	got := updateModel(t, inDetail, tea.KeyPressMsg{Code: tea.KeyEscape})
+	require.False(t, got.detailMode)
+}
+
+func TestModel_LeftRightCyclesAgents(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"a", "b", "c"}, 3, 1, func() {})
+	inDetail := updateModel(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	right := updateModel(t, inDetail, tea.KeyPressMsg{Code: tea.KeyRight})
+	require.Equal(t, 1, right.detailIdx)
+	right2 := updateModel(t, right, tea.KeyPressMsg{Code: tea.KeyRight})
+	require.Equal(t, 2, right2.detailIdx)
+	wrap := updateModel(t, right2, tea.KeyPressMsg{Code: tea.KeyRight})
+	require.Equal(t, 0, wrap.detailIdx, "wraps around")
+}
+
+func TestModel_UpDownScrollsInDetail(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"a"}, 3, 1, func() {})
+	// Seed two entries so there's room to scroll up.
+	m.rows[0].buffer = []timelineEntry{
+		{turn: 1, kind: "started"},
+		{turn: 1, kind: "finished"},
+	}
+	inDetail := updateModel(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	// detailScroll starts at len-1 == 1 (most recent).
+	require.Equal(t, 1, inDetail.detailScroll)
+	up := updateModel(t, inDetail, tea.KeyPressMsg{Code: tea.KeyUp})
+	require.Equal(t, 0, up.detailScroll)
+	// Clamped at 0.
+	up2 := updateModel(t, up, tea.KeyPressMsg{Code: tea.KeyUp})
+	require.Equal(t, 0, up2.detailScroll)
+	down := updateModel(t, up2, tea.KeyPressMsg{Code: tea.KeyDown})
+	require.Equal(t, 1, down.detailScroll)
+}
+
+func TestModel_MouseWheelInDashboardIgnored(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"a"}, 3, 1, func() {})
+	m.rows[0].buffer = []timelineEntry{{turn: 1, kind: "started"}, {turn: 1, kind: "finished"}}
+	next := updateModel(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	require.Equal(t, 0, next.detailScroll)
+}
+
+func TestModel_MouseWheelInDetailScrolls(t *testing.T) {
+	t.Parallel()
+	m := newInvestigateTUIModel("topic", "run", []string{"a"}, 3, 1, func() {})
+	m.rows[0].buffer = []timelineEntry{{turn: 1, kind: "started"}, {turn: 1, kind: "finished"}}
+	inDetail := updateModel(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	// detailScroll starts at 1 (most recent).
+	up := updateModel(t, inDetail, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	require.Equal(t, 0, up.detailScroll)
+	down := updateModel(t, up, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	require.Equal(t, 1, down.detailScroll)
 }

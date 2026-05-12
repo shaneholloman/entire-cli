@@ -41,12 +41,9 @@ func entryLine(e timelineEntry, maxWidth int) string {
 }
 
 // detailView renders the alt-screen drill-in for one agent. The output
-// is padded to exactly termHeight lines.
-//
-// wires this to m.termHeight from WindowSizeMsg, which will exercise variable
-// heights at runtime.
-//
-//nolint:unparam // termHeight is constant in current tests; the next commit (D4)
+// is padded to exactly termHeight lines. termHeight and termWidth come
+// from WindowSizeMsg via investigateTUIModel, so the rendered frame
+// always fills the visible terminal.
 func detailView(row agentRow, scroll, termWidth, termHeight int) string {
 	if termWidth < 1 {
 		termWidth = 80
