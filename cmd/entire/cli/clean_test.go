@@ -1217,10 +1217,8 @@ func TestCleanCmd_All_DryRunContinuesAfterInvalidGitMaterializedGenerationMetada
 }
 
 func TestCleanCmd_All_PrefersGenerationJSONOverRawTranscript(t *testing.T) {
-	// generation.json says "now" while raw transcripts say 15–20 days ago.
-	// Cleanup trusts generation.json (written at archive time, repaired by
-	// generation_repair.go) so it can skip the expensive per-checkpoint tree
-	// walk in the common case. See cleanup.go for the rationale.
+	// generation.json says "now"; raw transcripts say 15–20 days ago. The
+	// generation must not be eligible for cleanup.
 	repo, _ := setupCleanTestRepo(t)
 
 	wt, err := repo.Worktree()

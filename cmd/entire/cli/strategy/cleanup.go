@@ -349,15 +349,12 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 // eligible for deletion based on the configured retention window, along with
 // warnings for malformed generations that were skipped.
 //
-// Retention timestamps are read from each generation's generation.json blob
-// via a single `git cat-file --batch` invocation. The per-checkpoint tree
-// walk in ComputeGenerationTimestampsFromTrees is only used as a fallback
-// when generation.json is absent or has zero timestamps — walking every
-// checkpoint via go-git is what made `entire clean --all` hang on real
-// repos with many archived generations. Trade-off: if generation.json is
-// stale and reports an OLDER timestamp than reality, retention may delete
-// a generation prematurely. generation_repair.go keeps generation.json
-// correct, mitigating this.
+// Timestamps come from each generation's generation.json blob (read in one
+// `git cat-file --batch`). The per-checkpoint tree walk is only a fallback
+// when generation.json is absent or zero — walking every checkpoint via
+// go-git is prohibitively slow on repos with many archived generations. A
+// stale generation.json reporting an older timestamp than reality would
+// delete prematurely; generation_repair.go keeps it correct.
 func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) ([]CleanupItem, []string, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
@@ -371,10 +368,6 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 	}
 	defer removeTempRefs(repo, tempRefs)
 
-	// Read generation.json for every candidate up front via a single
-	// `git cat-file --batch` invocation. This is the fast path; the
-	// per-checkpoint tree walk below is the fallback for generations whose
-	// generation.json is missing or has zero timestamps.
 	metadataRefs := make([]plumbing.ReferenceName, 0, len(candidates))
 	for _, candidate := range candidates {
 		metadataRefs = append(metadataRefs, candidate.RefName)
