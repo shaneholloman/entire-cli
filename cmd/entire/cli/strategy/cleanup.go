@@ -345,15 +345,16 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	return checkpointIDs, []string{}, nil
 }
 
-type cleanupGenerationState struct {
-	candidate  archivedV2GenerationCandidate
-	commitHash plumbing.Hash
-	gen        checkpoint.GenerationMetadata
-}
-
 // ListEligibleV2Generations returns archived checkpoints v2 /full/* generations
 // eligible for deletion based on the configured retention window, along with
 // warnings for malformed generations that were skipped.
+//
+// Timestamps come from each generation's generation.json blob (read in one
+// `git cat-file --batch`). The per-checkpoint tree walk is only a fallback
+// when generation.json is absent or zero — walking every checkpoint via
+// go-git is prohibitively slow on repos with many archived generations. A
+// stale generation.json reporting an older timestamp than reality would
+// delete prematurely; generation_repair.go keeps it correct.
 func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) ([]CleanupItem, []string, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
@@ -367,43 +368,49 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 	}
 	defer removeTempRefs(repo, tempRefs)
 
+	metadataRefs := make([]plumbing.ReferenceName, 0, len(candidates))
+	for _, candidate := range candidates {
+		metadataRefs = append(metadataRefs, candidate.RefName)
+	}
+	generationMetadata := readGenerationMetadataFiles(ctx, metadataRefs)
+
 	cutoff := time.Now().AddDate(0, 0, -s.GetFullTranscriptGenerationRetentionDays())
 	cleanupItems := make([]CleanupItem, 0, len(candidates))
-	generations := make([]cleanupGenerationState, 0, len(candidates))
-	metadataRefs := make([]plumbing.ReferenceName, 0, len(candidates))
 
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, warnings, err //nolint:wrapcheck // propagate context cancellation unwrapped so callers can detect it
+		}
 		commitHash, treeHash, refErr := store.GetRefState(candidate.RefName)
 		if refErr != nil {
 			warnings = append(warnings, fmt.Sprintf("generation %s: cannot read ref: %v", candidate.Name, refErr))
 			continue
 		}
 
-		gen, foundCheckpointTimes, timestampErr := store.ComputeGenerationTimestampsFromTrees(treeHash, nil)
-		if timestampErr != nil {
-			warnings = append(warnings, fmt.Sprintf("generation %s: failed to compute raw transcript timestamps: %v", candidate.Name, timestampErr))
+		md, mdOK := generationMetadata[candidate.RefName]
+		if mdOK && md.err != nil {
+			warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", candidate.Name, md.err))
 			continue
 		}
-		if !foundCheckpointTimes {
-			metadataRefs = append(metadataRefs, candidate.RefName)
-		}
-		generations = append(generations, cleanupGenerationState{
-			candidate:  candidate,
-			commitHash: commitHash,
-			gen:        gen,
-		})
-	}
 
-	generationMetadata := readGenerationMetadataFiles(ctx, metadataRefs)
-	for _, generation := range generations {
-		gen := generation.gen
-		if metadata, ok := generationMetadata[generation.candidate.RefName]; ok {
-			if metadata.err != nil {
-				warnings = append(warnings, fmt.Sprintf("generation %s: failed to read generation.json: %v", generation.candidate.Name, metadata.err))
+		var gen checkpoint.GenerationMetadata
+		switch {
+		case mdOK && (!md.gen.OldestCheckpointAt.IsZero() || !md.gen.NewestCheckpointAt.IsZero()):
+			gen = md.gen
+		default:
+			var found bool
+			var timestampErr error
+			gen, found, timestampErr = store.ComputeGenerationTimestampsFromTrees(ctx, treeHash, nil)
+			if timestampErr != nil {
+				if errors.Is(timestampErr, context.Canceled) || errors.Is(timestampErr, context.DeadlineExceeded) {
+					return nil, warnings, timestampErr //nolint:wrapcheck // propagate context cancellation unwrapped
+				}
+				warnings = append(warnings, fmt.Sprintf("generation %s: failed to compute raw transcript timestamps: %v", candidate.Name, timestampErr))
 				continue
 			}
-			if !metadata.gen.OldestCheckpointAt.IsZero() || !metadata.gen.NewestCheckpointAt.IsZero() {
-				gen = metadata.gen
+			if !found {
+				warnings = append(warnings, fmt.Sprintf("generation %s: missing generation.json", candidate.Name))
+				continue
 			}
 		}
 
@@ -411,26 +418,26 @@ func ListEligibleV2Generations(ctx context.Context, s *settings.EntireSettings) 
 		hasNewest := !gen.NewestCheckpointAt.IsZero()
 		switch {
 		case !hasOldest && !hasNewest:
-			warnings = append(warnings, fmt.Sprintf("generation %s: missing generation.json", generation.candidate.Name))
+			warnings = append(warnings, fmt.Sprintf("generation %s: missing generation.json", candidate.Name))
 			continue
 		case hasOldest != hasNewest:
-			warnings = append(warnings, fmt.Sprintf("generation %s: incomplete generation.json", generation.candidate.Name))
+			warnings = append(warnings, fmt.Sprintf("generation %s: incomplete generation.json", candidate.Name))
 			continue
 		case gen.OldestCheckpointAt.After(gen.NewestCheckpointAt):
-			warnings = append(warnings, fmt.Sprintf("generation %s: invalid timestamps", generation.candidate.Name))
+			warnings = append(warnings, fmt.Sprintf("generation %s: invalid timestamps", candidate.Name))
 			continue
 		}
 		if !gen.NewestCheckpointAt.Before(cutoff) {
 			continue
 		}
 
-		refOID := generation.candidate.RefOID
+		refOID := candidate.RefOID
 		if refOID == "" {
-			refOID = generation.commitHash.String()
+			refOID = commitHash.String()
 		}
 		cleanupItems = append(cleanupItems, CleanupItem{
 			Type:   CleanupTypeV2Generation,
-			ID:     generation.candidate.Name,
+			ID:     candidate.Name,
 			RefOID: refOID,
 			Reason: "expired archived full transcript generation",
 		})
