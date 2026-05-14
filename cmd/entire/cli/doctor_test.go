@@ -475,8 +475,10 @@ func TestCheckV2CheckpointCounts_SkipsWhenRefsMissing(t *testing.T) {
 }
 
 func TestCheckV2CheckpointCounts_ReturnsErrorForCorruptRef(t *testing.T) {
-	t.Parallel()
 	dir := setupGitRepoForPhaseTest(t)
+	// No t.Parallel: this verifies a git CLI fallback that resolves from cwd.
+	t.Chdir(dir)
+
 	repo, err := git.PlainOpen(dir)
 	require.NoError(t, err)
 

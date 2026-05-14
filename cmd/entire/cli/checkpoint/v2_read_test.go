@@ -232,7 +232,6 @@ func TestV2ReadSessionMetadata_ReturnsMetadata(t *testing.T) {
 }
 
 func TestV2ReadSessionMetadata_FetchesMissingMetadataBlob(t *testing.T) {
-	t.Parallel()
 	repo := initTestRepo(t)
 	store := NewV2GitStore(repo, "origin")
 	cpID := id.MustCheckpointID("f1f2f3f4f5fb")
@@ -251,6 +250,9 @@ func TestV2ReadSessionMetadata_FetchesMissingMetadataBlob(t *testing.T) {
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
 	repoRoot := wt.Filesystem().Root()
+	// No t.Parallel: this verifies a git CLI fallback that resolves from cwd.
+	t.Chdir(repoRoot)
+
 	mainTree := v2MainTree(t, repo)
 	sessionTree, err := mainTree.Tree(cpID.Path() + "/0")
 	require.NoError(t, err)
