@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -558,39 +559,39 @@ func TestInvestigate_IssueLink_ResolvesViaFakeGh(t *testing.T) {
 		t.Fatalf("entire investigate failed: %v\nOutput:\n%s", err, output)
 	}
 
-	// Find the bootstrapped findings doc. The per-run dir lives under the
-	// git common dir; we glob the entire-investigations directory rather
+	// The per-run dir is auto-cleaned on terminal outcomes (Quorum/Stalled).
+	// Findings content is captured into the manifest's findings_content
+	// field, so we read it from there. Glob the manifests directory rather
 	// than re-deriving the run ID, which keeps the test resilient to
 	// implementation tweaks.
-	investigationsDir := filepath.Join(env.RepoDir, ".git", "entire-investigations")
-	entries, err := os.ReadDir(investigationsDir)
+	manifestsDir := filepath.Join(env.RepoDir, ".git", "entire-investigations", "manifests")
+	entries, err := os.ReadDir(manifestsDir)
 	if err != nil {
-		t.Fatalf("read .git/entire-investigations: %v\nOutput:\n%s", err, output)
+		t.Fatalf("read .git/entire-investigations/manifests: %v\nOutput:\n%s", err, output)
 	}
-	var foundFindings string
+	var bodyStr string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		name := e.Name()
-		if name == "manifests" {
-			continue
+		data, readErr := os.ReadFile(filepath.Join(manifestsDir, e.Name()))
+		if readErr != nil {
+			t.Fatalf("read manifest %s: %v", e.Name(), readErr)
 		}
-		candidate := filepath.Join(investigationsDir, name, "findings.md")
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			foundFindings = candidate
+		var m struct {
+			FindingsContent string `json:"findings_content"`
+		}
+		if jsonErr := json.Unmarshal(data, &m); jsonErr != nil {
+			t.Fatalf("unmarshal manifest %s: %v", e.Name(), jsonErr)
+		}
+		if m.FindingsContent != "" {
+			bodyStr = m.FindingsContent
 			break
 		}
 	}
-	if foundFindings == "" {
-		t.Fatalf("no findings doc found under %s\nOutput:\n%s", investigationsDir, output)
+	if bodyStr == "" {
+		t.Fatalf("no manifest with findings_content under %s\nOutput:\n%s", manifestsDir, output)
 	}
-
-	body, err := os.ReadFile(foundFindings)
-	if err != nil {
-		t.Fatalf("read findings doc: %v", err)
-	}
-	bodyStr := string(body)
 	if !strings.Contains(bodyStr, issueTitle) {
 		t.Errorf("findings doc missing issue title %q\n%s", issueTitle, bodyStr)
 	}
