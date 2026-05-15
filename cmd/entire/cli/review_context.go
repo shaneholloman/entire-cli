@@ -333,13 +333,15 @@ func readReviewContextSessionPrompts(
 ) (string, error) {
 	if r, ok := reader.(reviewContextSessionMetadataPromptsReader); ok {
 		content, err := r.ReadSessionMetadataAndPrompts(ctx, cpID, sessionIndex)
-		if err != nil {
+		if err == nil {
+			if content == nil {
+				return "", errors.New("session content is nil")
+			}
+			return content.Prompts, nil
+		}
+		if !errors.Is(err, checkpoint.ErrCheckpointNotFound) {
 			return "", err //nolint:wrapcheck // Best-effort prompt context.
 		}
-		if content == nil {
-			return "", errors.New("session content is nil")
-		}
-		return content.Prompts, nil
 	}
 	content, err := reader.ReadSessionContent(ctx, cpID, sessionIndex)
 	if err != nil {

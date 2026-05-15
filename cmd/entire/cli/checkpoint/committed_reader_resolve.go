@@ -43,7 +43,7 @@ func CommittedReadModeForOptions(checkpointsV2Enabled bool, checkpointsVersion i
 	return CommittedReadV1
 }
 
-func NewCommittedReader(v1Store *GitStore, v2Store *V2GitStore, mode CommittedReadMode) (CommittedListReader, error) { //nolint:ireturn // Factory selects among v1, v2, and dual reader implementations.
+func NewCommittedReader(v1Store *GitStore, v2Store *V2GitStore, mode CommittedReadMode) (CommittedListReader, error) {
 	switch mode {
 	case CommittedReadV2:
 		if v2Store == nil {
