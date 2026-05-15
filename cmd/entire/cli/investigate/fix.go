@@ -52,9 +52,8 @@ type FixInput struct {
 // and launches a coding agent session via deps.Launch.
 //
 // The prompt body says "use these findings as grounded context, do not
-// re-investigate". The composed prompt embeds the findings doc + timeline
-// doc bodies verbatim so the agent has full access without needing to
-// re-read disk.
+// re-investigate". The composed prompt embeds the findings doc verbatim
+// so the agent has full access without needing to re-read disk.
 func RunFix(ctx context.Context, in FixInput, deps FixDeps) error {
 	if deps.ManifestStore == nil {
 		return errors.New("fix: manifest store is required")
@@ -74,9 +73,8 @@ func RunFix(ctx context.Context, in FixInput, deps FixDeps) error {
 	}
 
 	findingsBody := readDocOrWarn(readFile, manifest.FindingsDoc, "findings", in.ErrOut)
-	timelineBody := readDocOrWarn(readFile, manifest.TimelineDoc, "timeline", in.ErrOut)
 
-	prompt := composeFixPrompt(manifest, findingsBody, timelineBody)
+	prompt := composeFixPrompt(manifest, findingsBody)
 
 	fixAgent := deps.FixAgent
 	if fixAgent == "" {
@@ -135,10 +133,10 @@ func readDocOrWarn(read func(string) ([]byte, error), path string, label string,
 
 // composeFixPrompt builds the follow-up prompt sent to the fix agent.
 // Layout matches the plan's §10 contract: a "do not re-investigate"
-// preamble, the run identity, and the two doc bodies verbatim under
-// section headings. Empty doc bodies are still emitted with a placeholder
-// line so the agent sees the section structure consistently.
-func composeFixPrompt(manifest LocalManifest, findings, timeline string) string {
+// preamble, the run identity, and the findings body verbatim under a
+// section heading. An empty findings body is still emitted with a
+// placeholder line so the agent sees the section structure consistently.
+func composeFixPrompt(manifest LocalManifest, findings string) string {
 	var b strings.Builder
 	b.WriteString("A prior multi-agent investigation produced these findings. Use them as\n")
 	b.WriteString("grounded context to plan the next step. Do not re-investigate the same\n")
@@ -156,13 +154,6 @@ func composeFixPrompt(manifest LocalManifest, findings, timeline string) string 
 		b.WriteString("\n")
 	} else {
 		b.WriteString("(no findings recorded)\n")
-	}
-	b.WriteString("\n## Investigation timeline\n\n")
-	if body := strings.TrimSpace(timeline); body != "" {
-		b.WriteString(body)
-		b.WriteString("\n")
-	} else {
-		b.WriteString("(no timeline recorded)\n")
 	}
 	return b.String()
 }

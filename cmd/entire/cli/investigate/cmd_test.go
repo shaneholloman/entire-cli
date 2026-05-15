@@ -329,8 +329,7 @@ func TestNewCommand_ContinueLoadsExistingState(t *testing.T) {
 	tmp := setupInvestigateRepo(t)
 
 	// Create a state file in the conventional location.
-	commonDir := filepath.Join(tmp, ".git")
-	stateDir := filepath.Join(commonDir, "entire-investigations", "state")
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations")
 	if err := os.MkdirAll(stateDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +341,6 @@ func TestNewCommand_ContinueLoadsExistingState(t *testing.T) {
 		Agents:      []string{"resumed-agent"},
 		MaxTurns:    2,
 		FindingsDoc: filepath.Join(tmp, "find.md"),
-		TimelineDoc: filepath.Join(tmp, "find-timeline.md"),
 		StartingSHA: "deadbeef",
 	}
 	if err := store.Save(context.Background(), st); err != nil {
@@ -389,7 +387,7 @@ func TestNewCommand_ContinueLoadsAlwaysPromptFromSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations")
 	if err := os.MkdirAll(stateDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +399,6 @@ func TestNewCommand_ContinueLoadsAlwaysPromptFromSettings(t *testing.T) {
 		Agents:      []string{"resumed-agent"},
 		MaxTurns:    2,
 		FindingsDoc: filepath.Join(tmp, "find.md"),
-		TimelineDoc: filepath.Join(tmp, "find-timeline.md"),
 		StartingSHA: "deadbeef",
 	}
 	if err := store.Save(context.Background(), st); err != nil {
@@ -432,7 +429,7 @@ func TestNewCommand_ContinueLoadsAlwaysPromptFromSettings(t *testing.T) {
 func TestNewCommand_ContinueRejectsAgentShrink(t *testing.T) {
 	tmp := setupInvestigateRepo(t)
 
-	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations")
 	if err := os.MkdirAll(stateDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +442,6 @@ func TestNewCommand_ContinueRejectsAgentShrink(t *testing.T) {
 		NextAgentIdx: 3, // points at "d" in the persisted list
 		MaxTurns:     2,
 		FindingsDoc:  filepath.Join(tmp, "find.md"),
-		TimelineDoc:  filepath.Join(tmp, "find-timeline.md"),
 		StartingSHA:  "deadbeef",
 	}
 	if err := store.Save(context.Background(), st); err != nil {
@@ -490,7 +486,7 @@ func TestNewCommand_ContinueWarnsOnSettingsLoadFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stateDir := filepath.Join(tmp, ".git", "entire-investigations", "state")
+	stateDir := filepath.Join(tmp, ".git", "entire-investigations")
 	if err := os.MkdirAll(stateDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +498,6 @@ func TestNewCommand_ContinueWarnsOnSettingsLoadFailure(t *testing.T) {
 		Agents:      []string{"a"},
 		MaxTurns:    1,
 		FindingsDoc: filepath.Join(tmp, "find.md"),
-		TimelineDoc: filepath.Join(tmp, "find-timeline.md"),
 		StartingSHA: "deadbeef",
 	}
 	if err := store.Save(context.Background(), st); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -25,13 +24,13 @@ func TestStateStore_SaveLoadRoundTrip(t *testing.T) {
 		Turn:            2,
 		NextAgentIdx:    1,
 		Stances: []TurnStance{
-			{Round: 1, Turn: 1, Agent: "claude-code", Stance: "approve", PlanChanged: true, TimelineChanged: true},
+			{Round: 1, Turn: 1, Agent: "claude-code", Stance: "approve", PlanChanged: true},
 		},
 		FindingsDoc: "/tmp/findings.md",
-		TimelineDoc: "/tmp/timeline.md",
 		StartingSHA: "deadbeef",
 		StartedAt:   now,
 		UpdatedAt:   now,
+		PendingTurn: &PendingTurn{Stance: "approve", Note: "all clear"},
 	}
 
 	if err := store.Save(context.Background(), st); err != nil {
@@ -66,11 +65,51 @@ func TestStateStore_SaveLoadRoundTrip(t *testing.T) {
 	if len(got.Stances) != 1 || got.Stances[0].Stance != "approve" {
 		t.Errorf("Stances = %+v", got.Stances)
 	}
-	if got.FindingsDoc != st.FindingsDoc || got.TimelineDoc != st.TimelineDoc {
-		t.Errorf("docs = %q/%q", got.FindingsDoc, got.TimelineDoc)
+	if got.FindingsDoc != st.FindingsDoc {
+		t.Errorf("FindingsDoc = %q, want %q", got.FindingsDoc, st.FindingsDoc)
 	}
 	if !got.StartedAt.Equal(st.StartedAt) || !got.UpdatedAt.Equal(st.UpdatedAt) {
 		t.Errorf("timestamps mismatch")
+	}
+	if got.PendingTurn == nil {
+		t.Errorf("PendingTurn = nil, want round-tripped pending turn")
+	} else if got.PendingTurn.Stance != "approve" || got.PendingTurn.Note != "all clear" {
+		t.Errorf("PendingTurn = %+v, want approve/all clear", got.PendingTurn)
+	}
+}
+
+func TestStateStore_RunDirComposition(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStateStoreWithDir(dir)
+	const runID = "abcdef012345"
+
+	got := store.RunDir(runID)
+	want := filepath.Join(dir, runID)
+	if got != want {
+		t.Errorf("RunDir = %q, want %q", got, want)
+	}
+}
+
+func TestStateStore_SaveCreatesPerRunDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStateStoreWithDir(dir)
+	st := &RunState{
+		RunID:       "abcdef012345",
+		Topic:       "topic",
+		StartingSHA: "sha",
+		StartedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	if err := store.Save(context.Background(), st); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	statePath := filepath.Join(dir, st.RunID, "state.json")
+	if _, err := os.Stat(statePath); err != nil {
+		t.Errorf("expected state file at %s, got: %v", statePath, err)
 	}
 }
 
@@ -120,7 +159,11 @@ func TestStateStore_List(t *testing.T) {
 		}
 	}
 
-	// A non-run file in the directory must be ignored, not crash List.
+	// A non-run sibling in the directory (e.g. the manifests/ subdir or a
+	// stray file) must be ignored, not crash List.
+	if err := os.MkdirAll(filepath.Join(dir, "manifests"), 0o750); err != nil {
+		t.Fatalf("mkdir manifests sibling: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "garbage.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("write garbage: %v", err)
 	}
@@ -273,13 +316,18 @@ func TestStateStore_SaveDoesNotLeaveTempFiles(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	entries, err := os.ReadDir(dir)
+	runDir := filepath.Join(dir, st.RunID)
+	entries, err := os.ReadDir(runDir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Errorf("found leftover temp file: %s", e.Name())
+		name := e.Name()
+		// CreateTemp("..", "state.json.*.tmp") yields names containing a
+		// random infix between "state.json." and a trailing ".tmp"; pin
+		// both endpoints so an unrelated future filename can't slip by.
+		if filepath.Ext(name) == ".tmp" {
+			t.Errorf("found leftover temp file: %s", name)
 		}
 	}
 }

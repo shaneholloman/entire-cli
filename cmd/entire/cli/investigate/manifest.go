@@ -48,10 +48,6 @@ type LocalManifest struct {
 	// to record it that way.
 	FindingsDoc string `json:"findings_doc,omitempty"`
 
-	// TimelineDoc is the absolute (or repo-relative) path to the
-	// timeline document.
-	TimelineDoc string `json:"timeline_doc,omitempty"`
-
 	// Agents is the ordered list of agent names that participated in
 	// the run.
 	Agents []string `json:"agents"`

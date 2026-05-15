@@ -61,8 +61,8 @@ func DeriveTopicFromSeed(body []byte, fallbackFilename string) string {
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
-// BootstrapInput carries the data needed to produce the initial findings doc
-// and timeline doc on disk.
+// BootstrapInput carries the data needed to produce the initial findings
+// doc on disk.
 //
 // Exactly one of SeedDoc / Topic / IssueLinkSeed must be set:
 //   - SeedDoc:       the user passed a positional [seed-doc] path; copy
@@ -92,10 +92,6 @@ type BootstrapInput struct {
 	// to.
 	FindingsDoc string
 
-	// TimelineDoc is the absolute path the timeline doc must be written
-	// to.
-	TimelineDoc string
-
 	// PriorEntireContext, if non-empty, is rendered as a "## Prior
 	// Entire Context" block in the topic-only scaffold. Ignored when a
 	// seed doc is supplied (we never inject extra content into the
@@ -112,29 +108,22 @@ type BootstrapResult struct {
 	// FindingsDoc is the absolute path the findings doc was written to
 	// (echoes BootstrapInput.FindingsDoc).
 	FindingsDoc string
-
-	// TimelineDoc is the absolute path the timeline doc was written to
-	// (echoes BootstrapInput.TimelineDoc).
-	TimelineDoc string
 }
 
-// Bootstrap writes the initial findings doc and timeline doc to disk.
+// Bootstrap writes the initial findings doc to disk.
 //
-// File-write semantics: the function creates parent directories as needed and
-// writes both files unconditionally. Callers that want "skip if findings doc
-// exists" semantics should stat the path themselves; Bootstrap is intentionally
-// idempotent at the byte level (same input → same output) but does not protect
-// existing files. This mirrors the role of "the loop driver gives me empty
-// docs to seed" — protecting an existing investigation belongs to a layer
-// above this one.
+// File-write semantics: the function creates parent directories as needed
+// and writes the findings file unconditionally. Callers that want "skip
+// if findings doc exists" semantics should stat the path themselves;
+// Bootstrap is intentionally idempotent at the byte level (same input →
+// same output) but does not protect existing files. This mirrors the role
+// of "the loop driver gives me an empty doc to seed" — protecting an
+// existing investigation belongs to a layer above this one.
 func Bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error) {
 	_ = ctx // Reserved for future use (e.g. cancellation during long renders).
 
 	if in.FindingsDoc == "" {
 		return BootstrapResult{}, errors.New("FindingsDoc is required")
-	}
-	if in.TimelineDoc == "" {
-		return BootstrapResult{}, errors.New("TimelineDoc is required")
 	}
 
 	var (
@@ -174,19 +163,9 @@ func Bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error) 
 		return BootstrapResult{}, fmt.Errorf("write findings doc: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(in.TimelineDoc), 0o750); err != nil {
-		return BootstrapResult{}, fmt.Errorf("create timeline dir: %w", err)
-	}
-	timelineBody := renderInvestigationTimelineScaffold(topic, in.FindingsDoc)
-
-	if err := os.WriteFile(in.TimelineDoc, []byte(timelineBody), 0o600); err != nil {
-		return BootstrapResult{}, fmt.Errorf("write timeline doc: %w", err)
-	}
-
 	return BootstrapResult{
 		Topic:       topic,
 		FindingsDoc: in.FindingsDoc,
-		TimelineDoc: in.TimelineDoc,
 	}, nil
 }
 
@@ -250,10 +229,4 @@ test output, or direct quotes. -->
 <!-- Filled in once consensus is reached. Stop here. Recommendations and
 action items belong in a plan, not an investigation. -->
 `, topic, createdISODate, topic, priorSection)
-}
-
-// renderInvestigationTimelineScaffold returns the empty timeline body — just
-// the heading. Each agent appends one entry per turn.
-func renderInvestigationTimelineScaffold(topic, findingsDocPath string) string {
-	return fmt.Sprintf("# Investigation Timeline: %s\n\nThis file is the chronological log of multi-agent investigation for the doc at\n`%s`. Each agent appends one entry per turn. Do not edit prior entries.\n", topic, findingsDocPath)
 }

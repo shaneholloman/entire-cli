@@ -45,8 +45,8 @@ func TestComposeInvestigatePrompt_FirstRound(t *testing.T) {
 		Round:     1,
 		Turn:      1,
 		Files: Files{
-			Findings: "/abs/repo/.entire/investigations/why-is-checkout-flaky.md",
-			Timeline: "/abs/repo/.entire/investigations/why-is-checkout-flaky-timeline.md",
+			Findings: "/abs/repo/.git/entire-investigations/abcdef012345/findings.md",
+			State:    "/abs/repo/.git/entire-investigations/abcdef012345/state.json",
 		},
 	})
 
@@ -57,9 +57,10 @@ func TestComposeInvestigatePrompt_FirstRound(t *testing.T) {
 		"You are agent: claude-code",
 		"Round: 1    (turn 1 overall in this session)",
 		"Topic: Why is checkout flaky?",
-		"Findings: /abs/repo/.entire/investigations/why-is-checkout-flaky.md",
-		"## Turn 1 — claude-code",
-		"approve | request-changes | abstain",
+		"Findings: /abs/repo/.git/entire-investigations/abcdef012345/findings.md",
+		"State:    /abs/repo/.git/entire-investigations/abcdef012345/state.json",
+		"pending_turn",
+		"approve",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing substring %q", want)
@@ -76,8 +77,8 @@ func TestComposeInvestigatePrompt_MidLoop(t *testing.T) {
 		Round:     2,
 		Turn:      5,
 		Files: Files{
-			Findings: "/abs/repo/.entire/investigations/why-is-checkout-flaky.md",
-			Timeline: "/abs/repo/.entire/investigations/why-is-checkout-flaky-timeline.md",
+			Findings: "/abs/repo/.git/entire-investigations/abcdef012345/findings.md",
+			State:    "/abs/repo/.git/entire-investigations/abcdef012345/state.json",
 		},
 	})
 
@@ -86,8 +87,8 @@ func TestComposeInvestigatePrompt_MidLoop(t *testing.T) {
 	if !strings.Contains(got, "Round: 2    (turn 5 overall in this session)") {
 		t.Errorf("expected mid-loop round/turn coordinates")
 	}
-	if !strings.Contains(got, "## Turn 5 — codex") {
-		t.Errorf("expected timeline heading for turn 5 as codex")
+	if !strings.Contains(got, "You are agent: codex") {
+		t.Errorf("expected codex as the rendered agent")
 	}
 }
 
@@ -102,7 +103,7 @@ func TestComposeInvestigatePrompt_WithAlwaysPrompt(t *testing.T) {
 		AlwaysPrompt: "Project rule: cite test names in evidence.",
 		Files: Files{
 			Findings: "/abs/findings.md",
-			Timeline: "/abs/timeline.md",
+			State:    "/abs/state.json",
 		},
 	})
 
@@ -113,7 +114,7 @@ func TestComposeInvestigatePrompt_WithAlwaysPrompt(t *testing.T) {
 	}
 	// Should appear AFTER the main body — guard against accidental prepend.
 	idxAlways := strings.Index(got, "Project rule: cite test names in evidence.")
-	idxBody := strings.Index(got, "Exit when you've appended your turn entry.")
+	idxBody := strings.Index(got, "Exit once you've written")
 	if idxAlways < idxBody {
 		t.Errorf("AlwaysPrompt rendered before body (idxAlways=%d idxBody=%d)", idxAlways, idxBody)
 	}
@@ -131,7 +132,7 @@ func TestComposeInvestigatePrompt_WithPriorContext(t *testing.T) {
 			"Conclusion: timeout in /api/checkout was the cause.",
 		Files: Files{
 			Findings: "/abs/findings.md",
-			Timeline: "/abs/timeline.md",
+			State:    "/abs/state.json",
 		},
 	})
 

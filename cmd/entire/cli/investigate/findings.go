@@ -66,9 +66,6 @@ func printInvestigateFindingsList(w io.Writer, manifests []LocalManifest) {
 		if m.FindingsDoc != "" {
 			fmt.Fprintf(w, "  findings: %s\n", m.FindingsDoc)
 		}
-		if m.TimelineDoc != "" {
-			fmt.Fprintf(w, "  timeline: %s\n", m.TimelineDoc)
-		}
 	}
 }
 

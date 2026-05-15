@@ -45,58 +45,25 @@ func TestSaveInvestigateConfig_WritesLocalFile(t *testing.T) {
 	require.Contains(t, string(local), `"claude-code"`)
 }
 
-// TestResolveDocPaths_PerRunIsolation verifies that two runs with the
-// same topic but different run IDs land in distinct directories, so
-// they don't stomp each other's findings/timeline.
+// TestResolveDocPaths_PerRunIsolation verifies that two runs land in
+// distinct per-run directories under the git common dir, so they don't
+// stomp each other's findings/state files.
 func TestResolveDocPaths_PerRunIsolation(t *testing.T) {
 	t.Parallel()
 
-	const root = "/repo"
-	const topic = "why is checkout flaky"
+	const commonDir = "/repo/.git"
 
-	findings1, timeline1 := resolveDocPaths(root, "aaaaaaaaaaaa", topic, "")
-	findings2, timeline2 := resolveDocPaths(root, "bbbbbbbbbbbb", topic, "")
+	findings1 := resolveDocPaths(commonDir, "aaaaaaaaaaaa")
+	findings2 := resolveDocPaths(commonDir, "bbbbbbbbbbbb")
 
 	require.Equal(t,
-		filepath.Join(root, ".entire", "investigations", "aaaaaaaaaaaa-why-is-checkout-flaky", "findings.md"),
+		filepath.Join(commonDir, "entire-investigations", "aaaaaaaaaaaa", "findings.md"),
 		findings1,
 	)
 	require.Equal(t,
-		filepath.Join(root, ".entire", "investigations", "aaaaaaaaaaaa-why-is-checkout-flaky", "timeline.md"),
-		timeline1,
-	)
-	require.Equal(t,
-		filepath.Join(root, ".entire", "investigations", "bbbbbbbbbbbb-why-is-checkout-flaky", "findings.md"),
+		filepath.Join(commonDir, "entire-investigations", "bbbbbbbbbbbb", "findings.md"),
 		findings2,
 	)
-	require.Equal(t,
-		filepath.Join(root, ".entire", "investigations", "bbbbbbbbbbbb-why-is-checkout-flaky", "timeline.md"),
-		timeline2,
-	)
-
 	require.NotEqual(t, findings1, findings2,
-		"two runs with same topic must not share findings doc")
-	require.NotEqual(t, timeline1, timeline2,
-		"two runs with same topic must not share timeline doc")
-}
-
-// TestResolveDocPaths_OverrideHonored verifies the --output override
-// still produces a findings/timeline pair using the parallel
-// <findings-without-ext>-timeline.md naming, ignoring run ID and slug.
-func TestResolveDocPaths_OverrideHonored(t *testing.T) {
-	t.Parallel()
-
-	const root = "/repo"
-	const topic = "anything"
-	const runID = "deadbeefcafe"
-
-	// Absolute override is used verbatim.
-	findings, timeline := resolveDocPaths(root, runID, topic, "/tmp/out.md")
-	require.Equal(t, "/tmp/out.md", findings)
-	require.Equal(t, "/tmp/out-timeline.md", timeline)
-
-	// Relative override is anchored at worktree root.
-	findings, timeline = resolveDocPaths(root, runID, topic, "docs/result.md")
-	require.Equal(t, filepath.Join(root, "docs/result.md"), findings)
-	require.Equal(t, filepath.Join(root, "docs/result-timeline.md"), timeline)
+		"two runs must not share findings doc paths")
 }

@@ -35,8 +35,8 @@ func TestEnvNamesAreStable(t *testing.T) {
 	if EnvFindingsDoc != "ENTIRE_INVESTIGATE_FINDINGS_DOC" {
 		t.Errorf("EnvFindingsDoc: got %q, want ENTIRE_INVESTIGATE_FINDINGS_DOC", EnvFindingsDoc)
 	}
-	if EnvTimelineDoc != "ENTIRE_INVESTIGATE_TIMELINE_DOC" {
-		t.Errorf("EnvTimelineDoc: got %q, want ENTIRE_INVESTIGATE_TIMELINE_DOC", EnvTimelineDoc)
+	if EnvStateDoc != "ENTIRE_INVESTIGATE_STATE_DOC" {
+		t.Errorf("EnvStateDoc: got %q, want ENTIRE_INVESTIGATE_STATE_DOC", EnvStateDoc)
 	}
 	if EnvStartingSHA != "ENTIRE_INVESTIGATE_STARTING_SHA" {
 		t.Errorf("EnvStartingSHA: got %q, want ENTIRE_INVESTIGATE_STARTING_SHA", EnvStartingSHA)
@@ -60,7 +60,7 @@ func TestIsInvestigateEnvEntry(t *testing.T) {
 		{EnvTopic + "=topic", true},
 		{EnvPrompt + "=prompt", true},
 		{EnvFindingsDoc + "=/tmp/x", true},
-		{EnvTimelineDoc + "=/tmp/y", true},
+		{EnvStateDoc + "=/tmp/state.json", true},
 		{EnvStartingSHA + "=deadbeef", true},
 		{"PATH=/usr/bin", false},
 		{"HOME=/home/u", false},
@@ -94,7 +94,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 		EnvTopic + "=stale topic",
 		EnvPrompt + "=stale prompt",
 		EnvFindingsDoc + "=/tmp/stale-findings.md",
-		EnvTimelineDoc + "=/tmp/stale-timeline.md",
+		EnvStateDoc + "=/tmp/stale-state.json",
 		EnvStartingSHA + "=stalehash",
 		// stale review vars from an outer review process
 		"ENTIRE_REVIEW_SESSION=1",
@@ -111,7 +111,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 		Topic:       "fresh topic",
 		Prompt:      "fresh prompt",
 		FindingsDoc: "/tmp/fresh-findings.md",
-		TimelineDoc: "/tmp/fresh-timeline.md",
+		StateDoc:    "/tmp/fresh-state.json",
 		StartingSHA: "freshhash",
 	})
 
@@ -124,7 +124,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 		EnvTopic:       "fresh topic",
 		EnvPrompt:      "fresh prompt",
 		EnvFindingsDoc: "/tmp/fresh-findings.md",
-		EnvTimelineDoc: "/tmp/fresh-timeline.md",
+		EnvStateDoc:    "/tmp/fresh-state.json",
 		EnvStartingSHA: "freshhash",
 	}
 	counts := make(map[string]int)
@@ -192,7 +192,7 @@ func TestAppendInvestigateEnv_AppendsAllKeys(t *testing.T) {
 		Topic:       "topic",
 		Prompt:      "prompt",
 		FindingsDoc: "/abs/findings.md",
-		TimelineDoc: "/abs/timeline.md",
+		StateDoc:    "/abs/state.json",
 		StartingSHA: "abc123",
 	})
 	want := []string{
@@ -204,7 +204,7 @@ func TestAppendInvestigateEnv_AppendsAllKeys(t *testing.T) {
 		EnvTopic + "=topic",
 		EnvPrompt + "=prompt",
 		EnvFindingsDoc + "=/abs/findings.md",
-		EnvTimelineDoc + "=/abs/timeline.md",
+		EnvStateDoc + "=/abs/state.json",
 		EnvStartingSHA + "=abc123",
 	}
 	for _, w := range want {

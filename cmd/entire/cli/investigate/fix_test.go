@@ -34,7 +34,7 @@ func stubLaunch(rec *fixLaunchRecord) func(context.Context, string, string) erro
 // supplied identity and persist it to store. RunID/Topic/StartedAt are
 // the discriminators tests care about; the rest is filled with sensible
 // defaults so the manifest passes Write validation.
-func writeFixManifest(t *testing.T, store *LocalManifestStore, runID, topic string, started time.Time, findingsDoc, timelineDoc string) {
+func writeFixManifest(t *testing.T, store *LocalManifestStore, runID, topic string, started time.Time, findingsDoc string) {
 	t.Helper()
 	m := LocalManifest{
 		RunID:       runID,
@@ -42,7 +42,6 @@ func writeFixManifest(t *testing.T, store *LocalManifestStore, runID, topic stri
 		Slug:        SlugifyTopic(topic),
 		StartingSHA: "deadbeefcafe",
 		FindingsDoc: findingsDoc,
-		TimelineDoc: timelineDoc,
 		Agents:      []string{"claude-code", "codex"},
 		Outcome:     "quorum",
 		StartedAt:   started,
@@ -59,8 +58,8 @@ func TestRunFix_PicksMostRecent(t *testing.T) {
 	store := NewLocalManifestStoreWithDir(t.TempDir())
 	t1 := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
-	writeFixManifest(t, store, "aaaaaaaaaaaa", "older topic", t1, "", "")
-	writeFixManifest(t, store, "bbbbbbbbbbbb", "newest topic", t2, "", "")
+	writeFixManifest(t, store, "aaaaaaaaaaaa", "older topic", t1, "")
+	writeFixManifest(t, store, "bbbbbbbbbbbb", "newest topic", t2, "")
 
 	var rec fixLaunchRecord
 	err := RunFix(context.Background(),
@@ -90,8 +89,8 @@ func TestRunFix_ResolvesByRunID(t *testing.T) {
 	store := NewLocalManifestStoreWithDir(t.TempDir())
 	t1 := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 5, 5, 10, 0, 0, 0, time.UTC)
-	writeFixManifest(t, store, "aaaaaaaaaaaa", "older topic", t1, "", "")
-	writeFixManifest(t, store, "bbbbbbbbbbbb", "newest topic", t2, "", "")
+	writeFixManifest(t, store, "aaaaaaaaaaaa", "older topic", t1, "")
+	writeFixManifest(t, store, "bbbbbbbbbbbb", "newest topic", t2, "")
 
 	var rec fixLaunchRecord
 	err := RunFix(context.Background(),
@@ -113,7 +112,7 @@ func TestRunFix_RunIDNotFound(t *testing.T) {
 	t.Parallel()
 
 	store := NewLocalManifestStoreWithDir(t.TempDir())
-	writeFixManifest(t, store, "aaaaaaaaaaaa", "topic", time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC), "", "")
+	writeFixManifest(t, store, "aaaaaaaaaaaa", "topic", time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC), "")
 
 	var rec fixLaunchRecord
 	err := RunFix(context.Background(),
@@ -163,19 +162,15 @@ func TestRunFix_ComposesPromptBody(t *testing.T) {
 
 	dir := t.TempDir()
 	findings := "## Finding 1\n\nThe checkout button times out after 30s.\n"
-	timeline := "## 2026-05-08 12:30 UTC\n\nReproduced on staging.\n"
 	store := NewLocalManifestStoreWithDir(dir)
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	writeFixManifest(t, store, "abcdef012345", "Why is checkout flaky?", now,
-		"FINDINGS_PATH", "TIMELINE_PATH",
+		"FINDINGS_PATH",
 	)
 
 	read := func(name string) ([]byte, error) {
-		switch name {
-		case "FINDINGS_PATH":
+		if name == "FINDINGS_PATH" {
 			return []byte(findings), nil
-		case "TIMELINE_PATH":
-			return []byte(timeline), nil
 		}
 		t.Fatalf("unexpected ReadFile path: %q", name)
 		return nil, errors.New("unreachable")
@@ -203,14 +198,8 @@ func TestRunFix_ComposesPromptBody(t *testing.T) {
 	if !strings.Contains(rec.prompt, "## Investigation findings") {
 		t.Errorf("prompt missing findings section heading: %q", rec.prompt)
 	}
-	if !strings.Contains(rec.prompt, "## Investigation timeline") {
-		t.Errorf("prompt missing timeline section heading: %q", rec.prompt)
-	}
 	if !strings.Contains(rec.prompt, strings.TrimSpace(findings)) {
 		t.Errorf("prompt missing findings body verbatim: %q", rec.prompt)
-	}
-	if !strings.Contains(rec.prompt, strings.TrimSpace(timeline)) {
-		t.Errorf("prompt missing timeline body verbatim: %q", rec.prompt)
 	}
 	if !strings.Contains(rec.prompt, "Topic: Why is checkout flaky?") {
 		t.Errorf("prompt missing topic line: %q", rec.prompt)
@@ -223,10 +212,9 @@ func TestRunFix_TolerateMissingDocs(t *testing.T) {
 	dir := t.TempDir()
 	store := NewLocalManifestStoreWithDir(dir)
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
-	// Manifest references files that do not exist in dir.
+	// Manifest references a findings file that does not exist in dir.
 	writeFixManifest(t, store, "abcdef012345", "topic", now,
 		filepath.Join(dir, "missing-findings.md"),
-		filepath.Join(dir, "missing-timeline.md"),
 	)
 
 	var rec fixLaunchRecord
@@ -247,9 +235,6 @@ func TestRunFix_TolerateMissingDocs(t *testing.T) {
 	if !strings.Contains(rec.prompt, "(no findings recorded)") {
 		t.Errorf("prompt should note absent findings: %q", rec.prompt)
 	}
-	if !strings.Contains(rec.prompt, "(no timeline recorded)") {
-		t.Errorf("prompt should note absent timeline: %q", rec.prompt)
-	}
 	if !strings.Contains(errBuf.String(), "warning: could not read") {
 		t.Errorf("expected warnings about missing docs, got: %q", errBuf.String())
 	}
@@ -260,7 +245,7 @@ func TestRunFix_FallsBackToDefaultFixAgent(t *testing.T) {
 
 	store := NewLocalManifestStoreWithDir(t.TempDir())
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
-	writeFixManifest(t, store, "abcdef012345", "topic", now, "", "")
+	writeFixManifest(t, store, "abcdef012345", "topic", now, "")
 
 	var rec fixLaunchRecord
 	err := RunFix(context.Background(),

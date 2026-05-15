@@ -58,9 +58,10 @@ const (
 	// the agent should append to.
 	EnvFindingsDoc = "ENTIRE_INVESTIGATE_FINDINGS_DOC"
 
-	// EnvTimelineDoc is the absolute path to the shared timeline document
-	// the agent should append to.
-	EnvTimelineDoc = "ENTIRE_INVESTIGATE_TIMELINE_DOC"
+	// EnvStateDoc is the absolute path to the run's state.json file. The
+	// agent must write its stance into the `pending_turn` field of this
+	// file (and only that field) before exiting.
+	EnvStateDoc = "ENTIRE_INVESTIGATE_STATE_DOC"
 
 	// EnvStartingSHA is the git commit SHA that was HEAD when `entire
 	// investigate` was invoked. The lifecycle hook requires this to match
@@ -94,7 +95,7 @@ type AppendOptions struct {
 	Topic       string
 	Prompt      string
 	FindingsDoc string
-	TimelineDoc string
+	StateDoc    string
 	StartingSHA string
 }
 
@@ -109,7 +110,7 @@ type AppendOptions struct {
 // precedence. Stripping review entries prevents an outer `entire review`
 // session from mis-tagging a child investigate session if invoked nested.
 func AppendInvestigateEnv(base []string, opts AppendOptions) []string {
-	out := make([]string, 0, len(base)+9)
+	out := make([]string, 0, len(base)+10)
 	for _, kv := range base {
 		if IsInvestigateEnvEntry(kv) || isReviewEnvEntry(kv) {
 			continue
@@ -125,7 +126,7 @@ func AppendInvestigateEnv(base []string, opts AppendOptions) []string {
 		EnvTopic+"="+opts.Topic,
 		EnvPrompt+"="+opts.Prompt,
 		EnvFindingsDoc+"="+opts.FindingsDoc,
-		EnvTimelineDoc+"="+opts.TimelineDoc,
+		EnvStateDoc+"="+opts.StateDoc,
 		EnvStartingSHA+"="+opts.StartingSHA,
 	)
 }
@@ -142,7 +143,7 @@ func IsInvestigateEnvEntry(kv string) bool {
 		EnvTopic + "=",
 		EnvPrompt + "=",
 		EnvFindingsDoc + "=",
-		EnvTimelineDoc + "=",
+		EnvStateDoc + "=",
 		EnvStartingSHA + "=",
 	} {
 		if strings.HasPrefix(kv, prefix) {

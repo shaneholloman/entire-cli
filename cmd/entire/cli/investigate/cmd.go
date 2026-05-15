@@ -30,6 +30,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
@@ -91,7 +92,6 @@ type runFlags struct {
 	agentsCSV string
 	maxTurns  int
 	quorum    int
-	output    string
 	cont      string
 	edit      bool
 	findings  bool
@@ -124,7 +124,6 @@ Flags:
   --agents <csv>          override configured agents (comma-separated)
   --max-turns N           per-agent turn budget (default 3)
   --quorum N              approvals needed to terminate (0 = all agents)
-  --output <path>         override findings doc path
   --continue <run-id>     resume an existing run
   --edit                  re-open the investigate config picker
   --findings              browse local investigation manifests
@@ -171,7 +170,6 @@ Subcommands:
 	cmd.Flags().StringVar(&flags.agentsCSV, "agents", "", "override configured agents (comma-separated)")
 	cmd.Flags().IntVar(&flags.maxTurns, "max-turns", 0, "per-agent turn budget (default 3)")
 	cmd.Flags().IntVar(&flags.quorum, "quorum", 0, "approvals needed to terminate (0 = all agents)")
-	cmd.Flags().StringVar(&flags.output, "output", "", "override findings doc path")
 	cmd.Flags().StringVar(&flags.cont, "continue", "", "resume an existing run by id")
 	cmd.Flags().BoolVar(&flags.edit, "edit", false, "re-open the investigate config picker")
 	cmd.Flags().BoolVar(&flags.findings, "findings", false, "browse local investigation manifests")
@@ -417,7 +415,7 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 			"cannot resume: persisted next agent index %d exceeds available agents (%d). "+
 				"This usually means --agents was used with a shorter list than the original run. "+
 				"Either re-run with the original agents (or a superset), or remove the run state at "+
-				".git/entire-investigations/state/%s.json and start a fresh investigation",
+				".git/entire-investigations/%s/state.json and start a fresh investigation",
 			state.NextAgentIdx, len(agents), state.RunID)
 		cmd.SilenceUsage = true
 		fmt.Fprintln(cmd.ErrOrStderr(), err.Error())
@@ -457,7 +455,6 @@ func runContinue(ctx context.Context, cmd *cobra.Command, f runFlags, deps Deps)
 		Quorum:       quorum,
 		AlwaysPrompt: alwaysPrompt,
 		FindingsDoc:  state.FindingsDoc,
-		TimelineDoc:  state.TimelineDoc,
 		StartingSHA:  state.StartingSHA,
 		Resume:       state,
 	}
@@ -565,7 +562,11 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		return wrapSilent(silentErr, err)
 	}
 
-	findingsDoc, timelineDoc := resolveDocPaths(worktreeRoot, runID, topic, f.output)
+	commonDir, err := session.GetGitCommonDir(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve git common dir: %w", err)
+	}
+	findingsDoc := resolveDocPaths(commonDir, runID)
 
 	priorContext := ""
 	if deps.PriorEntireContextFn != nil {
@@ -578,7 +579,6 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		IssueLinkSeed:      issueSeed,
 		IssueLinkTopic:     issueTopic,
 		FindingsDoc:        findingsDoc,
-		TimelineDoc:        timelineDoc,
 		PriorEntireContext: priorContext,
 	})
 	if err != nil {
@@ -589,13 +589,12 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 	}
 
 	// Skip the pre-TUI banner when the dashboard will render its own title
-	// row — those three lines were echoing the TUI header and leaving stale
+	// row — those two lines were echoing the TUI header and leaving stale
 	// rows above the live dashboard. In non-TTY mode the text sink shows
 	// nothing similar, so the banner remains useful there.
 	if !interactive.IsTerminalWriter(cmd.OutOrStdout()) || !interactive.CanPromptInteractively() {
 		fmt.Fprintf(cmd.OutOrStdout(), "Investigating: %q (run %s)\n", topic, runID)
 		fmt.Fprintf(cmd.OutOrStdout(), "  Findings: %s\n", findingsDoc)
-		fmt.Fprintf(cmd.OutOrStdout(), "  Timeline: %s\n", timelineDoc)
 	}
 
 	startedAt := time.Now().UTC()
@@ -607,7 +606,6 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 		Quorum:       quorum,
 		AlwaysPrompt: composeAlwaysPrompt(s.Investigate.AlwaysPrompt, perRun),
 		FindingsDoc:  findingsDoc,
-		TimelineDoc:  timelineDoc,
 		StartingSHA:  headSHA,
 		PriorContext: priorContext,
 	}
@@ -618,7 +616,7 @@ func runFresh(ctx context.Context, cmd *cobra.Command, args []string, f runFlags
 
 	endedAt := time.Now().UTC()
 	writeRunManifest(ctx, cmd.OutOrStdout(), runID, topic, agents, headSHA, worktreeRoot,
-		findingsDoc, timelineDoc, startedAt, endedAt, result)
+		findingsDoc, startedAt, endedAt, result)
 	return nil
 }
 
@@ -723,33 +721,19 @@ func topicForBootstrap(topic, seedDoc string, issueSeed []byte) string {
 	return topic
 }
 
-// resolveDocPaths returns the absolute findings + timeline paths for a
-// run. Each run gets its own subdirectory under .entire/investigations/
-// so two runs on the same topic don't share docs.
+// resolveDocPaths returns the absolute findings path for a run. The
+// findings doc lives alongside state.json in the per-run directory under
+// the git common dir:
 //
-// Layout:
+//	<commonDir>/entire-investigations/<run-id>/findings.md
+//	<commonDir>/entire-investigations/<run-id>/state.json
 //
-//	.entire/investigations/<run-id>-<slug>/findings.md
-//	.entire/investigations/<run-id>-<slug>/timeline.md
-//
-// When --output is set, that override path is used as the findings doc
-// verbatim (relative paths are anchored at worktreeRoot). The timeline
-// is derived as <findings-without-ext>-timeline.md, parallel to the
-// override semantics from before this change.
-func resolveDocPaths(worktreeRoot, runID, topic, override string) (findings, timeline string) {
-	if strings.TrimSpace(override) != "" {
-		findings = override
-		if !filepath.IsAbs(findings) {
-			findings = filepath.Join(worktreeRoot, findings)
-		}
-		timeline = strings.TrimSuffix(findings, filepath.Ext(findings)) + "-timeline.md"
-		return findings, timeline
-	}
-	slug := SlugifyTopic(topic)
-	dir := filepath.Join(worktreeRoot, ".entire", "investigations", runID+"-"+slug)
-	findings = filepath.Join(dir, "findings.md")
-	timeline = filepath.Join(dir, "timeline.md")
-	return findings, timeline
+// Putting the per-run artefacts under the git common dir (rather than the
+// worktree's .entire/investigations/) keeps the worktree's working tree
+// clean — investigation findings are session-scoped scratch space, not
+// part of the user's source tree.
+func resolveDocPaths(commonDir, runID string) string {
+	return filepath.Join(commonDir, InvestigationsDirName, runID, "findings.md")
 }
 
 // executeLoop runs the investigation loop without writing a manifest.
@@ -826,7 +810,7 @@ func writeRunManifest(
 	out io.Writer,
 	runID, topic string,
 	agents []string,
-	startingSHA, worktreePath, findingsDoc, timelineDoc string,
+	startingSHA, worktreePath, findingsDoc string,
 	startedAt, endedAt time.Time,
 	result LoopResult,
 ) {
@@ -855,7 +839,6 @@ func writeRunManifest(
 		StartingSHA:    startingSHA,
 		WorktreePath:   worktreePath,
 		FindingsDoc:    findingsDoc,
-		TimelineDoc:    timelineDoc,
 		Agents:         append([]string(nil), agents...),
 		Outcome:        string(result.Outcome),
 		StancesByAgent: stancesByAgent,
@@ -879,7 +862,6 @@ func writeInvestigateFooter(w io.Writer, m LocalManifest) {
 	}
 	fmt.Fprintln(w, "Investigation complete.")
 	fmt.Fprintln(w, "Findings: "+m.FindingsDoc)
-	fmt.Fprintln(w, "Timeline: "+m.TimelineDoc)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "To apply these findings:")
 	fmt.Fprintf(w, "  entire investigate fix %s\n", m.RunID)

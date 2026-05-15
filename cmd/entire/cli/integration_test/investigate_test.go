@@ -36,13 +36,13 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 	enableInvestigateAgent(t, env, "claude-code")
 
 	const (
-		runID     = "0123456789ab"
-		round     = 1
-		turn      = 1
-		topic     = "how-does-x-work"
-		userText  = "Please investigate how X works on this branch."
-		findings  = "/tmp/investigate-findings.md"
-		timelineP = "/tmp/investigate-timeline.md"
+		runID    = "0123456789ab"
+		round    = 1
+		turn     = 1
+		topic    = "how-does-x-work"
+		userText = "Please investigate how X works on this branch."
+		findings = "/tmp/investigate-findings.md"
+		stateP   = "/tmp/investigate-state.json"
 	)
 
 	// Simulate the env vars that `entire investigate` sets on the spawned
@@ -57,7 +57,7 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 		investigate.EnvTopic + "=" + topic,
 		investigate.EnvPrompt + "=" + userText,
 		investigate.EnvFindingsDoc + "=" + findings,
-		investigate.EnvTimelineDoc + "=" + timelineP,
+		investigate.EnvStateDoc + "=" + stateP,
 		investigate.EnvStartingSHA + "=" + env.GetHeadHash(),
 	}
 
@@ -176,24 +176,22 @@ func TestInvestigate_FakeAgentLoop_TagsSessionViaLifecycleHook(t *testing.T) {
 	)
 	startingSHA := env.GetHeadHash()
 
-	// Findings + timeline docs.
-	findingsDoc := filepath.Join(env.RepoDir, ".entire", "investigations", "fake-loop.md")
-	timelineDoc := filepath.Join(env.RepoDir, ".entire", "investigations", "fake-loop-timeline.md")
+	// Findings doc (alongside the state.json the loop will write).
+	stateRoot := t.TempDir()
+	findingsDoc := filepath.Join(stateRoot, runID, "findings.md")
 	if err := os.MkdirAll(filepath.Dir(findingsDoc), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	if err := os.WriteFile(findingsDoc, []byte("# Findings\n"), 0o600); err != nil {
 		t.Fatalf("write findings: %v", err)
 	}
-	if err := os.WriteFile(timelineDoc, []byte("# Timeline\n"), 0o600); err != nil {
-		t.Fatalf("write timeline: %v", err)
-	}
 
-	stateStore := investigate.NewStateStoreWithDir(t.TempDir())
+	stateStore := investigate.NewStateStoreWithDir(stateRoot)
 
 	// The fake claude script does two things:
-	//   1. Appends a "## Turn N -- claude-code\n**Stance:** approve\n"
-	//      block so ParseStanceFromTimeline records "approve".
+	//   1. Rewrites state.json with pending_turn set to {"stance":"approve"}
+	//      via python3 (always available in our CI environment) so the loop
+	//      records "approve".
 	//   2. Invokes `entire hooks claude-code user-prompt-submit` to drive
 	//      lifecycle adoption with the env vars the spawner inherited.
 	//
@@ -201,9 +199,15 @@ func TestInvestigate_FakeAgentLoop_TagsSessionViaLifecycleHook(t *testing.T) {
 	// writes a session state file the test then reads back.
 	sessionID := "investigate-fake-loop-session"
 	fakeAgentScript := fmt.Sprintf(`set -eu
-{
-  printf '\n## Turn %%s -- %%s\n**Stance:** approve\n' "$ENTIRE_INVESTIGATE_TURN" "$ENTIRE_INVESTIGATE_AGENT"
-} >> "$ENTIRE_INVESTIGATE_TIMELINE_DOC"
+python3 -c '
+import json, os, sys
+p = os.environ["ENTIRE_INVESTIGATE_STATE_DOC"]
+with open(p, "r") as f:
+    state = json.load(f)
+state["pending_turn"] = {"stance": "approve"}
+with open(p, "w") as f:
+    json.dump(state, f, indent=2)
+'
 printf '%%s\n' '{"session_id":"%s","transcript_path":"","prompt":"%s"}' | "$ENTIRE_TEST_BINARY" hooks claude-code user-prompt-submit
 `, sessionID, userText)
 
@@ -227,7 +231,6 @@ printf '%%s\n' '{"session_id":"%s","transcript_path":"","prompt":"%s"}' | "$ENTI
 		MaxTurns:    1,
 		Quorum:      1,
 		FindingsDoc: findingsDoc,
-		TimelineDoc: timelineDoc,
 		StartingSHA: startingSHA,
 	}
 	deps := investigate.LoopDeps{
@@ -237,8 +240,7 @@ printf '%%s\n' '{"session_id":"%s","transcript_path":"","prompt":"%s"}' | "$ENTI
 			}
 			return nil
 		},
-		States:        stateStore,
-		TranscriptDir: t.TempDir(),
+		States: stateStore,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -381,20 +383,19 @@ func TestInvestigate_Continue_ResumesAtRecordedAgentIdx(t *testing.T) {
 	}
 	t.Parallel()
 
-	dir := t.TempDir()
-	findings := filepath.Join(dir, "findings.md")
-	timeline := filepath.Join(dir, "timeline.md")
-	if err := os.WriteFile(findings, []byte("# Findings\n"), 0o600); err != nil {
-		t.Fatalf("write findings: %v", err)
-	}
-	if err := os.WriteFile(timeline, []byte("# Timeline\n"), 0o600); err != nil {
-		t.Fatalf("write timeline: %v", err)
-	}
-
-	stateStore := investigate.NewStateStoreWithDir(t.TempDir())
+	stateRoot := t.TempDir()
+	stateStore := investigate.NewStateStoreWithDir(stateRoot)
 
 	// Pre-seed: claude-code already went, codex is next (NextAgentIdx=1).
 	const runID = "fedcba987654"
+	findings := filepath.Join(stateRoot, runID, "findings.md")
+	if err := os.MkdirAll(filepath.Dir(findings), 0o755); err != nil {
+		t.Fatalf("MkdirAll findings: %v", err)
+	}
+	if err := os.WriteFile(findings, []byte("# Findings\n"), 0o600); err != nil {
+		t.Fatalf("write findings: %v", err)
+	}
+
 	resume := &investigate.RunState{
 		RunID:           runID,
 		Topic:           "resume-topic",
@@ -408,7 +409,6 @@ func TestInvestigate_Continue_ResumesAtRecordedAgentIdx(t *testing.T) {
 			{Round: 1, Turn: 1, Agent: "claude-code", Stance: "approve"},
 		},
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 		StartedAt:   time.Now().Add(-time.Hour).UTC(),
 		UpdatedAt:   time.Now().Add(-time.Hour).UTC(),
@@ -426,11 +426,17 @@ func TestInvestigate_Continue_ResumesAtRecordedAgentIdx(t *testing.T) {
 	spawnerFor := func(name string) spawn.Spawner {
 		return &investigateFakeSpawner{
 			name: name,
-			script: fmt.Sprintf(`set -eu
-{
-  printf '\n## Turn %%s -- %%s\n**Stance:** approve\n' "$ENTIRE_INVESTIGATE_TURN" "%s"
-} >> "$ENTIRE_INVESTIGATE_TIMELINE_DOC"
-`, name),
+			script: `set -eu
+python3 -c '
+import json, os
+p = os.environ["ENTIRE_INVESTIGATE_STATE_DOC"]
+with open(p, "r") as f:
+    state = json.load(f)
+state["pending_turn"] = {"stance": "approve"}
+with open(p, "w") as f:
+    json.dump(state, f, indent=2)
+'
+`,
 			onSpawn: func() {
 				observedAgents = append(observedAgents, name)
 			},
@@ -444,14 +450,12 @@ func TestInvestigate_Continue_ResumesAtRecordedAgentIdx(t *testing.T) {
 		MaxTurns:    1,
 		Quorum:      2,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: resume.StartingSHA,
 		Resume:      loaded,
 	}
 	deps := investigate.LoopDeps{
-		SpawnerFor:    spawnerFor,
-		States:        stateStore,
-		TranscriptDir: t.TempDir(),
+		SpawnerFor: spawnerFor,
+		States:     stateStore,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -554,29 +558,29 @@ func TestInvestigate_IssueLink_ResolvesViaFakeGh(t *testing.T) {
 		t.Fatalf("entire investigate failed: %v\nOutput:\n%s", err, output)
 	}
 
-	// Find the bootstrapped findings doc. The slug is derived from the
-	// issue title; we glob the .entire/investigations directory rather
-	// than re-deriving the slug in the test, which keeps the test resilient
-	// to minor slug-rule tweaks.
-	investigationsDir := filepath.Join(env.RepoDir, ".entire", "investigations")
+	// Find the bootstrapped findings doc. The per-run dir lives under the
+	// git common dir; we glob the entire-investigations directory rather
+	// than re-deriving the run ID, which keeps the test resilient to
+	// implementation tweaks.
+	investigationsDir := filepath.Join(env.RepoDir, ".git", "entire-investigations")
 	entries, err := os.ReadDir(investigationsDir)
 	if err != nil {
-		t.Fatalf("read .entire/investigations: %v\nOutput:\n%s", err, output)
+		t.Fatalf("read .git/entire-investigations: %v\nOutput:\n%s", err, output)
 	}
 	var foundFindings string
 	for _, e := range entries {
-		if e.IsDir() {
+		if !e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if strings.HasSuffix(name, "-timeline.md") {
+		if name == "manifests" {
 			continue
 		}
-		if !strings.HasSuffix(name, ".md") {
-			continue
+		candidate := filepath.Join(investigationsDir, name, "findings.md")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			foundFindings = candidate
+			break
 		}
-		foundFindings = filepath.Join(investigationsDir, name)
-		break
 	}
 	if foundFindings == "" {
 		t.Fatalf("no findings doc found under %s\nOutput:\n%s", investigationsDir, output)

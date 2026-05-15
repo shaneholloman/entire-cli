@@ -19,12 +19,10 @@ func TestBootstrap_SeedDocPassthrough(t *testing.T) {
 	}
 
 	findings := filepath.Join(dir, "out", "findings.md")
-	timeline := filepath.Join(dir, "out", "timeline.md")
 
 	res, err := Bootstrap(context.Background(), BootstrapInput{
 		SeedDoc:     seedPath,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -40,18 +38,6 @@ func TestBootstrap_SeedDocPassthrough(t *testing.T) {
 	if string(gotFindings) != seed {
 		t.Errorf("findings doc not verbatim copy of seed:\nGOT:\n%s\nWANT:\n%s", gotFindings, seed)
 	}
-
-	gotTimeline, err := os.ReadFile(timeline)
-	if err != nil {
-		t.Fatalf("read timeline: %v", err)
-	}
-	tl := string(gotTimeline)
-	if !strings.Contains(tl, "# Investigation Timeline: Why does checkout retry forever?") {
-		t.Errorf("timeline missing expected heading:\n%s", tl)
-	}
-	if !strings.Contains(tl, findings) {
-		t.Errorf("timeline missing reference to findings doc path:\n%s", tl)
-	}
 }
 
 func TestBootstrap_TopicScaffold(t *testing.T) {
@@ -59,12 +45,10 @@ func TestBootstrap_TopicScaffold(t *testing.T) {
 
 	dir := t.TempDir()
 	findings := filepath.Join(dir, "findings.md")
-	timeline := filepath.Join(dir, "timeline.md")
 
 	res, err := Bootstrap(context.Background(), BootstrapInput{
 		Topic:       "Why is checkout flaky?",
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -103,14 +87,12 @@ func TestBootstrap_TopicScaffoldWithPriorEntireContext(t *testing.T) {
 
 	dir := t.TempDir()
 	findings := filepath.Join(dir, "findings.md")
-	timeline := filepath.Join(dir, "timeline.md")
 
 	priorBlock := "Prior session abc123 worked on the same area.\nConclusion: similar root cause."
 	_, err := Bootstrap(context.Background(), BootstrapInput{
 		Topic:              "Why is checkout flaky?",
 		PriorEntireContext: priorBlock,
 		FindingsDoc:        findings,
-		TimelineDoc:        timeline,
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -141,14 +123,12 @@ func TestBootstrap_IssueLinkSeed(t *testing.T) {
 
 	dir := t.TempDir()
 	findings := filepath.Join(dir, "findings.md")
-	timeline := filepath.Join(dir, "timeline.md")
 
 	seedBytes := []byte("# Investigation: gh#42 — checkout times out\n\n**Source:** https://github.com/o/r/issues/42\n\n## Question\n\nbody…\n")
 	res, err := Bootstrap(context.Background(), BootstrapInput{
 		IssueLinkSeed:  seedBytes,
 		IssueLinkTopic: "checkout times out",
 		FindingsDoc:    findings,
-		TimelineDoc:    timeline,
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -171,7 +151,6 @@ func TestBootstrap_RequiresOneInput(t *testing.T) {
 	dir := t.TempDir()
 	_, err := Bootstrap(context.Background(), BootstrapInput{
 		FindingsDoc: filepath.Join(dir, "f.md"),
-		TimelineDoc: filepath.Join(dir, "t.md"),
 	})
 	if err == nil {
 		t.Fatalf("expected error when no input variant provided")

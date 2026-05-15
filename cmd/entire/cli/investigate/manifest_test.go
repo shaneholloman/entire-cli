@@ -14,12 +14,11 @@ func newManifest(runID, topic string, started time.Time, outcome string) LocalMa
 		Slug:        SlugifyTopic(topic),
 		StartingSHA: "deadbeefcafe",
 		FindingsDoc: "/abs/findings-" + runID + ".md",
-		TimelineDoc: "/abs/timeline-" + runID + ".md",
 		Agents:      []string{"claude-code", "codex"},
 		Outcome:     outcome,
 		StancesByAgent: map[string]string{
-			"claude-code": "approve",
-			"codex":       "request-changes",
+			"claude-code": stanceApprove,
+			"codex":       stanceRequestChanges,
 		},
 		StartedAt: started,
 		EndedAt:   started.Add(10 * time.Minute),
@@ -55,7 +54,7 @@ func TestLocalManifestStore_RoundTrip(t *testing.T) {
 	if got[0].Outcome != "quorum" {
 		t.Errorf("Outcome = %q, want %q", got[0].Outcome, "quorum")
 	}
-	if got[0].StancesByAgent["claude-code"] != "approve" {
+	if got[0].StancesByAgent["claude-code"] != stanceApprove {
 		t.Errorf("StancesByAgent[claude-code] = %q, want approve", got[0].StancesByAgent["claude-code"])
 	}
 	if !got[0].StartedAt.Equal(m.StartedAt) {

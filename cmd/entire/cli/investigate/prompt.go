@@ -11,9 +11,9 @@ type Files struct {
 	// Findings is the absolute path to the findings document the agent
 	// reads, edits, and adds evidence to.
 	Findings string
-	// Timeline is the absolute path to the chronological timeline document
-	// the agent appends one entry to per turn.
-	Timeline string
+	// State is the absolute path to the run's state.json file. The agent
+	// records its stance there via the `pending_turn` field.
+	State string
 }
 
 // ComposeInput is the per-turn data needed to render an investigate prompt.
@@ -30,8 +30,7 @@ type ComposeInput struct {
 	Topic string
 
 	// AgentName is the agent the prompt is being rendered for (e.g.
-	// "claude-code"). Mirrored back into the timeline-entry template so
-	// the agent knows which heading to write under its own name.
+	// "claude-code").
 	AgentName string
 
 	// Round is the 1-indexed round number in the loop.
@@ -45,7 +44,7 @@ type ComposeInput struct {
 	// project-specific guardrails into every turn via settings.
 	AlwaysPrompt string
 
-	// Files holds the findings + timeline absolute paths the agent must
+	// Files holds the findings + state absolute paths the agent must
 	// read and edit.
 	Files Files
 
@@ -59,10 +58,11 @@ type ComposeInput struct {
 // ComposeInvestigatePrompt renders the full prompt sent to one agent for one
 // turn of an investigate run.
 //
-// The agent reads Files.Findings + Files.Timeline, edits them in place,
-// records its stance in the timeline as `**Stance:** approve | request-changes
-// | abstain`, and exits. The prompt is plain text; the loop driver writes it
-// to the agent's stdin (or first-message slot, depending on the agent).
+// The agent reads Files.Findings, edits it in place, then records its
+// stance by writing the `pending_turn` field of Files.State to a JSON
+// object of the form
+// {"stance":"approve|request-changes|abstain","note":"<one-line>"}.
+// The agent must not modify any other field of state.json.
 func ComposeInvestigatePrompt(in ComposeInput) string {
 	var b strings.Builder
 
@@ -80,18 +80,18 @@ Topic: %s
 
 Files:
   Findings: %s
-  Timeline: %s
+  State:    %s
 
 ## Your task this turn
 
-1. Read the findings doc and the full timeline to date. Read both files in
-   full before editing — prior agents may have already established findings,
-   evidence, or pushback you must engage with rather than restate.
+1. Read the findings doc in full before editing — prior agents may have
+   already established findings, evidence, or pushback you must engage with
+   rather than restate.
 
 2. Form an independent opinion. Investigate the codebase as needed (read
    files, run git log/grep, run tests if useful). You have full agent
    powers, but you MUST NOT modify any file other than the findings doc
-   and the timeline file.
+   and the run's state.json file (see step 4).
 
    You are a skeptical investigator: every claim in the findings doc must
    be supported by concrete evidence (file:line refs, command output, or
@@ -107,23 +107,17 @@ Files:
    directly. Do NOT add a "## Recommendations" or "## Action items"
    section — investigations end at the Conclusion.
 
-4. Append exactly one entry to the timeline file using this format (note:
-   the heading MUST be at column 0, no leading whitespace):
+4. Report your stance by setting the `+"`pending_turn`"+` field in state.json at:
 
-`+"```"+`markdown
-## Turn %d — %s
-**Stance:** approve | request-changes | abstain
-**Date:** <ISO 8601 timestamp>
+     %s
 
-### Changes
-- <bullet>
+   Read the file, set ONLY the `+"`pending_turn`"+` key to a JSON object of
+   the form
 
-### Rationale
-<prose>
+     {"stance": "approve" | "request-changes" | "abstain", "note": "<one-line explanation>"}
 
-### Open concerns
-<prose; "none" if you have no remaining concerns>
-`+"```"+`
+   then write the file back. Do NOT modify any other field of state.json
+   — the loop owns everything else.
 
 5. Stance rules:
    - "approve" only if you have independently verified the findings and
@@ -136,14 +130,14 @@ Files:
 
 6. Do NOT commit anything to git. Do NOT run destructive commands.
 
-7. Exit when you've appended your turn entry.
+7. Exit once you've written your `+"`pending_turn`"+` to state.json.
 `,
 		in.AgentName,
 		in.Round, in.Turn,
 		in.Topic,
 		in.Files.Findings,
-		in.Files.Timeline,
-		in.Turn, in.AgentName,
+		in.Files.State,
+		in.Files.State,
 	)
 
 	if ap := strings.TrimSpace(in.AlwaysPrompt); ap != "" {

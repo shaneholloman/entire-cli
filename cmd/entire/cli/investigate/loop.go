@@ -5,24 +5,25 @@ package investigate
 // The loop runs a fixed list of agents in a strict round-robin order. For
 // each turn it:
 //
-//  1. Hashes the findings + timeline files (SHA-256) BEFORE the turn.
+//  1. Hashes the findings file (SHA-256) BEFORE the turn.
 //  2. Composes a prompt via ComposeInvestigatePrompt.
 //  3. Spawns the agent via Spawner.BuildCmd with ENTIRE_INVESTIGATE_* env
 //     populated by AppendInvestigateEnv.
 //  4. Discards the agent's stdout/stderr — the lifecycle hooks capture the
 //     full session transcript on the shadow branch and condense it onto
 //     entire/checkpoints/v1 on the next commit (same machinery as review).
-//  5. Waits for the agent to exit. Re-hashes the docs.
-//  6. Parses the timeline doc for the freshly-added "## Turn N — <agent>"
-//     block and reads its "**Stance:**" line.
+//  5. Waits for the agent to exit. Re-hashes the findings doc.
+//  6. Reloads state.json from disk. The agent has written its stance into
+//     state.PendingTurn; the loop validates it, appends a TurnStance, and
+//     clears PendingTurn.
 //  7. Records a TurnStance in the persisted RunState and notifies the
 //     ProgressSink (TUI dashboard or headless text writer).
 //  8. Decides whether to terminate (quorum, stalled, paused, cancelled) or
 //     advance to the next agent.
 //
 // The loop is single-threaded: each turn waits for the previous to exit
-// before starting. This keeps the timeline file's append-order
-// deterministic and avoids racing two agents on the same shared docs.
+// before starting. This keeps the order of recorded stances deterministic
+// and avoids racing two agents on the same shared findings doc.
 //
 // Privacy note (per CLAUDE.md): operational metadata only is ever logged.
 // Prompts, file bodies, agent stdout, and commit messages are NEVER logged.
@@ -36,8 +37,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -53,7 +52,7 @@ type LoopDeps struct {
 	SpawnerFor func(agentName string) spawn.Spawner
 
 	// States persists/loads RunState across turns. In production this is a
-	// real *StateStore rooted at <git-common-dir>/entire-investigations/state;
+	// real *StateStore rooted at <git-common-dir>/entire-investigations;
 	// tests pass NewStateStoreWithDir(t.TempDir()).
 	States *StateStore
 
@@ -75,7 +74,6 @@ type LoopInput struct {
 	Quorum       int       // approvals needed; 0 → len(Agents)
 	AlwaysPrompt string    // optional, appended verbatim to every prompt
 	FindingsDoc  string    // absolute path
-	TimelineDoc  string    // absolute path
 	StartingSHA  string    // git HEAD when `entire investigate` was invoked
 	PriorContext string    // optional, e.g. "## Prior Entire Context" excerpt
 	Resume       *RunState // when non-nil, resume from this state
@@ -121,8 +119,8 @@ const pauseAfterConsecutiveFailures = 2
 const defaultMaxTurns = 3
 
 // stanceApprove and friends pin the stance vocabulary so callers can compare
-// without typo risk. The timeline parser normalises to one of these or
-// "unknown".
+// without typo risk. The PendingTurn validator normalises to one of these
+// or "unknown".
 const (
 	stanceApprove        = "approve"
 	stanceRequestChanges = "request-changes"
@@ -183,6 +181,7 @@ func RunInvestigateLoop(ctx context.Context, in LoopInput, deps LoopDeps) (LoopR
 		now:         now,
 		quorum:      quorum,
 		maxPerAgent: maxTurnsPerAgent,
+		stateDoc:    deps.States.runStatePath(in.RunID),
 	}
 	consecutiveFails := 0
 	var lastErr error
@@ -235,6 +234,7 @@ type turnConfig struct {
 	now         func() time.Time
 	quorum      int
 	maxPerAgent int
+	stateDoc    string // absolute path to state.json (passed to the agent)
 }
 
 // turnOutcome reports the post-turn state runOneTurn produces. The loop
@@ -259,7 +259,6 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	round := ((state.Turn - 1) / len(state.Agents)) + 1
 
 	preFindings := hashFile(ctx, in.FindingsDoc)
-	preTimeline := hashFile(ctx, in.TimelineDoc)
 
 	deps.Progress.TurnStarted(agentName, state.Turn, round, cfg.maxPerAgent)
 
@@ -277,7 +276,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		Round:        round,
 		Turn:         state.Turn,
 		AlwaysPrompt: in.AlwaysPrompt,
-		Files:        Files{Findings: in.FindingsDoc, Timeline: in.TimelineDoc},
+		Files:        Files{Findings: in.FindingsDoc, State: cfg.stateDoc},
 		PriorContext: in.PriorContext,
 	})
 	env := AppendInvestigateEnv(os.Environ(), AppendOptions{
@@ -288,7 +287,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		Topic:       in.Topic,
 		Prompt:      prompt,
 		FindingsDoc: in.FindingsDoc,
-		TimelineDoc: in.TimelineDoc,
+		StateDoc:    cfg.stateDoc,
 		StartingSHA: in.StartingSHA,
 	})
 	cmd := spawner.BuildCmd(ctx, env, prompt)
@@ -307,22 +306,18 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	turnDuration := cfg.now().Sub(turnStart)
 
 	postFindings := hashFile(ctx, in.FindingsDoc)
-	postTimeline := hashFile(ctx, in.TimelineDoc)
-	stance, note, headingFound := ParseStanceFromTimeline(in.TimelineDoc, agentName, state.Turn)
 
-	turn := TurnStance{
-		Round:           round,
-		Turn:            state.Turn,
-		Agent:           agentName,
-		Stance:          stance,
-		PlanChanged:     preFindings != postFindings,
-		TimelineChanged: preTimeline != postTimeline,
-		Note:            note,
-	}
 	if runErr != nil {
-		turn.Stance = stanceUnknown
-		turn.Note = "spawn error: " + runErr.Error()
+		turn := TurnStance{
+			Round:       round,
+			Turn:        state.Turn,
+			Agent:       agentName,
+			Stance:      stanceUnknown,
+			PlanChanged: preFindings != postFindings,
+			Note:        "spawn error: " + runErr.Error(),
+		}
 		state.Stances = append(state.Stances, turn)
+		state.PendingTurn = nil
 		updateRoundCounter(state)
 		state.UpdatedAt = cfg.now()
 		logging.Warn(ctx, "investigate: turn failed",
@@ -333,32 +328,78 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 		return turnOutcome{round: round, failed: true, err: runErr}
 	}
 
+	// Reload state from disk: the agent (running with cfg.stateDoc on the
+	// filesystem) may have written PendingTurn. We merge that into our
+	// in-memory state, then clear it on disk after recording the stance.
+	stance, note, hasPending := readPendingTurn(ctx, deps.States, in.RunID, state)
+	turn := TurnStance{
+		Round:       round,
+		Turn:        state.Turn,
+		Agent:       agentName,
+		Stance:      stance,
+		PlanChanged: preFindings != postFindings,
+		Note:        note,
+	}
 	state.Stances = append(state.Stances, turn)
+	state.PendingTurn = nil
 	updateRoundCounter(state)
 	state.UpdatedAt = cfg.now()
 	logging.Info(ctx, "investigate: turn end",
 		sRun(in.RunID), sAgent(agentName),
 		sTurn(state.Turn), sRound(round),
 		slogString("stance", stance),
-		slogBool("plan_changed", turn.PlanChanged),
-		slogBool("timeline_changed", turn.TimelineChanged))
-	// Treat a missing heading as a soft failure: the agent ran cleanly but
-	// produced no structured output, so it should not count toward quorum
-	// and consecutive misses must trip pause-on-failure. The TurnStance is
-	// still recorded for diagnostics, but the loop sees this as a failure
-	// for budget-control purposes.
-	if !headingFound {
-		logging.Warn(ctx, "investigate: turn missing heading",
+		slogBool("plan_changed", turn.PlanChanged))
+
+	// Treat a missing pending_turn as a soft failure: the agent ran cleanly
+	// but produced no structured stance, so it should not count toward
+	// quorum and consecutive misses must trip pause-on-failure. The
+	// TurnStance is still recorded for diagnostics, but the loop sees this
+	// as a failure for budget-control purposes.
+	if !hasPending {
+		logging.Warn(ctx, "investigate: turn missing pending_turn",
 			sRun(in.RunID), sAgent(agentName),
 			sTurn(state.Turn), sRound(round))
-		missingHeading := errors.New("agent did not write a turn heading")
-		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, turnDuration, true, missingHeading, "")
-		return turnOutcome{round: round, failed: true, err: missingHeading}
+		missingPending := errors.New("agent did not write pending_turn to state.json")
+		deps.Progress.TurnFinished(agentName, state.Turn, stanceUnknown, turnDuration, true, missingPending, "")
+		return turnOutcome{round: round, failed: true, err: missingPending}
 	}
-	body, _ := findTurnBlock(readTimelineFile(in.TimelineDoc), agentName, state.Turn)
-	preview := parseFindingsPreview(body)
-	deps.Progress.TurnFinished(agentName, state.Turn, stance, turnDuration, false, nil, preview)
+
+	deps.Progress.TurnFinished(agentName, state.Turn, stance, turnDuration, false, nil, note)
 	return turnOutcome{round: round, failed: false}
+}
+
+// readPendingTurn loads the on-disk state.json (which the agent may have
+// just rewritten) and returns the validated stance + note pair plus a
+// "has pending" flag. The in-memory state is NOT mutated here — the caller
+// owns the canonical state and will clear PendingTurn after recording.
+//
+// Validation rules:
+//   - missing file or unreadable file → ("unknown", "<diagnostic>", false)
+//   - missing pending_turn field      → ("unknown", "missing pending_turn", false)
+//   - stance not in the vocabulary    → ("unknown", "invalid stance: <value>", true)
+//   - valid pending_turn              → (stance, note, true)
+func readPendingTurn(ctx context.Context, store *StateStore, runID string, _ *RunState) (stance, note string, hasPending bool) {
+	loaded, err := store.Load(ctx, runID)
+	if err != nil {
+		return stanceUnknown, "state read error: " + err.Error(), false
+	}
+	if loaded == nil || loaded.PendingTurn == nil {
+		return stanceUnknown, "missing pending_turn", false
+	}
+	raw := strings.ToLower(strings.TrimSpace(loaded.PendingTurn.Stance))
+	switch raw {
+	case stanceApprove:
+		return stanceApprove, strings.TrimSpace(loaded.PendingTurn.Note), true
+	case stanceRequestChanges, "requestchanges", "request_changes":
+		return stanceRequestChanges, strings.TrimSpace(loaded.PendingTurn.Note), true
+	case stanceAbstain:
+		return stanceAbstain, strings.TrimSpace(loaded.PendingTurn.Note), true
+	default:
+		// The agent wrote *something* — record it as an invalid-stance
+		// pending_turn so the loop's "no pending" branch doesn't fire,
+		// but mark the stance unknown so quorum can't count it.
+		return stanceUnknown, "invalid stance: " + loaded.PendingTurn.Stance, true
+	}
 }
 
 // validateLoopInput rejects programmer errors before the loop starts. We
@@ -373,9 +414,6 @@ func validateLoopInput(in LoopInput) error {
 	}
 	if in.FindingsDoc == "" {
 		return errors.New("FindingsDoc is required")
-	}
-	if in.TimelineDoc == "" {
-		return errors.New("TimelineDoc is required")
 	}
 	return nil
 }
@@ -394,8 +432,10 @@ func initLoopState(in LoopInput, now func() time.Time, maxTurns, quorum int) *Ru
 		st.MaxTurns = maxTurns
 		st.Quorum = quorum
 		st.FindingsDoc = in.FindingsDoc
-		st.TimelineDoc = in.TimelineDoc
 		st.StartingSHA = in.StartingSHA
+		// Discard any pending_turn carried over from the resumed snapshot;
+		// the next agent will write a fresh one.
+		st.PendingTurn = nil
 		if st.StartedAt.IsZero() {
 			st.StartedAt = now()
 		}
@@ -413,7 +453,6 @@ func initLoopState(in LoopInput, now func() time.Time, maxTurns, quorum int) *Ru
 		Turn:            0,
 		NextAgentIdx:    0,
 		FindingsDoc:     in.FindingsDoc,
-		TimelineDoc:     in.TimelineDoc,
 		StartingSHA:     in.StartingSHA,
 		StartedAt:       t,
 		UpdatedAt:       t,
@@ -454,8 +493,8 @@ func approveCountInRound(stances []TurnStance, round int) int {
 
 // recordFailureStance appends a TurnStance with Stance="unknown" and a Note
 // describing the failure. Used when we couldn't even spawn the agent
-// (no spawner, log-file open error). PlanChanged/TimelineChanged are false
-// because nothing ran.
+// (no spawner, log-file open error). PlanChanged is false because nothing
+// ran.
 func recordFailureStance(state *RunState, round int, agent string, err error, now func() time.Time) {
 	state.Stances = append(state.Stances, TurnStance{
 		Round:  round,
@@ -464,6 +503,7 @@ func recordFailureStance(state *RunState, round int, agent string, err error, no
 		Stance: stanceUnknown,
 		Note:   "spawn error: " + err.Error(),
 	})
+	state.PendingTurn = nil
 	updateRoundCounter(state)
 	state.UpdatedAt = now()
 }
@@ -491,143 +531,6 @@ func hashFile(ctx context.Context, path string) string {
 		return ""
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// turnHeadingPattern matches a "## Turn <N> — <agent>" markdown heading
-// where the dash separator may be an em-dash (—), an en-dash (–), a double-
-// hyphen (--), or a single hyphen (-). Capture group 1 is the turn number,
-// capture group 2 is the agent name.
-//
-// We require column 0 (no leading whitespace) on the "##" because the
-// prompt explicitly asks the agent to put the heading at column 0; this
-// guards against accidentally matching a "## Turn N" inside a code block
-// that happens to be at the start of a line of indented prose.
-var turnHeadingPattern = regexp.MustCompile(
-	`(?m)^##\s+Turn\s+(\d+)\s+(?:—|–|--|-)\s+(\S.*?)\s*$`,
-)
-
-// nextHeadingPattern matches the next "## " heading at column 0. Used to
-// scope a turn's body so we don't pick up a Stance line from a later turn.
-var nextHeadingPattern = regexp.MustCompile(`(?m)^##\s+`)
-
-// stanceLinePattern matches a markdown "**Stance:**" line. Case-insensitive
-// on the keyword. The captured stance value (group 1) is then normalised
-// against the known vocabulary.
-var stanceLinePattern = regexp.MustCompile(`(?im)^\s*\*\*Stance:\*\*\s*([A-Za-z][A-Za-z0-9_-]*)`)
-
-// ParseStanceFromTimeline reads the timeline file at path and extracts the
-// stance recorded by `agent` for the overall turn `turn`. It returns:
-//
-//   - stance: one of "approve", "request-changes", "abstain", or "unknown".
-//   - note: empty on success; "timeline missing stance" when the heading
-//     was found but no Stance line was present in that block; or a similar
-//     short diagnostic when the heading itself was missing.
-//   - found: true iff a "## Turn N — <agent>" block was located. False does
-//     not imply error — it's the normal outcome when the agent failed to
-//     write its turn entry.
-//
-// The function is I/O-only against the given path; it has no other
-// dependencies and is safe to call from tests.
-func ParseStanceFromTimeline(path, agent string, turn int) (stance, note string, found bool) {
-	data, err := os.ReadFile(path) //nolint:gosec // path is the configured timeline doc
-	if err != nil {
-		return stanceUnknown, "timeline read error: " + err.Error(), false
-	}
-	body, ok := findTurnBlock(string(data), agent, turn)
-	if !ok {
-		return stanceUnknown, "timeline missing stance", false
-	}
-	m := stanceLinePattern.FindStringSubmatch(body)
-	if len(m) < 2 {
-		return stanceUnknown, "timeline missing stance", true
-	}
-	return normaliseStance(m[1]), "", true
-}
-
-// findTurnBlock isolates the body between the matching "## Turn N — <agent>"
-// heading and the next "## " heading (or EOF). Returns ("", false) when
-// the heading is not found.
-//
-// Agent names occasionally pick up trailing whitespace or a stray suffix
-// in agent prompts; we compare normalised forms (trimmed, lowercased) so
-// "Claude-Code", "claude-code ", and "claude-code" all match.
-func findTurnBlock(text, agent string, turn int) (string, bool) {
-	matches := turnHeadingPattern.FindAllStringSubmatchIndex(text, -1)
-	wantAgent := strings.ToLower(strings.TrimSpace(agent))
-	for i, m := range matches {
-		// m: [matchStart, matchEnd, turnStart, turnEnd, agentStart, agentEnd]
-		gotTurn := text[m[2]:m[3]]
-		gotAgent := strings.ToLower(strings.TrimSpace(text[m[4]:m[5]]))
-		if gotTurn != strconv.Itoa(turn) || gotAgent != wantAgent {
-			continue
-		}
-		// Body starts at the end of this heading line. End is either the
-		// next "## " heading OR EOF.
-		bodyStart := m[1]
-		bodyEnd := len(text)
-		if i+1 < len(matches) {
-			bodyEnd = matches[i+1][0]
-		} else {
-			// Could still be a non-Turn "## " heading after this block.
-			rel := nextHeadingPattern.FindStringIndex(text[bodyStart:])
-			if rel != nil {
-				bodyEnd = bodyStart + rel[0]
-			}
-		}
-		return text[bodyStart:bodyEnd], true
-	}
-	return "", false
-}
-
-// normaliseStance maps the raw value captured from the timeline to the
-// canonical vocabulary, returning "unknown" for anything else.
-func normaliseStance(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case stanceApprove:
-		return stanceApprove
-	case stanceRequestChanges, "requestchanges", "request_changes":
-		return stanceRequestChanges
-	case stanceAbstain:
-		return stanceAbstain
-	default:
-		return stanceUnknown
-	}
-}
-
-// parseFindingsPreview returns the first non-empty non-stance line from
-// the body of a turn block. Used to feed the drill-in TUI a one-line
-// preview of what the agent wrote. Returns "" when the body has only
-// blank lines or only the stance line. Lines longer than 200 cells are
-// truncated.
-func parseFindingsPreview(body string) string {
-	for _, raw := range strings.Split(body, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		if stanceLinePattern.MatchString(line) {
-			continue
-		}
-		if len(line) > 200 {
-			return line[:200]
-		}
-		return line
-	}
-	return ""
-}
-
-// readTimelineFile returns the contents of the timeline doc or "" on
-// error. Used by the success path's preview parsing — a missing file
-// just means no preview, which is fine.
-func readTimelineFile(path string) string {
-	if path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is the configured timeline doc
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 // --- small slog helpers ---------------------------------------------------

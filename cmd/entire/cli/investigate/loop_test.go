@@ -2,6 +2,7 @@ package investigate
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,12 +14,11 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/spawn"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeSpawner is a minimal Spawner used by the loop tests. The constructor
-// returns an exec.Cmd that writes a synthetic timeline turn block to the
-// timeline file resolved via $ENTIRE_INVESTIGATE_TIMELINE_DOC.
+// returns an exec.Cmd that rewrites the run's state.json file to set
+// PendingTurn — the loop reads that on return to record the stance.
 type fakeSpawner struct {
 	name       string
 	onBuildCmd func(ctx context.Context, env []string, prompt string) *exec.Cmd
@@ -39,57 +39,113 @@ func shellCmd(ctx context.Context, env []string, script string) *exec.Cmd {
 	return cmd
 }
 
-// appendTurnScript writes a "## Turn $ENTIRE_INVESTIGATE_TURN — <agent>"
-// block with the given stance to the timeline file. Used by happy-path
-// tests where the loop expects a parseable stance.
-func appendTurnScript(agent, stance string) string {
-	// Heading uses an em-dash so we exercise the prompt-template format.
-	return fmt.Sprintf(
-		`{
-  printf '\n## Turn %%s — %%s\n**Stance:** %%s\n\n### Changes\n- did things\n\n### Rationale\nbecause\n\n### Open concerns\nnone\n' "$ENTIRE_INVESTIGATE_TURN" "%s" "%s"
-} >> "$ENTIRE_INVESTIGATE_TIMELINE_DOC"
-`,
-		agent, stance,
-	)
-}
+// pendingTurnScript writes a fresh state.json (copied from the path in
+// $ENTIRE_INVESTIGATE_STATE_DOC) with PendingTurn set. We use a tiny
+// helper Go binary at runtime to avoid embedding a JSON parser in
+// /bin/sh. Simplest: use jq if it exists, otherwise just do a here-doc
+// rewrite that preserves the schema fields the loop already wrote.
+//
+// In practice the loop has already written state.json once before
+// spawning, so the file always exists. We append/overwrite it with a
+// Python or jq-flavoured rewrite — neither is universally installed in
+// CI, so we cheat by using a Go test helper that calls
+// writePendingTurnFromEnv() directly.
+//
+// However, the spawner is /bin/sh in these tests. To keep the script
+// simple and dependency-free, we rewrite the file via a heredoc using
+// the in-process helper bin available to the test process via
+// $TEST_PENDING_HELPER. The helper accepts (state-path, stance, note)
+// args, reads the file, merges PendingTurn, writes it back atomically.
+//
+// Since we don't have a separate helper binary, we instead instruct the
+// loop tests to call setPendingTurn() directly between the call to
+// BuildCmd and the agent process exit. The fake spawner does that via
+// the onBuildCmd closure.
 
-// failScript exits non-zero without touching the timeline.
+// failScript exits non-zero without touching state.json.
 const failScript = `exit 1`
 
-// noopScript exits 0 without touching the timeline.
+// noopScript exits 0 without touching state.json.
 const noopScript = `exit 0`
 
-// makeLoopFiles seeds the findings + timeline files for a loop test.
-// Returns the absolute paths.
-func makeLoopFiles(t *testing.T) (findings, timeline string) {
+// makeLoopFiles seeds a findings file in t.TempDir for a loop test, and
+// returns its absolute path along with the state-store directory. The
+// store directory is empty; the loop will create the per-run subdir on
+// first Save.
+func makeLoopFiles(t *testing.T) (findings, storeDir string) {
 	t.Helper()
 	dir := t.TempDir()
 	findings = filepath.Join(dir, "findings.md")
-	timeline = filepath.Join(dir, "timeline.md")
 	if err := os.WriteFile(findings, []byte("# Findings\n"), 0o600); err != nil {
 		t.Fatalf("write findings: %v", err)
 	}
-	if err := os.WriteFile(timeline, []byte("# Timeline\n"), 0o600); err != nil {
-		t.Fatalf("write timeline: %v", err)
-	}
-	return findings, timeline
+	return findings, t.TempDir()
 }
 
-// stableSpawner returns a SpawnerFor that always uses the supplied script
-// for the named agent.
-func stableSpawner(scripts map[string]string) func(string) spawn.Spawner {
+// writePendingTurn rewrites the state.json file at path so its PendingTurn
+// field equals {stance, note}, preserving the rest of the file. Used by
+// the fake spawner to simulate an agent writing its stance back to disk.
+func writePendingTurn(t *testing.T, path, stance, note string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state for pending-turn write: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	raw["pending_turn"] = map[string]string{"stance": stance, "note": note}
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+}
+
+// stableSpawner returns a SpawnerFor that runs scripts[agent] as the agent
+// process, then (via the onBuildCmd wrapper) writes a PendingTurn into
+// the state.json file at $ENTIRE_INVESTIGATE_STATE_DOC.
+func stableSpawner(t *testing.T, scripts map[string]string, stances map[string]string) func(string) spawn.Spawner {
 	return func(agent string) spawn.Spawner {
 		script, ok := scripts[agent]
 		if !ok {
 			return nil
 		}
+		stance := stances[agent]
 		return &fakeSpawner{
 			name: agent,
 			onBuildCmd: func(ctx context.Context, env []string, _ string) *exec.Cmd {
+				// If the agent has a stance to write, do it BEFORE the
+				// shell script runs — the loop reads state.json AFTER
+				// the shell process exits, so the ordering between
+				// PendingTurn write and exec is only constrained by
+				// "before the loop reads it back".
+				if stance != "" {
+					stateDoc := stateDocFromEnv(env)
+					if stateDoc != "" {
+						writePendingTurn(t, stateDoc, stance, "")
+					}
+				}
 				return shellCmd(ctx, env, script)
 			},
 		}
 	}
+}
+
+// stateDocFromEnv returns the value of $ENTIRE_INVESTIGATE_STATE_DOC in a
+// KEY=VALUE env slice, or "" when absent. Mirrors helpers used in other
+// test files.
+func stateDocFromEnv(env []string) string {
+	prefix := EnvStateDoc + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return kv[len(prefix):]
+		}
+	}
+	return ""
 }
 
 func skipOnWindows(t *testing.T) {
@@ -99,121 +155,14 @@ func skipOnWindows(t *testing.T) {
 	}
 }
 
-// --- table tests for ParseStanceFromTimeline ------------------------------
-
-func TestParseStanceFromTimeline(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		body       string
-		agent      string
-		turn       int
-		wantStance string
-		wantFound  bool
-	}{
-		{
-			name:  "approve_em_dash",
-			body:  "## Turn 1 — claude-code\n**Stance:** approve\n",
-			agent: "claude-code", turn: 1,
-			wantStance: stanceApprove, wantFound: true,
-		},
-		{
-			name:  "request_changes_double_hyphen",
-			body:  "## Turn 2 -- codex\n**Stance:** request-changes\n",
-			agent: "codex", turn: 2,
-			wantStance: stanceRequestChanges, wantFound: true,
-		},
-		{
-			name:  "abstain_single_hyphen",
-			body:  "## Turn 3 - gemini-cli\n**Stance:** abstain\n",
-			agent: "gemini-cli", turn: 3,
-			wantStance: stanceAbstain, wantFound: true,
-		},
-		{
-			name:  "extra_whitespace",
-			body:  "##   Turn   4   —   claude-code   \n\n  **Stance:**    approve   \n",
-			agent: "claude-code", turn: 4,
-			wantStance: stanceApprove, wantFound: true,
-		},
-		{
-			name:  "case_insensitive_keyword",
-			body:  "## Turn 5 — claude-code\n**stance:** approve\n",
-			agent: "claude-code", turn: 5,
-			wantStance: stanceApprove, wantFound: true,
-		},
-		{
-			name:  "unknown_stance_keyword",
-			body:  "## Turn 6 — claude-code\n**Stance:** wibble\n",
-			agent: "claude-code", turn: 6,
-			wantStance: stanceUnknown, wantFound: true,
-		},
-		{
-			name:  "missing_heading",
-			body:  "## Turn 7 — claude-code\n**Stance:** approve\n",
-			agent: "codex", turn: 7,
-			wantStance: stanceUnknown, wantFound: false,
-		},
-		{
-			name:  "missing_stance_line",
-			body:  "## Turn 8 — claude-code\n\nsome prose without stance\n## Turn 9 — codex\n**Stance:** approve\n",
-			agent: "claude-code", turn: 8,
-			wantStance: stanceUnknown, wantFound: true,
-		},
-		{
-			name:  "stance_in_later_block_does_not_leak",
-			body:  "## Turn 10 — claude-code\nsome prose only\n## Turn 11 — codex\n**Stance:** approve\n",
-			agent: "claude-code", turn: 10,
-			wantStance: stanceUnknown, wantFound: true,
-		},
-		{
-			name:  "wrong_turn_number",
-			body:  "## Turn 12 — claude-code\n**Stance:** approve\n",
-			agent: "claude-code", turn: 13,
-			wantStance: stanceUnknown, wantFound: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			f := filepath.Join(t.TempDir(), "timeline.md")
-			if err := os.WriteFile(f, []byte(tc.body), 0o600); err != nil {
-				t.Fatalf("write: %v", err)
-			}
-			gotStance, _, gotFound := ParseStanceFromTimeline(f, tc.agent, tc.turn)
-			if gotStance != tc.wantStance {
-				t.Errorf("stance = %q, want %q", gotStance, tc.wantStance)
-			}
-			if gotFound != tc.wantFound {
-				t.Errorf("found = %v, want %v", gotFound, tc.wantFound)
-			}
-		})
-	}
-}
-
-func TestParseStanceFromTimeline_MissingFile(t *testing.T) {
-	t.Parallel()
-	stance, note, found := ParseStanceFromTimeline(filepath.Join(t.TempDir(), "nope.md"), "claude-code", 1)
-	if stance != stanceUnknown {
-		t.Errorf("stance = %q, want unknown", stance)
-	}
-	if found {
-		t.Errorf("found = true, want false")
-	}
-	if note == "" {
-		t.Errorf("note = empty, want error description")
-	}
-}
-
 // --- loop integration tests ----------------------------------------------
 
 func TestRunInvestigateLoop_QuorumReachedFirstRound(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
-	store := NewStateStoreWithDir(t.TempDir())
+	findings, storeDir := makeLoopFiles(t)
+	store := NewStateStoreWithDir(storeDir)
 
 	in := LoopInput{
 		RunID:       "111111111111",
@@ -222,15 +171,21 @@ func TestRunInvestigateLoop_QuorumReachedFirstRound(t *testing.T) {
 		MaxTurns:    3,
 		Quorum:      0, // default to len(Agents)
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": appendTurnScript("claude-code", "approve"),
-			"codex":       appendTurnScript("codex", "approve"),
-			"gemini-cli":  appendTurnScript("gemini-cli", "approve"),
-		}),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{
+				"claude-code": noopScript,
+				"codex":       noopScript,
+				"gemini-cli":  noopScript,
+			},
+			map[string]string{
+				"claude-code": "approve",
+				"codex":       "approve",
+				"gemini-cli":  "approve",
+			},
+		),
 		States: store,
 	}
 
@@ -249,28 +204,30 @@ func TestRunInvestigateLoop_QuorumReachedFirstRound(t *testing.T) {
 			t.Errorf("stance[%d] = %q, want approve", i, s.Stance)
 		}
 	}
+	if res.State.PendingTurn != nil {
+		t.Errorf("PendingTurn = %+v, want nil after loop end", res.State.PendingTurn)
+	}
 }
 
 func TestRunInvestigateLoop_QuorumDefault(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "222222222222",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		Quorum:      0, // → default to 2
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": appendTurnScript("claude-code", "approve"),
-			"codex":       appendTurnScript("codex", "approve"),
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": noopScript, "codex": noopScript},
+			map[string]string{"claude-code": "approve", "codex": "approve"},
+		),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -289,22 +246,21 @@ func TestRunInvestigateLoop_Stalled(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "333333333333",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		MaxTurns:    2, // 4 overall turns, never reaching approve quorum
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": appendTurnScript("claude-code", "request-changes"),
-			"codex":       appendTurnScript("codex", "request-changes"),
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": noopScript, "codex": noopScript},
+			map[string]string{"claude-code": "request-changes", "codex": "request-changes"},
+		),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -326,22 +282,22 @@ func TestRunInvestigateLoop_PausedOnTwoFailures(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "444444444444",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		MaxTurns:    3,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": failScript,
-			"codex":       failScript,
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": failScript, "codex": failScript},
+			// No stances written — agents fail before they could.
+			map[string]string{},
+		),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -369,25 +325,26 @@ func TestRunInvestigateLoop_PausedOnTwoFailures(t *testing.T) {
 	}
 }
 
-func TestRunInvestigateLoop_UnknownStanceWhenTimelineMissing(t *testing.T) {
+func TestRunInvestigateLoop_UnknownStanceWhenPendingTurnMissing(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "555555555555",
 		Topic:       "test",
 		Agents:      []string{"claude-code"},
-		MaxTurns:    1, // 1 overall turn, no quorum possible (Quorum=1 default, but stance unknown)
+		MaxTurns:    1, // 1 overall turn, no quorum possible
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": noopScript, // exits 0 without writing the timeline
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": noopScript},
+			// No stance — agent exits 0 without writing PendingTurn.
+			map[string]string{},
+		),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -407,30 +364,29 @@ func TestRunInvestigateLoop_UnknownStanceWhenTimelineMissing(t *testing.T) {
 	}
 }
 
-// TestRunInvestigateLoop_MissingHeadingPausesAfterTwo verifies that an
-// agent that exits cleanly but writes no `## Turn N — <agent>` block
-// counts as a soft failure: two consecutive missing headings trip
-// pause-on-failure rather than burning the whole turn budget silently.
-func TestRunInvestigateLoop_MissingHeadingPausesAfterTwo(t *testing.T) {
+// TestRunInvestigateLoop_MissingPendingTurnPausesAfterTwo verifies that an
+// agent that exits cleanly but writes no PendingTurn counts as a soft
+// failure: two consecutive missing PendingTurns trip pause-on-failure
+// rather than burning the whole turn budget silently.
+func TestRunInvestigateLoop_MissingPendingTurnPausesAfterTwo(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "777777777777",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		MaxTurns:    3, // 6 overall turns; pause should fire on turn 2
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			"claude-code": noopScript, // exits 0, never writes timeline
-			"codex":       noopScript,
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": noopScript, "codex": noopScript},
+			map[string]string{}, // No stances
+		),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -438,7 +394,7 @@ func TestRunInvestigateLoop_MissingHeadingPausesAfterTwo(t *testing.T) {
 		t.Fatalf("RunInvestigateLoop: %v", err)
 	}
 	if res.Outcome != OutcomePaused {
-		t.Fatalf("Outcome = %s, want paused (two consecutive missing-heading failures should pause)", res.Outcome)
+		t.Fatalf("Outcome = %s, want paused (two consecutive missing-PendingTurn failures should pause)", res.Outcome)
 	}
 	if got := len(res.State.Stances); got != 2 {
 		t.Fatalf("Stances = %d, want 2 (loop should pause after the second consecutive failure)", got)
@@ -449,28 +405,29 @@ func TestRunInvestigateLoop_PersistsStateEachTurn(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
-	storeDir := t.TempDir()
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "666666666666",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		MaxTurns:    1, // 2 overall turns, request-changes → Stalled
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 
 	var counter int32
+	stances := map[string]string{"claude-code": "request-changes", "codex": "request-changes"}
 	// Wrap stableSpawner so the test can observe a fresh load between turns.
 	spawnerFor := func(agent string) spawn.Spawner {
-		script := appendTurnScript(agent, "request-changes")
 		return &fakeSpawner{
 			name: agent,
 			onBuildCmd: func(ctx context.Context, env []string, _ string) *exec.Cmd {
-				cmd := shellCmd(ctx, env, script)
+				stateDoc := stateDocFromEnv(env)
+				if stateDoc != "" {
+					writePendingTurn(t, stateDoc, stances[agent], "")
+				}
 				atomic.AddInt32(&counter, 1)
-				return cmd
+				return shellCmd(ctx, env, noopScript)
 			},
 		}
 	}
@@ -509,8 +466,8 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
-	store := NewStateStoreWithDir(t.TempDir())
+	findings, storeDir := makeLoopFiles(t)
+	store := NewStateStoreWithDir(storeDir)
 
 	// Pre-existing state: agent[0] has already gone in turn 1 and approved.
 	resumeState := &RunState{
@@ -526,7 +483,6 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 			{Round: 1, Turn: 1, Agent: "claude-code", Stance: stanceApprove},
 		},
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 		StartedAt:   time.Now().Add(-time.Hour),
 	}
@@ -538,7 +494,6 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 		MaxTurns:    1,
 		Quorum:      2,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 		Resume:      resumeState,
 	}
@@ -549,7 +504,11 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 			name: agent,
 			onBuildCmd: func(ctx context.Context, env []string, _ string) *exec.Cmd {
 				observedAgent = agent
-				return shellCmd(ctx, env, appendTurnScript(agent, "approve"))
+				stateDoc := stateDocFromEnv(env)
+				if stateDoc != "" {
+					writePendingTurn(t, stateDoc, "approve", "")
+				}
+				return shellCmd(ctx, env, noopScript)
 			},
 		}
 	}
@@ -571,11 +530,11 @@ func TestRunInvestigateLoop_Resume(t *testing.T) {
 	}
 }
 
-func TestRunInvestigateLoop_PlanAndTimelineChangedFlags(t *testing.T) {
+func TestRunInvestigateLoop_PlanChangedFlag(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "888888888888",
 		Topic:       "test",
@@ -583,15 +542,28 @@ func TestRunInvestigateLoop_PlanAndTimelineChangedFlags(t *testing.T) {
 		MaxTurns:    1,
 		Quorum:      1,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
+
+	// Agent modifies the findings file AND writes PendingTurn.
+	spawnerFor := func(agent string) spawn.Spawner {
+		return &fakeSpawner{
+			name: agent,
+			onBuildCmd: func(ctx context.Context, env []string, _ string) *exec.Cmd {
+				stateDoc := stateDocFromEnv(env)
+				if stateDoc != "" {
+					writePendingTurn(t, stateDoc, "approve", "looks good")
+				}
+				// Mutate findings so PlanChanged is true.
+				script := fmt.Sprintf(`printf '\n## edited by %s\n' >> %q`, agent, findings)
+				return shellCmd(ctx, env, script)
+			},
+		}
+	}
+
 	deps := LoopDeps{
-		SpawnerFor: stableSpawner(map[string]string{
-			// Only modify the timeline; findings stays untouched.
-			"claude-code": appendTurnScript("claude-code", "approve"),
-		}),
-		States: NewStateStoreWithDir(t.TempDir()),
+		SpawnerFor: spawnerFor,
+		States:     NewStateStoreWithDir(storeDir),
 	}
 
 	res, err := RunInvestigateLoop(context.Background(), in, deps)
@@ -602,11 +574,11 @@ func TestRunInvestigateLoop_PlanAndTimelineChangedFlags(t *testing.T) {
 		t.Fatalf("Stances = %d, want 1", len(res.State.Stances))
 	}
 	s := res.State.Stances[0]
-	if s.PlanChanged {
-		t.Errorf("PlanChanged = true, want false (findings was not edited)")
+	if !s.PlanChanged {
+		t.Errorf("PlanChanged = false, want true (findings was edited)")
 	}
-	if !s.TimelineChanged {
-		t.Errorf("TimelineChanged = false, want true (timeline was appended)")
+	if s.Note != "looks good" {
+		t.Errorf("Note = %q, want %q (round-tripped from PendingTurn.Note)", s.Note, "looks good")
 	}
 }
 
@@ -614,14 +586,13 @@ func TestRunInvestigateLoop_CancelledContext(t *testing.T) {
 	t.Parallel()
 	skipOnWindows(t)
 
-	findings, timeline := makeLoopFiles(t)
+	findings, storeDir := makeLoopFiles(t)
 	in := LoopInput{
 		RunID:       "999999999999",
 		Topic:       "test",
 		Agents:      []string{"claude-code", "codex"},
 		MaxTurns:    3,
 		FindingsDoc: findings,
-		TimelineDoc: timeline,
 		StartingSHA: "deadbeef",
 	}
 	// Spawner returns a script that sleeps long enough to be cancelled.
@@ -635,7 +606,7 @@ func TestRunInvestigateLoop_CancelledContext(t *testing.T) {
 				},
 			}
 		},
-		States: NewStateStoreWithDir(t.TempDir()),
+		States: NewStateStoreWithDir(storeDir),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -672,10 +643,9 @@ func TestRunInvestigateLoop_RejectsInvalidInput(t *testing.T) {
 		name string
 		in   LoopInput
 	}{
-		{"bad_run_id", LoopInput{RunID: "not-hex", Agents: []string{"a"}, FindingsDoc: "f", TimelineDoc: "t"}},
-		{"empty_agents", LoopInput{RunID: "aaaaaaaaaaaa", Agents: nil, FindingsDoc: "f", TimelineDoc: "t"}},
-		{"empty_findings", LoopInput{RunID: "aaaaaaaaaaaa", Agents: []string{"a"}, TimelineDoc: "t"}},
-		{"empty_timeline", LoopInput{RunID: "aaaaaaaaaaaa", Agents: []string{"a"}, FindingsDoc: "f"}},
+		{"bad_run_id", LoopInput{RunID: "not-hex", Agents: []string{"a"}, FindingsDoc: "f"}},
+		{"empty_agents", LoopInput{RunID: "aaaaaaaaaaaa", Agents: nil, FindingsDoc: "f"}},
+		{"empty_findings", LoopInput{RunID: "aaaaaaaaaaaa", Agents: []string{"a"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -688,27 +658,43 @@ func TestRunInvestigateLoop_RejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestParseFindingsPreview_FirstNonEmptyLine(t *testing.T) {
+// TestRunInvestigateLoop_InvalidStanceRecordedAsUnknown verifies that when
+// the agent writes a PendingTurn with a stance that isn't in the
+// vocabulary, the loop records it as "unknown" with a diagnostic note
+// (but counts it as "has pending" so the soft-failure pause doesn't fire).
+func TestRunInvestigateLoop_InvalidStanceRecordedAsUnknown(t *testing.T) {
 	t.Parallel()
-	body := "\n\n**Stance:** approve\n\nFound a missing nil check in pkg/foo.\nAnd more context.\n"
-	got := parseFindingsPreview(body)
-	require.Equal(t, "Found a missing nil check in pkg/foo.", got)
-}
+	skipOnWindows(t)
 
-func TestParseFindingsPreview_EmptyBody(t *testing.T) {
-	t.Parallel()
-	require.Empty(t, parseFindingsPreview(""))
-}
-
-func TestParseFindingsPreview_OnlyStance(t *testing.T) {
-	t.Parallel()
-	require.Empty(t, parseFindingsPreview("**Stance:** approve\n"))
-}
-
-func TestParseFindingsPreview_TruncatesLongLine(t *testing.T) {
-	t.Parallel()
-	long := "lead " + strings.Repeat("x", 500)
-	got := parseFindingsPreview(long)
-	require.LessOrEqual(t, len(got), 200)
-	require.True(t, strings.HasPrefix(got, "lead "))
+	findings, storeDir := makeLoopFiles(t)
+	in := LoopInput{
+		RunID:       "aaaaaaaaaaaa",
+		Topic:       "test",
+		Agents:      []string{"claude-code"},
+		MaxTurns:    1,
+		Quorum:      1,
+		FindingsDoc: findings,
+		StartingSHA: "deadbeef",
+	}
+	deps := LoopDeps{
+		SpawnerFor: stableSpawner(t,
+			map[string]string{"claude-code": noopScript},
+			map[string]string{"claude-code": "wibble"}, // not a valid stance
+		),
+		States: NewStateStoreWithDir(storeDir),
+	}
+	res, err := RunInvestigateLoop(context.Background(), in, deps)
+	if err != nil {
+		t.Fatalf("RunInvestigateLoop: %v", err)
+	}
+	if len(res.State.Stances) != 1 {
+		t.Fatalf("Stances = %d, want 1", len(res.State.Stances))
+	}
+	s := res.State.Stances[0]
+	if s.Stance != stanceUnknown {
+		t.Errorf("stance = %q, want unknown for invalid input", s.Stance)
+	}
+	if !strings.Contains(s.Note, "invalid stance") {
+		t.Errorf("note = %q, want diagnostic about invalid stance", s.Note)
+	}
 }
