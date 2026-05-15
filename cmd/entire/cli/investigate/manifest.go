@@ -224,3 +224,11 @@ func manifestFilename(m LocalManifest) string {
 	stamp := m.StartedAt.UTC().Format("20060102T150405")
 	return stamp + "-" + m.RunID + ".json"
 }
+
+// PathFor returns the on-disk path of the manifest file for m. The path
+// is computed deterministically from m.StartedAt + m.RunID (the same
+// inputs Write uses to choose its destination), so callers can use this
+// to delete a manifest record without scanning the directory.
+func (s *LocalManifestStore) PathFor(m LocalManifest) string {
+	return filepath.Join(s.dir, manifestFilename(m))
+}

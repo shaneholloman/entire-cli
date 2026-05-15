@@ -131,7 +131,8 @@ Flags:
 Subcommands:
   fix [run-id]            launch a coding agent with the run's findings as
                           grounded context
-  show [run-id]           print a saved investigation's summary + findings`,
+  show [run-id]           print a saved investigation's summary + findings
+  clean [run-id|--all]    delete saved investigation artifacts`,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) > 1 {
 				return fmt.Errorf("accepts at most one seed-doc path, received %d", len(args))
@@ -177,6 +178,7 @@ Subcommands:
 
 	cmd.AddCommand(newFixSubcommand(deps))
 	cmd.AddCommand(newShowSubcommand(deps))
+	cmd.AddCommand(newCleanSubcommand(deps))
 	if deps.AttachCmd != nil {
 		cmd.AddCommand(deps.AttachCmd)
 	}
@@ -297,6 +299,58 @@ func newShowSubcommand(deps Deps) *cobra.Command {
 			}, ShowDeps{ManifestStore: store})
 		},
 	}
+}
+
+// newCleanSubcommand wires `entire investigate clean [run-id]` to RunClean.
+func newCleanSubcommand(deps Deps) *cobra.Command {
+	var (
+		all   bool
+		force bool
+	)
+	cmd := &cobra.Command{
+		Use:   "clean [run-id]",
+		Short: "Delete a saved investigation (or all)",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return fmt.Errorf("accepts at most one run id, received %d", len(args))
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if _, err := paths.WorktreeRoot(ctx); err != nil {
+				cmd.SilenceUsage = true
+				fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Run `entire enable` first.")
+				return wrapSilent(deps.NewSilentError, errors.New("not a git repository"))
+			}
+			store, err := NewLocalManifestStore(ctx)
+			if err != nil {
+				return fmt.Errorf("open manifest store: %w", err)
+			}
+			stateStore, err := NewStateStore(ctx)
+			if err != nil {
+				return fmt.Errorf("open state store: %w", err)
+			}
+			runID := ""
+			if len(args) == 1 {
+				runID = args[0]
+			}
+			return RunClean(ctx, CleanInput{
+				RunID:  runID,
+				All:    all,
+				Force:  force,
+				Out:    cmd.OutOrStdout(),
+				ErrOut: cmd.ErrOrStderr(),
+			}, CleanDeps{
+				ManifestStore: store,
+				RunDir:        stateStore.RunDir,
+				ManifestPath:  store.PathFor,
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "delete every investigation")
+	cmd.Flags().BoolVar(&force, "force", false, "skip the confirmation prompt")
+	return cmd
 }
 
 // runInvestigate is the main run path. It pre-flights the repo, dispatches

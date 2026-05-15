@@ -1,0 +1,197 @@
+// Package investigate — see env.go for package-level rationale.
+//
+// clean.go implements `entire investigate clean`. The subcommand removes
+// one investigation's artifacts (manifest + per-run dir) by run-id, or
+// every investigation when --all is passed. A confirmation prompt asks
+// before deletion unless --force.
+package investigate
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+)
+
+// CleanInput drives RunClean.
+type CleanInput struct {
+	// RunID, when non-empty, targets one run via exact-match-then-
+	// unique-prefix. Ignored when All is true.
+	RunID string
+
+	// All targets every investigation found by the manifest store.
+	All bool
+
+	// Force skips the confirmation prompt.
+	Force bool
+
+	// Out / ErrOut sink the operator-facing output.
+	Out    io.Writer
+	ErrOut io.Writer
+}
+
+// CleanDeps is what RunClean needs that's test-injectable.
+type CleanDeps struct {
+	ManifestStore *LocalManifestStore
+	// RunDir returns the per-run directory path for a given run id. In
+	// production this is StateStore.RunDir; tests inject a fake.
+	RunDir func(runID string) string
+	// ManifestPath returns the on-disk path for a manifest. In
+	// production this is LocalManifestStore.PathFor(m); tests inject.
+	ManifestPath func(m LocalManifest) string
+	// Confirm prompts the user with the given message and returns the
+	// y/N answer. Nil → real huh-backed prompt (use newAccessibleForm).
+	Confirm func(ctx context.Context, message string) (bool, error)
+}
+
+// RunClean implements `entire investigate clean`.
+func RunClean(ctx context.Context, in CleanInput, deps CleanDeps) error {
+	if deps.ManifestStore == nil || deps.RunDir == nil || deps.ManifestPath == nil {
+		return errors.New("clean: deps not wired (manifest store, RunDir, ManifestPath required)")
+	}
+	if in.RunID == "" && !in.All {
+		return errors.New("clean: pass a run id (or unique prefix) or --all")
+	}
+
+	manifests, err := deps.ManifestStore.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list manifests: %w", err)
+	}
+	if len(manifests) == 0 {
+		fmt.Fprintln(in.Out, "No local investigations found.")
+		return nil
+	}
+
+	targets, err := selectCleanTargets(manifests, in.RunID, in.All)
+	if err != nil {
+		return err
+	}
+
+	if !in.Force {
+		printCleanSummary(in.Out, targets, in.All)
+		confirm := deps.Confirm
+		if confirm == nil {
+			confirm = realConfirm
+		}
+		ok, confirmErr := confirm(ctx, "Proceed?")
+		if confirmErr != nil {
+			return fmt.Errorf("confirmation prompt: %w", confirmErr)
+		}
+		if !ok {
+			fmt.Fprintln(in.Out, "Aborted.")
+			return nil
+		}
+	}
+
+	var deleted, failed int
+	for _, m := range targets {
+		if err := deleteOneInvestigation(m, deps); err != nil {
+			failed++
+			fmt.Fprintf(in.ErrOut, "warn: %s: %v\n", m.RunID, err)
+			continue
+		}
+		deleted++
+	}
+	fmt.Fprintf(in.Out, "Deleted %d investigation(s)", deleted)
+	if failed > 0 {
+		fmt.Fprintf(in.Out, " (%d failed)", failed)
+	}
+	fmt.Fprintln(in.Out, ".")
+	return nil
+}
+
+// selectCleanTargets resolves the manifest list to the target set.
+// Mirrors show.resolveShowTarget for the single-id case: exact match
+// wins, then unique-prefix match. Returns a descriptive error for
+// ambiguous or missing matches.
+func selectCleanTargets(manifests []LocalManifest, runID string, all bool) ([]LocalManifest, error) {
+	if all {
+		return manifests, nil
+	}
+	for _, m := range manifests {
+		if m.RunID == runID {
+			return []LocalManifest{m}, nil
+		}
+	}
+	var prefixMatches []LocalManifest
+	for _, m := range manifests {
+		if strings.HasPrefix(m.RunID, runID) {
+			prefixMatches = append(prefixMatches, m)
+		}
+	}
+	switch len(prefixMatches) {
+	case 0:
+		return nil, fmt.Errorf("no investigation found with run id or prefix %q", runID)
+	case 1:
+		return prefixMatches, nil
+	default:
+		sort.SliceStable(prefixMatches, func(i, j int) bool {
+			return prefixMatches[i].StartedAt.After(prefixMatches[j].StartedAt)
+		})
+		var b strings.Builder
+		fmt.Fprintf(&b, "ambiguous run id prefix %q matches multiple investigations:\n", runID)
+		for _, m := range prefixMatches {
+			fmt.Fprintf(&b, "  %s  %s\n", m.RunID, m.Topic)
+		}
+		return nil, errors.New(strings.TrimRight(b.String(), "\n"))
+	}
+}
+
+// printCleanSummary lists targets before the confirmation prompt.
+func printCleanSummary(w io.Writer, targets []LocalManifest, all bool) {
+	switch {
+	case all:
+		fmt.Fprintf(w, "This will delete ALL investigations (%d):\n", len(targets))
+	case len(targets) == 1:
+		fmt.Fprintln(w, "This will delete:")
+	default:
+		fmt.Fprintf(w, "This will delete %d investigations:\n", len(targets))
+	}
+	sorted := append([]LocalManifest(nil), targets...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].StartedAt.After(sorted[j].StartedAt)
+	})
+	for _, m := range sorted {
+		topic := m.Topic
+		if topic == "" {
+			topic = "(no topic)"
+		}
+		fmt.Fprintf(w, "  %s  %s\n", m.RunID, topic)
+	}
+}
+
+// deleteOneInvestigation removes a manifest + its per-run dir. Missing
+// files / dirs are treated as a successful no-op so that calling clean
+// against a partial state (e.g. previous interrupted cleanup) still
+// converges. Errors aggregate so the caller can decide whether to keep
+// going.
+func deleteOneInvestigation(m LocalManifest, deps CleanDeps) error {
+	var errs []string
+
+	manifestPath := deps.ManifestPath(m)
+	if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, fmt.Sprintf("manifest: %v", err))
+	}
+
+	runDir := deps.RunDir(m.RunID)
+	if err := os.RemoveAll(runDir); err != nil {
+		// RemoveAll returns nil when the path doesn't exist, so this is
+		// a real failure (permissions, etc.).
+		errs = append(errs, fmt.Sprintf("run dir: %v", err))
+	}
+
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// realConfirm is the production y/N prompt for the clean confirmation.
+// Reuses the existing realPromptYN helper to match other interactive
+// confirmations in this package.
+func realConfirm(ctx context.Context, message string) (bool, error) {
+	return realPromptYN(ctx, message, false)
+}
