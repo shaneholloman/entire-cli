@@ -72,7 +72,14 @@ func RunFix(ctx context.Context, in FixInput, deps FixDeps) error {
 		readFile = os.ReadFile
 	}
 
-	findingsBody := readDocOrWarn(readFile, manifest.FindingsDoc, "findings", in.ErrOut)
+	// Prefer the manifest's embedded findings content (populated on
+	// terminal outcomes by R3 — the per-run dir is auto-cleaned, so
+	// FindingsDoc points at a deleted path). Fall back to reading the
+	// on-disk file for paused/cancelled runs where the dir is preserved.
+	findingsBody := manifest.FindingsContent
+	if findingsBody == "" {
+		findingsBody = readDocOrWarn(readFile, manifest.FindingsDoc, "findings", in.ErrOut)
+	}
 
 	prompt := composeFixPrompt(manifest, findingsBody)
 

@@ -240,6 +240,50 @@ func TestRunFix_TolerateMissingDocs(t *testing.T) {
 	}
 }
 
+// TestRunFix_PrefersFindingsContentOverDoc verifies that when the
+// manifest has FindingsContent embedded (terminal outcomes have the
+// per-run dir auto-cleaned by R3, so FindingsDoc points at a deleted
+// path), RunFix uses the embedded content instead of warning about the
+// missing file.
+func TestRunFix_PrefersFindingsContentOverDoc(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewLocalManifestStoreWithDir(dir)
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	m := LocalManifest{
+		RunID:           "abcdef012345",
+		Topic:           "topic",
+		Slug:            SlugifyTopic("topic"),
+		StartingSHA:     "deadbeefcafe",
+		FindingsDoc:     filepath.Join(dir, "deleted-findings.md"),
+		FindingsContent: "# Investigation: topic\n\nembedded findings body\n",
+		Agents:          []string{"claude-code"},
+		Outcome:         "quorum",
+		StartedAt:       now,
+		EndedAt:         now.Add(10 * time.Minute),
+	}
+	if err := store.Write(context.Background(), m); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	var rec fixLaunchRecord
+	var errBuf bytes.Buffer
+	err := RunFix(context.Background(),
+		FixInput{Out: &bytes.Buffer{}, ErrOut: &errBuf},
+		FixDeps{ManifestStore: store, Launch: stubLaunch(&rec)},
+	)
+	if err != nil {
+		t.Fatalf("RunFix: %v", err)
+	}
+	if !strings.Contains(rec.prompt, "embedded findings body") {
+		t.Errorf("prompt should embed manifest.FindingsContent, got: %q", rec.prompt)
+	}
+	if strings.Contains(errBuf.String(), "could not read") {
+		t.Errorf("expected no missing-doc warning when FindingsContent is set, got: %q", errBuf.String())
+	}
+}
+
 func TestRunFix_FallsBackToDefaultFixAgent(t *testing.T) {
 	t.Parallel()
 
