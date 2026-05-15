@@ -986,24 +986,52 @@ func writeRunManifest(
 	writeInvestigateFooter(out, m)
 }
 
-// writeInvestigateFooter prints the post-run summary + how to run
-// `entire investigate fix`. When the per-run dir has been cleaned up
-// (terminal outcome with captured findings) the file path is no longer
-// valid, so we report the manifest as the source of truth instead.
+// writeInvestigateFooter prints the post-run summary, the findings
+// content, and how to run `entire investigate fix`. The findings
+// content comes from the manifest's embedded FindingsContent on
+// terminal outcomes (Quorum/Stalled — the per-run dir is gone); on
+// paused/cancelled outcomes the per-run dir still has findings.md and
+// we read it from there.
 func writeInvestigateFooter(w io.Writer, m LocalManifest) {
 	fmt.Fprintln(w)
 	if m.Outcome != "" {
 		fmt.Fprintf(w, "Outcome: %s\n", m.Outcome)
 	}
 	fmt.Fprintln(w, "Investigation complete.")
-	if m.FindingsContent != "" {
-		fmt.Fprintln(w, "Findings: <captured in manifest>")
-	} else if m.FindingsDoc != "" {
-		fmt.Fprintln(w, "Findings: "+m.FindingsDoc)
-	}
 	fmt.Fprintln(w)
+
+	body := findingsContentFor(m)
+	if body != "" {
+		fmt.Fprintln(w, "--- Findings ---")
+		fmt.Fprintln(w)
+		fmt.Fprint(w, body)
+		if !strings.HasSuffix(body, "\n") {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintln(w)
+	}
+
 	fmt.Fprintln(w, "To apply these findings:")
 	fmt.Fprintf(w, "  entire investigate fix %s\n", m.RunID)
+}
+
+// findingsContentFor returns the findings body to render in the footer.
+// Prefers the manifest's embedded content (set on terminal outcomes
+// when the per-run dir has been cleaned); falls back to reading the
+// on-disk findings.md for paused/cancelled outcomes. Errors and
+// missing files both yield "" — the caller prints a shorter footer.
+func findingsContentFor(m LocalManifest) string {
+	if m.FindingsContent != "" {
+		return m.FindingsContent
+	}
+	if m.FindingsDoc == "" {
+		return ""
+	}
+	data, err := os.ReadFile(m.FindingsDoc)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // newRunID returns a fresh 12-hex-char run identifier. Mirrors the

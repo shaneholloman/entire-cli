@@ -276,10 +276,9 @@ func TestNewCommand_FreshRunWritesManifest(t *testing.T) {
 	if !strings.Contains(out.String(), "entire investigate fix") {
 		t.Errorf("expected fix hint in output, got:\n%s", out.String())
 	}
-	// On Quorum the footer should advertise the capture, not a file
-	// path — the file no longer exists.
-	if !strings.Contains(out.String(), "Findings: <captured in manifest>") {
-		t.Errorf("expected footer to advertise captured findings, got:\n%s", out.String())
+	// Footer should embed the findings body between markers.
+	if !strings.Contains(out.String(), "--- Findings ---") {
+		t.Errorf("expected footer to embed findings body, got:\n%s", out.String())
 	}
 
 	// Manifest should have captured the findings body.
@@ -361,10 +360,10 @@ func TestNewCommand_FreshRunPausedKeepsPerRunDir(t *testing.T) {
 		t.Errorf("findings.md should remain on Paused, but stat failed: %v", statErr)
 	}
 
-	// Footer should print the file path (file is still there), not the
-	// "captured in manifest" marker.
-	if !strings.Contains(out.String(), "Findings: "+m.FindingsDoc) {
-		t.Errorf("expected footer to print findings path on Paused, got:\n%s", out.String())
+	// Footer should still embed the findings body — for paused outcomes
+	// we read it from the on-disk file (the per-run dir is preserved).
+	if !strings.Contains(out.String(), "--- Findings ---") {
+		t.Errorf("expected footer to embed findings body on Paused, got:\n%s", out.String())
 	}
 }
 
