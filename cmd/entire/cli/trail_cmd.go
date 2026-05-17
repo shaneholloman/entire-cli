@@ -15,13 +15,19 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/gitremote"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
-	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 
 	"charm.land/huh/v2"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
+)
+
+const (
+	defaultTrailListLimit  = 10
+	defaultTrailListAuthor = "me"
+	defaultTrailListStatus = string(trail.StatusInProgress)
+	trailAuthorColumnWidth = 15
 )
 
 func newTrailCmd() *cobra.Command {
@@ -35,7 +41,7 @@ func newTrailCmd() *cobra.Command {
 "why" and "what" of your work, while checkpoints capture the "how" and "when".
 
 Running 'entire trail' without a subcommand shows the trail for the current
-branch, or lists all trails if no trail exists for the current branch.`,
+branch, or lists recent trails if no trail exists for the current branch.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runTrailShow(cmd.Context(), cmd.OutOrStdout(), insecureHTTPAuth)
 		},
@@ -65,7 +71,7 @@ func trailInsecureHTTP(cmd *cobra.Command) bool {
 func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 	branch, err := GetCurrentBranch(ctx)
 	if err != nil {
-		return runTrailListAll(ctx, w, "", false, false, insecureHTTP)
+		return runTrailListAll(ctx, w, defaultTrailListAuthor, defaultTrailListStatus, false, defaultTrailListLimit, insecureHTTP)
 	}
 
 	client, err := NewAuthenticatedAPIClient(insecureHTTP)
@@ -83,7 +89,7 @@ func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 		return err
 	}
 	if found == nil {
-		return runTrailListAll(ctx, w, "", false, false, insecureHTTP)
+		return runTrailListAll(ctx, w, defaultTrailListAuthor, defaultTrailListStatus, false, defaultTrailListLimit, insecureHTTP)
 	}
 
 	printTrailDetails(w, found.ToMetadata())
@@ -116,26 +122,39 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 }
 
 func newTrailListCmd() *cobra.Command {
+	var authorFilter string
 	var statusFilter string
 	var jsonOutput bool
-	var showAll bool
+	var limit int
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List all trails",
+		Short: "List recent trails",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), statusFilter, jsonOutput, showAll, trailInsecureHTTP(cmd))
+			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), authorFilter, statusFilter, jsonOutput, limit, trailInsecureHTTP(cmd))
 		},
 	}
 
-	cmd.Flags().StringVar(&statusFilter, "status", "", "Filter by status (draft, open, in_progress, in_review, merged, closed)")
+	cmd.Flags().StringVar(&authorFilter, "author", defaultTrailListAuthor, "Filter by author login; omit value for any author")
+	cmd.Flags().StringVar(&statusFilter, "status", defaultTrailListStatus, "Filter by status; omit value for any status")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON")
-	cmd.Flags().BoolVarP(&showAll, "all", "a", false, "Include merged and closed trails")
+	cmd.Flags().IntVar(&limit, "limit", defaultTrailListLimit, "Maximum number of trails to show")
+	cmd.Flags().Lookup("author").NoOptDefVal = ""
+	cmd.Flags().Lookup("status").NoOptDefVal = ""
 
 	return cmd
 }
 
-func runTrailListAll(ctx context.Context, w io.Writer, statusFilter string, jsonOutput, showAll, insecureHTTP bool) error {
+func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilter string, jsonOutput bool, limit int, insecureHTTP bool) error {
+	if limit <= 0 {
+		return errors.New("limit must be greater than 0")
+	}
+	if statusFilter != "" {
+		status := trail.Status(statusFilter)
+		if !status.IsValid() {
+			return fmt.Errorf("invalid status %q: valid values are %s", statusFilter, formatValidStatuses())
+		}
+	}
 	client, err := NewAuthenticatedAPIClient(insecureHTTP)
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
@@ -166,36 +185,29 @@ func runTrailListAll(ctx context.Context, w io.Writer, statusFilter string, json
 		trails = append(trails, listResp.Trails[i].ToMetadata())
 	}
 
-	totalCount := len(trails)
-
-	// Apply status filter
-	if statusFilter != "" {
-		status := trail.Status(statusFilter)
-		if !status.IsValid() {
-			return fmt.Errorf("invalid status %q: valid values are %s", statusFilter, formatValidStatuses())
+	currentUserLogin := ""
+	if authorFilter == defaultTrailListAuthor {
+		login, err := fetchCurrentUserLogin(ctx, client)
+		if err != nil {
+			return err
 		}
-		var filtered []*trail.Metadata
-		for _, t := range trails {
-			if t.Status == status {
-				filtered = append(filtered, t)
-			}
-		}
-		trails = filtered
-	} else if !showAll {
-		// By default, hide merged and closed trails
-		var filtered []*trail.Metadata
-		for _, t := range trails {
-			if t.Status != trail.StatusMerged && t.Status != trail.StatusClosed {
-				filtered = append(filtered, t)
-			}
-		}
-		trails = filtered
+		currentUserLogin = login
+		authorFilter = login
 	}
 
-	// Sort by updated_at descending
+	if authorFilter != "" {
+		trails = filterTrailsByAuthor(trails, authorFilter)
+	}
+
+	if statusFilter != "" {
+		trails = filterTrailsByStatus(trails, trail.Status(statusFilter))
+	}
+
+	// Sort by updated_at descending, then keep only the most recent rows.
 	sort.Slice(trails, func(i, j int) bool {
 		return trails[i].UpdatedAt.After(trails[j].UpdatedAt)
 	})
+	trails = limitTrails(trails, limit)
 
 	if jsonOutput {
 		enc := json.NewEncoder(w)
@@ -207,30 +219,176 @@ func runTrailListAll(ctx context.Context, w io.Writer, statusFilter string, json
 	}
 
 	if len(trails) == 0 {
-		hiddenCount := totalCount - len(trails)
-		if hiddenCount > 0 {
-			fmt.Fprintf(w, "No active trails found. %d merged/closed trail(s) hidden — use --all to show.\n", hiddenCount)
-		} else {
-			fmt.Fprintln(w, "No trails found.")
-			fmt.Fprintln(w)
-			fmt.Fprintln(w, "Commands:")
-			fmt.Fprintln(w, "  entire trail create   Create a trail for the current branch")
-			fmt.Fprintln(w, "  entire trail list     List all trails")
-			fmt.Fprintln(w, "  entire trail update   Update trail metadata")
-		}
+		fmt.Fprintln(w, "No trails found.")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Commands:")
+		fmt.Fprintln(w, "  entire trail create   Create a trail for the current branch")
+		fmt.Fprintln(w, "  entire trail list     List recent trails")
+		fmt.Fprintln(w, "  entire trail update   Update trail metadata")
 		return nil
 	}
 
-	// Table output
-	fmt.Fprintf(w, "%-30s %-40s %-13s %-15s %s\n", "BRANCH", "TITLE", "STATUS", "AUTHOR", "UPDATED")
-	for _, t := range trails {
-		branch := stringutil.TruncateRunes(t.Branch, 30, "...")
-		title := stringutil.TruncateRunes(t.Title, 40, "...")
-		fmt.Fprintf(w, "%-30s %-40s %-13s %-15s %s\n",
-			branch, title, t.Status, stringutil.TruncateRunes(t.AuthorLogin(), 15, "..."), timeAgo(t.UpdatedAt))
-	}
+	printTrailList(w, trails, trailListDisplayOptions{
+		RequestedAuthor: authorFilter,
+		CurrentUser:     currentUserLogin,
+		StatusFilter:    statusFilter,
+	})
 
 	return nil
+}
+
+func limitTrails(trails []*trail.Metadata, limit int) []*trail.Metadata {
+	if len(trails) <= limit {
+		return trails
+	}
+	return trails[:limit]
+}
+
+func filterTrailsByAuthor(trails []*trail.Metadata, login string) []*trail.Metadata {
+	var filtered []*trail.Metadata
+	for _, t := range trails {
+		if t.AuthorLogin() == login {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+func filterTrailsByStatus(trails []*trail.Metadata, status trail.Status) []*trail.Metadata {
+	var filtered []*trail.Metadata
+	for _, t := range trails {
+		if t.Status == status {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+type currentUserResponse struct {
+	Login string `json:"login"`
+}
+
+func fetchCurrentUserLogin(ctx context.Context, client *api.Client) (string, error) {
+	resp, err := client.Get(ctx, "/api/v1/me")
+	if err != nil {
+		return "", fmt.Errorf("failed to get current user: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkTrailResponse(resp); err != nil {
+		return "", err
+	}
+
+	var out currentUserResponse
+	if err := api.DecodeJSON(resp, &out); err != nil {
+		return "", fmt.Errorf("failed to decode current user: %w", err)
+	}
+	login := out.Login
+	if login == "" {
+		return "", errors.New("current user response did not include a login")
+	}
+	return login, nil
+}
+
+type trailListDisplayOptions struct {
+	RequestedAuthor string
+	CurrentUser     string
+	StatusFilter    string
+}
+
+func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplayOptions) {
+	showAuthor := opts.RequestedAuthor == ""
+	if opts.StatusFilter == "" {
+		printTrailListHeader(w, opts, len(trails))
+		fmt.Fprintln(w)
+		for _, status := range trailListStatusOrder() {
+			group := filterTrailsByStatus(trails, status)
+			if len(group) == 0 {
+				continue
+			}
+			fmt.Fprintf(w, "  %s · %d\n", trailStatusTitle(status), len(group))
+			fmt.Fprintln(w)
+			printTrailRows(w, group, showAuthor)
+			fmt.Fprintln(w)
+		}
+		return
+	}
+
+	printTrailListHeader(w, opts, len(trails))
+	fmt.Fprintln(w)
+	printTrailRows(w, trails, showAuthor)
+}
+
+func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) {
+	status := trail.Status(opts.StatusFilter)
+	if opts.RequestedAuthor == "" {
+		if opts.StatusFilter == "" {
+			fmt.Fprintf(w, "  Recent trails · %d\n", count)
+			return
+		}
+		fmt.Fprintf(w, "  %s · %d %s\n", trailStatusTitle(status), count, pluralize("trail", count))
+		return
+	}
+
+	label := opts.RequestedAuthor
+	if opts.CurrentUser != "" && opts.RequestedAuthor == opts.CurrentUser {
+		label = "Your trails"
+	}
+	if opts.StatusFilter == "" {
+		fmt.Fprintf(w, "  %s · %d\n", label, count)
+		return
+	}
+	fmt.Fprintf(w, "  %s · %d %s\n", label, count, trailStatusDisplay(status))
+}
+
+func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor bool) {
+	branchWidth := maxTrailBranchWidth(trails)
+	for _, t := range trails {
+		if showAuthor {
+			fmt.Fprintf(w, "  %-*s  %-*s  %s\n", branchWidth, t.Branch, trailAuthorColumnWidth, t.AuthorLogin(), timeAgo(t.UpdatedAt))
+			continue
+		}
+		fmt.Fprintf(w, "  %-*s  %s\n", branchWidth, t.Branch, timeAgo(t.UpdatedAt))
+	}
+}
+
+func maxTrailBranchWidth(trails []*trail.Metadata) int {
+	width := 0
+	for _, t := range trails {
+		if branchWidth := len([]rune(t.Branch)); branchWidth > width {
+			width = branchWidth
+		}
+	}
+	return width
+}
+
+func trailListStatusOrder() []trail.Status {
+	return []trail.Status{
+		trail.StatusInProgress,
+		trail.StatusOpen,
+		trail.StatusInReview,
+		trail.StatusDraft,
+		trail.StatusMerged,
+		trail.StatusClosed,
+	}
+}
+
+func trailStatusDisplay(status trail.Status) string {
+	return strings.ReplaceAll(string(status), "_", " ")
+}
+
+func trailStatusTitle(status trail.Status) string {
+	display := trailStatusDisplay(status)
+	if display == "" {
+		return ""
+	}
+	return strings.ToUpper(display[:1]) + display[1:]
+}
+
+func pluralize(s string, count int) string {
+	if count == 1 {
+		return s
+	}
+	return s + "s"
 }
 
 func newTrailCreateCmd() *cobra.Command {
