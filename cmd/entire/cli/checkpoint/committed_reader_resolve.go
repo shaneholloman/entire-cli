@@ -8,6 +8,9 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+
+	"github.com/go-git/go-git/v6/plumbing"
 )
 
 // CommittedReader provides read access to committed checkpoint data.
@@ -76,13 +79,6 @@ type DualCheckpointReader struct {
 	v1 *GitStore
 }
 
-type v2CheckpointAvailability int
-
-const (
-	v2CheckpointAvailable v2CheckpointAvailability = iota
-	v2CheckpointMissing
-)
-
 func (r *DualCheckpointReader) ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
 	summary, err := r.v2.ReadCommitted(ctx, checkpointID)
 	if err == nil && summary != nil {
@@ -105,36 +101,25 @@ func (r *DualCheckpointReader) ReadSessionContent(ctx context.Context, checkpoin
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	availability, availabilityErr := r.classifyV2CheckpointAvailability(ctx, checkpointID, err)
-	if availabilityErr != nil {
-		return nil, availabilityErr
-	}
-
-	if availability == v2CheckpointMissing {
+	if errors.Is(err, ErrCheckpointNotFound) {
+		v2CheckpointExists, existsErr := r.v2CheckpointExists(ctx, checkpointID)
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		if v2CheckpointExists {
+			return r.readSingleV1SessionContent(ctx, checkpointID, sessionIndex, err)
+		}
 		return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, err)
 	}
-
-	return r.readV1SessionContentMatchingV2Session(ctx, checkpointID, sessionIndex, err)
-}
-
-func (r *DualCheckpointReader) classifyV2CheckpointAvailability(ctx context.Context, checkpointID id.CheckpointID, v2SessionReadErr error) (v2CheckpointAvailability, error) {
-	if err := ctx.Err(); err != nil {
-		return v2CheckpointMissing, err //nolint:wrapcheck // Propagating context cancellation
-	}
-	if errors.Is(v2SessionReadErr, ErrNoTranscript) {
-		return v2CheckpointAvailable, nil
-	}
-	summary, err := r.v2.ReadCommitted(ctx, checkpointID)
-	if err != nil {
+	sessionID, sessionIDErr := r.v2SessionID(ctx, checkpointID, sessionIndex)
+	if sessionIDErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return v2CheckpointMissing, ctxErr //nolint:wrapcheck // Propagating context cancellation
+			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 		}
-		return v2CheckpointMissing, errors.Join(v2SessionReadErr, fmt.Errorf("read v2 checkpoint summary: %w", err))
+		originalErr := fallbackReadError(err, "read v2 session metadata for v1 fallback", sessionIDErr)
+		return r.readSingleV1SessionContent(ctx, checkpointID, sessionIndex, originalErr)
 	}
-	if summary == nil {
-		return v2CheckpointMissing, nil
-	}
-	return v2CheckpointAvailable, nil
+	return r.readV1SessionContentByID(ctx, checkpointID, sessionID, err)
 }
 
 func (r *DualCheckpointReader) ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*CommittedMetadata, error) {
@@ -145,14 +130,17 @@ func (r *DualCheckpointReader) ReadSessionMetadata(ctx context.Context, checkpoi
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	availability, availabilityErr := r.classifyV2CheckpointAvailability(ctx, checkpointID, err)
-	if availabilityErr != nil {
-		return nil, availabilityErr
-	}
-	if availability == v2CheckpointMissing {
+	if errors.Is(err, ErrCheckpointNotFound) {
+		v2CheckpointExists, existsErr := r.v2CheckpointExists(ctx, checkpointID)
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		if v2CheckpointExists {
+			return r.readSingleV1SessionMetadata(ctx, checkpointID, sessionIndex, err)
+		}
 		return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, err)
 	}
-	return nil, err
+	return r.readSingleV1SessionMetadata(ctx, checkpointID, sessionIndex, err)
 }
 
 // ReadSessionMetadataAndPrompts is intentionally v2-only because callers pair
@@ -201,25 +189,49 @@ func (r *DualCheckpointReader) ListCommitted(ctx context.Context) ([]CommittedIn
 	return committed, nil
 }
 
-func (r *DualCheckpointReader) readV1SessionContentMatchingV2Session(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, v2SessionReadErr error) (*SessionContent, error) {
+func (r *DualCheckpointReader) v2CheckpointExists(ctx context.Context, checkpointID id.CheckpointID) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err //nolint:wrapcheck // Propagating context cancellation
+	}
+	checkpointExists := false
+	_, rootTreeHash, err := r.v2.GetRefState(plumbing.ReferenceName(paths.V2MainRefName))
+	if err == nil {
+		rootTree, err := r.v2.repo.TreeObject(rootTreeHash)
+		if err == nil {
+			_, err = rootTree.Tree(checkpointID.Path())
+			checkpointExists = err == nil
+		}
+	}
+	return checkpointExists, nil
+}
+
+func (r *DualCheckpointReader) v2SessionID(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (string, error) {
 	metadata, err := r.v2.ReadSessionMetadata(ctx, checkpointID, sessionIndex)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
-		}
-		return nil, fallbackReadError(v2SessionReadErr, "read v2 session metadata for v1 fallback", err)
+		return "", err
 	}
 	if metadata == nil || metadata.SessionID == "" {
-		return nil, fallbackReadError(v2SessionReadErr, "read v2 session metadata for v1 fallback", ErrNoTranscript)
+		return "", ErrNoTranscript
 	}
-	content, fallbackErr := r.v1.ReadSessionContentByID(ctx, checkpointID, metadata.SessionID)
+	return metadata.SessionID, nil
+}
+
+func (r *DualCheckpointReader) readV1SessionContentByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string, originalErr error) (*SessionContent, error) {
+	content, fallbackErr := r.v1.ReadSessionContentByID(ctx, checkpointID, sessionID)
 	if fallbackErr == nil {
 		return content, nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	return nil, fallbackReadError(v2SessionReadErr, "read v1 fallback session content", fallbackErr)
+	return nil, fallbackReadError(originalErr, "read v1 fallback session content", fallbackErr)
+}
+
+func (r *DualCheckpointReader) readSingleV1SessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
+	if err := r.requireSingleV1Session(ctx, checkpointID, sessionIndex, originalErr); err != nil {
+		return nil, err
+	}
+	return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, originalErr)
 }
 
 func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
@@ -233,6 +245,13 @@ func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, 
 	return nil, fallbackReadError(originalErr, "read v1 session content", err)
 }
 
+func (r *DualCheckpointReader) readSingleV1SessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*CommittedMetadata, error) {
+	if err := r.requireSingleV1Session(ctx, checkpointID, sessionIndex, originalErr); err != nil {
+		return nil, err
+	}
+	return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, originalErr)
+}
+
 func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*CommittedMetadata, error) {
 	metadata, err := r.v1.ReadSessionMetadata(ctx, checkpointID, sessionIndex)
 	if err == nil {
@@ -242,6 +261,20 @@ func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context,
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
 	return nil, fallbackReadError(originalErr, "read v1 session metadata", err)
+}
+
+func (r *DualCheckpointReader) requireSingleV1Session(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) error {
+	summary, err := r.v1.ReadCommitted(ctx, checkpointID)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr //nolint:wrapcheck // Propagating context cancellation
+		}
+		return fallbackReadError(originalErr, "read v1 checkpoint summary", err)
+	}
+	if summary == nil || len(summary.Sessions) != 1 || sessionIndex != 0 {
+		return originalErr
+	}
+	return nil
 }
 
 func fallbackReadError(primaryErr error, fallbackOperation string, fallbackErr error) error {

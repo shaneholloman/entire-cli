@@ -492,6 +492,14 @@ func TestCommittedReader_DoesNotUseIndexFallbackWhenV2Malformed(t *testing.T) {
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}))
+	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-other",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from-other"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
 
 	// Write valid v2 checkpoint, then corrupt its metadata.json.
 	require.NoError(t, v2Store.WriteCommitted(ctx, WriteCommittedOptions{
@@ -512,7 +520,7 @@ func TestCommittedReader_DoesNotUseIndexFallbackWhenV2Malformed(t *testing.T) {
 	content, err := reader.ReadSessionContent(ctx, cpID, 0)
 	require.Nil(t, content)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "read v2 checkpoint summary")
+	require.ErrorIs(t, err, ErrCheckpointNotFound)
 }
 
 // corruptV2MainMetadata replaces the v2 /main ref tree with one containing
