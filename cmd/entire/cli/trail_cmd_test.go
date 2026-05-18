@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ const (
 )
 
 func TestLimitTrailsKeepsMostRecentPrefix(t *testing.T) {
+	t.Parallel()
 	trails := []*trail.Metadata{
 		{Branch: "newest"},
 		{Branch: "middle"},
@@ -35,6 +38,7 @@ func TestLimitTrailsKeepsMostRecentPrefix(t *testing.T) {
 }
 
 func TestFilterTrailsByAuthor(t *testing.T) {
+	t.Parallel()
 	alice := trailListTestAuthorAlice
 	bob := trailListTestAuthorBob
 	trails := []*trail.Metadata{
@@ -53,7 +57,21 @@ func TestFilterTrailsByAuthor(t *testing.T) {
 	}
 }
 
+func TestFilterTrailsByAuthorIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	mixed := "Alice"
+	trails := []*trail.Metadata{
+		{Branch: "mine", Author: &trail.Author{Login: &mixed}},
+	}
+
+	got := filterTrailsByAuthor(trails, "alice")
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (case-insensitive)", len(got))
+	}
+}
+
 func TestParseTrailStatusFilterAcceptsCommaSeparatedStatuses(t *testing.T) {
+	t.Parallel()
 	got, err := parseTrailStatusFilter("in_progress, open,closed")
 	if err != nil {
 		t.Fatalf("parseTrailStatusFilter: %v", err)
@@ -70,12 +88,25 @@ func TestParseTrailStatusFilterAcceptsCommaSeparatedStatuses(t *testing.T) {
 }
 
 func TestParseTrailStatusFilterRejectsInvalidStatus(t *testing.T) {
+	t.Parallel()
 	if _, err := parseTrailStatusFilter("in_progress,nope"); err == nil {
 		t.Fatal("expected invalid status error")
 	}
 }
 
+func TestParseTrailStatusFilterAnySentinelMeansNoFilter(t *testing.T) {
+	t.Parallel()
+	got, err := parseTrailStatusFilter(trailListStatusAny)
+	if err != nil {
+		t.Fatalf("parseTrailStatusFilter(%q): %v", trailListStatusAny, err)
+	}
+	if got != nil {
+		t.Fatalf("got %v, want nil (any disables the filter)", got)
+	}
+}
+
 func TestPrintTrailListDefaultRepoShapeShowsAuthor(t *testing.T) {
+	t.Parallel()
 	alice := trailListTestAuthorAlice
 	var out bytes.Buffer
 	printTrailList(&out, []*trail.Metadata{
@@ -99,6 +130,7 @@ func TestPrintTrailListDefaultRepoShapeShowsAuthor(t *testing.T) {
 }
 
 func TestPrintTrailListAuthorFilteredShapeHidesAuthor(t *testing.T) {
+	t.Parallel()
 	longBranch := "feature/very-long-branch-name-that-must-remain-visible"
 	alice := trailListTestAuthorAlice
 
@@ -127,7 +159,31 @@ func TestPrintTrailListAuthorFilteredShapeHidesAuthor(t *testing.T) {
 	}
 }
 
+func TestPrintTrailListYourTrailsRelabelsAndSurfacesGhLogin(t *testing.T) {
+	t.Parallel()
+	mixedCase := "Alice" // gh returned a different case than the filter
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{
+			Branch:    "feat/x",
+			Status:    trail.StatusInProgress,
+			Author:    &trail.Author{Login: &mixedCase},
+			UpdatedAt: time.Now(),
+		},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "alice",
+		CurrentUser:     "alice",
+		StatusFilters:   []trail.Status{trail.StatusInProgress},
+	})
+
+	text := out.String()
+	if !strings.Contains(text, "Your trails (alice) · 1 in progress") {
+		t.Fatalf("expected 'Your trails (alice)' header, got:\n%s", text)
+	}
+}
+
 func TestPrintTrailListAnyAuthorAnyStatusGroupsByStatus(t *testing.T) {
+	t.Parallel()
 	alice := trailListTestAuthorAlice
 	bob := trailListTestAuthorBob
 	var out bytes.Buffer
@@ -147,5 +203,85 @@ func TestPrintTrailListAnyAuthorAnyStatusGroupsByStatus(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q, got:\n%s", want, text)
 		}
+	}
+}
+
+func TestPrintTrailListSingularRecentTrailWhenOne(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/a", Status: trail.StatusInProgress, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   nil,
+	})
+
+	text := out.String()
+	if !strings.Contains(text, "Recent trail · 1") {
+		t.Fatalf("expected singular 'Recent trail · 1', got:\n%s", text)
+	}
+	if strings.Contains(text, "Recent trails · 1") {
+		t.Fatalf("did not expect plural 'trails' for count 1, got:\n%s", text)
+	}
+}
+
+func TestPrintTrailListUnknownStatusGroupedInOtherBucket(t *testing.T) {
+	t.Parallel()
+	alice := trailListTestAuthorAlice
+	unknownStatus := trail.Status("experimental_review")
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{Branch: "feat/known", Status: trail.StatusInProgress, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+		{Branch: "feat/odd", Status: unknownStatus, Author: &trail.Author{Login: &alice}, UpdatedAt: time.Now()},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   nil,
+	})
+
+	text := out.String()
+	for _, want := range []string{"Recent trails · 2", "In progress · 1", "Other · 1", "feat/odd"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestFetchCurrentUserLoginReturnsLogin(t *testing.T) {
+	t.Parallel()
+	r := newFakeRunner()
+	r.set("gh", []string{"api", "user", "--jq", ".login"}, "octocat\n", nil)
+
+	got, err := fetchCurrentUserLogin(context.Background(), r)
+	if err != nil {
+		t.Fatalf("fetchCurrentUserLogin: %v", err)
+	}
+	if got != "octocat" {
+		t.Fatalf("got %q, want octocat", got)
+	}
+}
+
+func TestFetchCurrentUserLoginRejectsEmptyLogin(t *testing.T) {
+	t.Parallel()
+	r := newFakeRunner()
+	r.set("gh", []string{"api", "user", "--jq", ".login"}, "\n", nil)
+
+	if _, err := fetchCurrentUserLogin(context.Background(), r); err == nil {
+		t.Fatal("expected error for empty login")
+	}
+}
+
+func TestFetchCurrentUserLoginWrapsGhError(t *testing.T) {
+	t.Parallel()
+	r := newFakeRunner()
+	r.set("gh", []string{"api", "user", "--jq", ".login"}, "", errors.New("gh: not authenticated"))
+
+	_, err := fetchCurrentUserLogin(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Surface the hint about the --author <login> fallback.
+	if !strings.Contains(err.Error(), "--author <login>") {
+		t.Fatalf("error should mention the --author fallback hint, got: %v", err)
 	}
 }

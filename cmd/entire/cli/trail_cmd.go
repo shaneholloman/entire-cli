@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
@@ -25,10 +26,10 @@ import (
 
 const (
 	defaultTrailListLimit  = 10
-	defaultTrailListAuthor = ""
 	trailListAuthorMe      = "me"
 	defaultTrailListStatus = string(trail.StatusInProgress)
-	trailAuthorColumnWidth = 15
+	// trailListStatusAny disables the status filter; user-facing value for --status.
+	trailListStatusAny = "any"
 )
 
 func newTrailCmd() *cobra.Command {
@@ -68,11 +69,29 @@ func trailInsecureHTTP(cmd *cobra.Command) bool {
 	return v
 }
 
+// trailListOptions are the inputs to runTrailListAll. Keeping them on a
+// struct avoids a long positional argument list at the two call sites.
+type trailListOptions struct {
+	Author       string
+	Status       string
+	JSON         bool
+	Limit        int
+	InsecureHTTP bool
+}
+
+func defaultTrailListOptions(insecureHTTP bool) trailListOptions {
+	return trailListOptions{
+		Status:       defaultTrailListStatus,
+		Limit:        defaultTrailListLimit,
+		InsecureHTTP: insecureHTTP,
+	}
+}
+
 // runTrailShow shows the trail for the current branch, or falls through to list.
 func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 	branch, err := GetCurrentBranch(ctx)
 	if err != nil {
-		return runTrailListAll(ctx, w, defaultTrailListAuthor, defaultTrailListStatus, false, defaultTrailListLimit, insecureHTTP)
+		return runTrailListAll(ctx, w, defaultTrailListOptions(insecureHTTP))
 	}
 
 	client, err := NewAuthenticatedAPIClient(insecureHTTP)
@@ -90,7 +109,7 @@ func runTrailShow(ctx context.Context, w io.Writer, insecureHTTP bool) error {
 		return err
 	}
 	if found == nil {
-		return runTrailListAll(ctx, w, defaultTrailListAuthor, defaultTrailListStatus, false, defaultTrailListLimit, insecureHTTP)
+		return runTrailListAll(ctx, w, defaultTrailListOptions(insecureHTTP))
 	}
 
 	printTrailDetails(w, found.ToMetadata())
@@ -123,38 +142,36 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 }
 
 func newTrailListCmd() *cobra.Command {
-	var authorFilter string
-	var statusFilter string
-	var jsonOutput bool
-	var limit int
+	var opts trailListOptions
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List recent trails",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), authorFilter, statusFilter, jsonOutput, limit, trailInsecureHTTP(cmd))
+			opts.InsecureHTTP = trailInsecureHTTP(cmd)
+			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&authorFilter, "author", defaultTrailListAuthor, "Filter by author login; use "+trailListAuthorMe+" for yourself; omit value for any author")
-	cmd.Flags().StringVar(&statusFilter, "status", defaultTrailListStatus, "Filter by comma-separated status(es): "+formatValidStatuses()+"; omit value for any status")
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON")
-	cmd.Flags().IntVar(&limit, "limit", defaultTrailListLimit, "Maximum number of trails to show")
-	cmd.Flags().Lookup("author").NoOptDefVal = ""
-	cmd.Flags().Lookup("status").NoOptDefVal = ""
+	cmd.Flags().StringVar(&opts.Author, "author", "",
+		"Filter by author login (case-insensitive); use '"+trailListAuthorMe+"' for yourself (requires gh CLI); omit for any author")
+	cmd.Flags().StringVar(&opts.Status, "status", defaultTrailListStatus,
+		"Filter by comma-separated status(es): "+formatValidStatuses()+"; use '"+trailListStatusAny+"' for all statuses")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output as JSON (respects --status filter)")
+	cmd.Flags().IntVarP(&opts.Limit, "limit", "n", defaultTrailListLimit, "Maximum number of trails to show")
 
 	return cmd
 }
 
-func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilter string, jsonOutput bool, limit int, insecureHTTP bool) error {
-	if limit <= 0 {
+func runTrailListAll(ctx context.Context, w io.Writer, opts trailListOptions) error {
+	if opts.Limit <= 0 {
 		return errors.New("limit must be greater than 0")
 	}
-	statusFilters, err := parseTrailStatusFilter(statusFilter)
+	statusFilters, err := parseTrailStatusFilter(opts.Status)
 	if err != nil {
 		return err
 	}
-	client, err := NewAuthenticatedAPIClient(insecureHTTP)
+	client, err := NewAuthenticatedAPIClient(opts.InsecureHTTP)
 	if err != nil {
 		return fmt.Errorf("authentication required: %w", err)
 	}
@@ -184,9 +201,10 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 		trails = append(trails, listResp.Trails[i].ToMetadata())
 	}
 
+	authorFilter := opts.Author
 	currentUserLogin := ""
 	if authorFilter == trailListAuthorMe {
-		login, err := fetchCurrentUserLogin(ctx)
+		login, err := fetchCurrentUserLogin(ctx, execRunner{})
 		if err != nil {
 			return err
 		}
@@ -206,9 +224,9 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 	sort.Slice(trails, func(i, j int) bool {
 		return trails[i].UpdatedAt.After(trails[j].UpdatedAt)
 	})
-	trails = limitTrails(trails, limit)
+	trails = limitTrails(trails, opts.Limit)
 
-	if jsonOutput {
+	if opts.JSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(trails); err != nil {
@@ -243,10 +261,12 @@ func limitTrails(trails []*trail.Metadata, limit int) []*trail.Metadata {
 	return trails[:limit]
 }
 
+// filterTrailsByAuthor matches case-insensitively because GitHub logins are
+// case-insensitive (e.g. "Alice" and "alice" identify the same user).
 func filterTrailsByAuthor(trails []*trail.Metadata, login string) []*trail.Metadata {
 	var filtered []*trail.Metadata
 	for _, t := range trails {
-		if t.AuthorLogin() == login {
+		if strings.EqualFold(t.AuthorLogin(), login) {
 			filtered = append(filtered, t)
 		}
 	}
@@ -279,7 +299,7 @@ func filterTrailsByStatuses(trails []*trail.Metadata, statuses []trail.Status) [
 }
 
 func parseTrailStatusFilter(filter string) ([]trail.Status, error) {
-	if filter == "" {
+	if filter == "" || filter == trailListStatusAny {
 		return nil, nil
 	}
 
@@ -304,13 +324,16 @@ func parseTrailStatusFilter(filter string) ([]trail.Status, error) {
 	return statuses, nil
 }
 
-func fetchCurrentUserLogin(ctx context.Context) (string, error) {
-	login, err := ghCurrentUser(ctx, execRunner{})
+// fetchCurrentUserLogin resolves --author me to a GitHub login via the local
+// gh CLI. The runner is injectable so tests can stub gh without touching the
+// process environment.
+func fetchCurrentUserLogin(ctx context.Context, runner bootstrapRunner) (string, error) {
+	login, err := ghCurrentUser(ctx, runner)
 	if err != nil {
-		return "", fmt.Errorf("resolve --author %s: %w (pass --author <login> explicitly if GitHub CLI is unavailable)", trailListAuthorMe, err)
+		return "", fmt.Errorf("resolve --author %s via gh CLI: %w\nhint: pass --author <login> explicitly if gh is unavailable", trailListAuthorMe, err)
 	}
 	if login == "" {
-		return "", errors.New("resolve --author me: GitHub CLI returned an empty login")
+		return "", errors.New("resolve --author me: gh returned an empty login")
 	}
 	return login, nil
 }
@@ -323,6 +346,8 @@ type trailListDisplayOptions struct {
 
 func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplayOptions) {
 	showAuthor := opts.RequestedAuthor == ""
+	// Group by status when the user filtered for 0 or 2+ statuses. A single
+	// status is already named in the header, so flat rows read more cleanly.
 	grouped := len(opts.StatusFilters) != 1
 	printTrailListHeader(w, opts, len(trails))
 	fmt.Fprintln(w)
@@ -331,22 +356,44 @@ func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplay
 		return
 	}
 
+	rendered := make(map[*trail.Metadata]bool, len(trails))
 	for _, status := range trailListStatusOrder(opts.StatusFilters) {
 		group := filterTrailsByStatus(trails, status)
 		if len(group) == 0 {
 			continue
+		}
+		for _, t := range group {
+			rendered[t] = true
 		}
 		fmt.Fprintf(w, "  %s · %d\n", trailStatusTitle(status), len(group))
 		fmt.Fprintln(w)
 		printTrailRows(w, group, showAuthor)
 		fmt.Fprintln(w)
 	}
+
+	// When no explicit status filter is set, surface trails with unknown
+	// statuses in an "Other" bucket so they don't silently disappear if the
+	// server adds a status the CLI hasn't learned about yet.
+	if len(opts.StatusFilters) == 0 {
+		var other []*trail.Metadata
+		for _, t := range trails {
+			if !rendered[t] {
+				other = append(other, t)
+			}
+		}
+		if len(other) > 0 {
+			fmt.Fprintf(w, "  Other · %d\n", len(other))
+			fmt.Fprintln(w)
+			printTrailRows(w, other, showAuthor)
+			fmt.Fprintln(w)
+		}
+	}
 }
 
 func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) {
 	if opts.RequestedAuthor == "" {
 		if len(opts.StatusFilters) == 0 {
-			fmt.Fprintf(w, "  Recent trails · %d\n", count)
+			fmt.Fprintf(w, "  Recent %s · %d\n", pluralize("trail", count), count)
 			return
 		}
 		fmt.Fprintf(w, "  %s · %d %s\n", trailStatusListTitle(opts.StatusFilters), count, pluralize("trail", count))
@@ -354,8 +401,11 @@ func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) 
 	}
 
 	label := opts.RequestedAuthor
-	if opts.CurrentUser != "" && opts.RequestedAuthor == opts.CurrentUser {
-		label = "Your trails"
+	// When --author me resolves to the same login the server already returned
+	// for the trail, render "Your trails (login)" so identity drift between
+	// gh and Entire is visible at a glance.
+	if opts.CurrentUser != "" && strings.EqualFold(opts.RequestedAuthor, opts.CurrentUser) {
+		label = fmt.Sprintf("Your trails (%s)", opts.CurrentUser)
 	}
 	if len(opts.StatusFilters) == 0 {
 		fmt.Fprintf(w, "  %s · %d\n", label, count)
@@ -365,24 +415,17 @@ func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) 
 }
 
 func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor bool) {
-	branchWidth := maxTrailBranchWidth(trails)
+	// tabwriter aligns by display columns instead of bytes, so multi-byte
+	// branch names or logins don't throw off the table.
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, t := range trails {
 		if showAuthor {
-			fmt.Fprintf(w, "  %-*s  %-*s  %s\n", branchWidth, t.Branch, trailAuthorColumnWidth, t.AuthorLogin(), timeAgo(t.UpdatedAt))
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", t.Branch, t.AuthorLogin(), timeAgo(t.UpdatedAt))
 			continue
 		}
-		fmt.Fprintf(w, "  %-*s  %s\n", branchWidth, t.Branch, timeAgo(t.UpdatedAt))
+		fmt.Fprintf(tw, "  %s\t%s\n", t.Branch, timeAgo(t.UpdatedAt))
 	}
-}
-
-func maxTrailBranchWidth(trails []*trail.Metadata) int {
-	width := 0
-	for _, t := range trails {
-		if branchWidth := len([]rune(t.Branch)); branchWidth > width {
-			width = branchWidth
-		}
-	}
-	return width
+	_ = tw.Flush()
 }
 
 func trailListStatusOrder(filter []trail.Status) []trail.Status {
