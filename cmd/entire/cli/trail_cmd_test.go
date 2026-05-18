@@ -53,7 +53,52 @@ func TestFilterTrailsByAuthor(t *testing.T) {
 	}
 }
 
-func TestPrintTrailListDefaultShapeHidesAuthor(t *testing.T) {
+func TestParseTrailStatusFilterAcceptsCommaSeparatedStatuses(t *testing.T) {
+	got, err := parseTrailStatusFilter("in_progress, open,closed")
+	if err != nil {
+		t.Fatalf("parseTrailStatusFilter: %v", err)
+	}
+	want := []trail.Status{trail.StatusInProgress, trail.StatusOpen, trail.StatusClosed}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("status[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseTrailStatusFilterRejectsInvalidStatus(t *testing.T) {
+	if _, err := parseTrailStatusFilter("in_progress,nope"); err == nil {
+		t.Fatal("expected invalid status error")
+	}
+}
+
+func TestPrintTrailListDefaultRepoShapeShowsAuthor(t *testing.T) {
+	alice := trailListTestAuthorAlice
+	var out bytes.Buffer
+	printTrailList(&out, []*trail.Metadata{
+		{
+			Branch:    "feat/repo-wide",
+			Status:    trail.StatusInProgress,
+			Author:    &trail.Author{Login: &alice},
+			UpdatedAt: time.Now(),
+		},
+	}, trailListDisplayOptions{
+		RequestedAuthor: "",
+		StatusFilters:   []trail.Status{trail.StatusInProgress},
+	})
+
+	text := out.String()
+	for _, want := range []string{"In progress · 1 trail", "feat/repo-wide", trailListTestAuthorAlice} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintTrailListAuthorFilteredShapeHidesAuthor(t *testing.T) {
 	longBranch := "feature/very-long-branch-name-that-must-remain-visible"
 	alice := trailListTestAuthorAlice
 
@@ -66,8 +111,8 @@ func TestPrintTrailListDefaultShapeHidesAuthor(t *testing.T) {
 			UpdatedAt: time.Now().Add(-24 * time.Hour),
 		},
 	}, trailListDisplayOptions{
-		RequestedAuthor: "alice",
-		StatusFilter:    string(trail.StatusInProgress),
+		RequestedAuthor: trailListTestAuthorAlice,
+		StatusFilters:   []trail.Status{trail.StatusInProgress},
 	})
 
 	text := out.String()
@@ -91,7 +136,7 @@ func TestPrintTrailListAnyAuthorAnyStatusGroupsByStatus(t *testing.T) {
 		{Branch: "fix/b", Status: trail.StatusOpen, Author: &trail.Author{Login: &bob}, UpdatedAt: time.Now()},
 	}, trailListDisplayOptions{
 		RequestedAuthor: "",
-		StatusFilter:    "",
+		StatusFilters:   nil,
 	})
 
 	text := out.String()

@@ -25,7 +25,8 @@ import (
 
 const (
 	defaultTrailListLimit  = 10
-	defaultTrailListAuthor = "me"
+	defaultTrailListAuthor = ""
+	trailListAuthorMe      = "me"
 	defaultTrailListStatus = string(trail.StatusInProgress)
 	trailAuthorColumnWidth = 15
 )
@@ -124,6 +125,7 @@ func printTrailDetails(w io.Writer, m *trail.Metadata) {
 func newTrailListCmd() *cobra.Command {
 	var authorFilter string
 	var statusFilter string
+	var mine bool
 	var jsonOutput bool
 	var limit int
 
@@ -131,12 +133,19 @@ func newTrailListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List recent trails",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if mine {
+				if cmd.Flags().Changed("author") {
+					return errors.New("--mine cannot be used with --author")
+				}
+				authorFilter = trailListAuthorMe
+			}
 			return runTrailListAll(cmd.Context(), cmd.OutOrStdout(), authorFilter, statusFilter, jsonOutput, limit, trailInsecureHTTP(cmd))
 		},
 	}
 
-	cmd.Flags().StringVar(&authorFilter, "author", defaultTrailListAuthor, "Filter by author login; omit value for any author")
-	cmd.Flags().StringVar(&statusFilter, "status", defaultTrailListStatus, "Filter by status; omit value for any status")
+	cmd.Flags().StringVar(&authorFilter, "author", defaultTrailListAuthor, "Filter by author login; use "+trailListAuthorMe+" for yourself; omit value for any author")
+	cmd.Flags().StringVar(&statusFilter, "status", defaultTrailListStatus, "Filter by comma-separated status(es): "+formatValidStatuses()+"; omit value for any status")
+	cmd.Flags().BoolVar(&mine, "mine", false, "Alias for --author me")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON")
 	cmd.Flags().IntVar(&limit, "limit", defaultTrailListLimit, "Maximum number of trails to show")
 	cmd.Flags().Lookup("author").NoOptDefVal = ""
@@ -149,11 +158,9 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 	if limit <= 0 {
 		return errors.New("limit must be greater than 0")
 	}
-	if statusFilter != "" {
-		status := trail.Status(statusFilter)
-		if !status.IsValid() {
-			return fmt.Errorf("invalid status %q: valid values are %s", statusFilter, formatValidStatuses())
-		}
+	statusFilters, err := parseTrailStatusFilter(statusFilter)
+	if err != nil {
+		return err
 	}
 	client, err := NewAuthenticatedAPIClient(insecureHTTP)
 	if err != nil {
@@ -186,7 +193,7 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 	}
 
 	currentUserLogin := ""
-	if authorFilter == defaultTrailListAuthor {
+	if authorFilter == trailListAuthorMe {
 		login, err := fetchCurrentUserLogin(ctx, client)
 		if err != nil {
 			return err
@@ -199,8 +206,8 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 		trails = filterTrailsByAuthor(trails, authorFilter)
 	}
 
-	if statusFilter != "" {
-		trails = filterTrailsByStatus(trails, trail.Status(statusFilter))
+	if len(statusFilters) > 0 {
+		trails = filterTrailsByStatuses(trails, statusFilters)
 	}
 
 	// Sort by updated_at descending, then keep only the most recent rows.
@@ -231,7 +238,7 @@ func runTrailListAll(ctx context.Context, w io.Writer, authorFilter, statusFilte
 	printTrailList(w, trails, trailListDisplayOptions{
 		RequestedAuthor: authorFilter,
 		CurrentUser:     currentUserLogin,
-		StatusFilter:    statusFilter,
+		StatusFilters:   statusFilters,
 	})
 
 	return nil
@@ -264,6 +271,47 @@ func filterTrailsByStatus(trails []*trail.Metadata, status trail.Status) []*trai
 	return filtered
 }
 
+func filterTrailsByStatuses(trails []*trail.Metadata, statuses []trail.Status) []*trail.Metadata {
+	statusSet := make(map[trail.Status]bool, len(statuses))
+	for _, status := range statuses {
+		statusSet[status] = true
+	}
+
+	var filtered []*trail.Metadata
+	for _, t := range trails {
+		if statusSet[t.Status] {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
+func parseTrailStatusFilter(filter string) ([]trail.Status, error) {
+	if filter == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(filter, ",")
+	statuses := make([]trail.Status, 0, len(parts))
+	seen := make(map[trail.Status]bool, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("invalid status filter %q: empty status", filter)
+		}
+		status := trail.Status(name)
+		if !status.IsValid() {
+			return nil, fmt.Errorf("invalid status %q: valid values are %s", name, formatValidStatuses())
+		}
+		if seen[status] {
+			continue
+		}
+		seen[status] = true
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
 type currentUserResponse struct {
 	Login string `json:"login"`
 }
@@ -292,40 +340,38 @@ func fetchCurrentUserLogin(ctx context.Context, client *api.Client) (string, err
 type trailListDisplayOptions struct {
 	RequestedAuthor string
 	CurrentUser     string
-	StatusFilter    string
+	StatusFilters   []trail.Status
 }
 
 func printTrailList(w io.Writer, trails []*trail.Metadata, opts trailListDisplayOptions) {
 	showAuthor := opts.RequestedAuthor == ""
-	if opts.StatusFilter == "" {
-		printTrailListHeader(w, opts, len(trails))
-		fmt.Fprintln(w)
-		for _, status := range trailListStatusOrder() {
-			group := filterTrailsByStatus(trails, status)
-			if len(group) == 0 {
-				continue
-			}
-			fmt.Fprintf(w, "  %s · %d\n", trailStatusTitle(status), len(group))
-			fmt.Fprintln(w)
-			printTrailRows(w, group, showAuthor)
-			fmt.Fprintln(w)
-		}
+	grouped := len(opts.StatusFilters) != 1
+	printTrailListHeader(w, opts, len(trails))
+	fmt.Fprintln(w)
+	if !grouped {
+		printTrailRows(w, trails, showAuthor)
 		return
 	}
 
-	printTrailListHeader(w, opts, len(trails))
-	fmt.Fprintln(w)
-	printTrailRows(w, trails, showAuthor)
+	for _, status := range trailListStatusOrder(opts.StatusFilters) {
+		group := filterTrailsByStatus(trails, status)
+		if len(group) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "  %s · %d\n", trailStatusTitle(status), len(group))
+		fmt.Fprintln(w)
+		printTrailRows(w, group, showAuthor)
+		fmt.Fprintln(w)
+	}
 }
 
 func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) {
-	status := trail.Status(opts.StatusFilter)
 	if opts.RequestedAuthor == "" {
-		if opts.StatusFilter == "" {
+		if len(opts.StatusFilters) == 0 {
 			fmt.Fprintf(w, "  Recent trails · %d\n", count)
 			return
 		}
-		fmt.Fprintf(w, "  %s · %d %s\n", trailStatusTitle(status), count, pluralize("trail", count))
+		fmt.Fprintf(w, "  %s · %d %s\n", trailStatusListTitle(opts.StatusFilters), count, pluralize("trail", count))
 		return
 	}
 
@@ -333,11 +379,11 @@ func printTrailListHeader(w io.Writer, opts trailListDisplayOptions, count int) 
 	if opts.CurrentUser != "" && opts.RequestedAuthor == opts.CurrentUser {
 		label = "Your trails"
 	}
-	if opts.StatusFilter == "" {
+	if len(opts.StatusFilters) == 0 {
 		fmt.Fprintf(w, "  %s · %d\n", label, count)
 		return
 	}
-	fmt.Fprintf(w, "  %s · %d %s\n", label, count, trailStatusDisplay(status))
+	fmt.Fprintf(w, "  %s · %d %s\n", label, count, trailStatusListDisplay(opts.StatusFilters))
 }
 
 func printTrailRows(w io.Writer, trails []*trail.Metadata, showAuthor bool) {
@@ -361,8 +407,8 @@ func maxTrailBranchWidth(trails []*trail.Metadata) int {
 	return width
 }
 
-func trailListStatusOrder() []trail.Status {
-	return []trail.Status{
+func trailListStatusOrder(filter []trail.Status) []trail.Status {
+	order := []trail.Status{
 		trail.StatusInProgress,
 		trail.StatusOpen,
 		trail.StatusInReview,
@@ -370,6 +416,37 @@ func trailListStatusOrder() []trail.Status {
 		trail.StatusMerged,
 		trail.StatusClosed,
 	}
+	if len(filter) == 0 {
+		return order
+	}
+
+	allowed := make(map[trail.Status]bool, len(filter))
+	for _, status := range filter {
+		allowed[status] = true
+	}
+	var filtered []trail.Status
+	for _, status := range order {
+		if allowed[status] {
+			filtered = append(filtered, status)
+		}
+	}
+	return filtered
+}
+
+func trailStatusListDisplay(statuses []trail.Status) string {
+	parts := make([]string, len(statuses))
+	for i, status := range statuses {
+		parts[i] = trailStatusDisplay(status)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func trailStatusListTitle(statuses []trail.Status) string {
+	display := trailStatusListDisplay(statuses)
+	if display == "" {
+		return ""
+	}
+	return strings.ToUpper(display[:1]) + display[1:]
 }
 
 func trailStatusDisplay(status trail.Status) string {
