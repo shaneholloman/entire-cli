@@ -141,7 +141,14 @@ func (r *DualCheckpointReader) ReadSessionContent(ctx context.Context, checkpoin
 			return nil, existsErr
 		}
 		if v2CheckpointExists {
-			return r.readSingleV1SessionContent(ctx, checkpointID, sessionIndex, err)
+			summary, summaryErr := r.readV1FallbackSummary(ctx, checkpointID, err)
+			if summaryErr != nil {
+				return nil, summaryErr
+			}
+			if !hasSingleV1FallbackSession(summary, sessionIndex) {
+				return nil, err
+			}
+			return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, err)
 		}
 		return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, err)
 	}
@@ -151,7 +158,14 @@ func (r *DualCheckpointReader) ReadSessionContent(ctx context.Context, checkpoin
 			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 		}
 		originalErr := fallbackReadError(err, "read v2 session metadata for v1 fallback", sessionIDErr)
-		return r.readSingleV1SessionContent(ctx, checkpointID, sessionIndex, originalErr)
+		summary, summaryErr := r.readV1FallbackSummary(ctx, checkpointID, originalErr)
+		if summaryErr != nil {
+			return nil, summaryErr
+		}
+		if !hasSingleV1FallbackSession(summary, sessionIndex) {
+			return nil, originalErr
+		}
+		return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, originalErr)
 	}
 	return r.readV1SessionContentByID(ctx, checkpointID, sessionID, err)
 }
@@ -170,11 +184,25 @@ func (r *DualCheckpointReader) ReadSessionMetadata(ctx context.Context, checkpoi
 			return nil, existsErr
 		}
 		if v2CheckpointExists {
-			return r.readSingleV1SessionMetadata(ctx, checkpointID, sessionIndex, err)
+			summary, summaryErr := r.readV1FallbackSummary(ctx, checkpointID, err)
+			if summaryErr != nil {
+				return nil, summaryErr
+			}
+			if !hasSingleV1FallbackSession(summary, sessionIndex) {
+				return nil, err
+			}
+			return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, err)
 		}
 		return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, err)
 	}
-	return r.readSingleV1SessionMetadata(ctx, checkpointID, sessionIndex, err)
+	summary, summaryErr := r.readV1FallbackSummary(ctx, checkpointID, err)
+	if summaryErr != nil {
+		return nil, summaryErr
+	}
+	if !hasSingleV1FallbackSession(summary, sessionIndex) {
+		return nil, err
+	}
+	return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, err)
 }
 
 func (r *DualCheckpointReader) ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error) {
@@ -314,13 +342,6 @@ func (r *DualCheckpointReader) readV1SessionContentByID(ctx context.Context, che
 	return nil, fallbackReadError(originalErr, "read v1 fallback session content", fallbackErr)
 }
 
-func (r *DualCheckpointReader) readSingleV1SessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
-	if err := r.requireSingleV1Session(ctx, checkpointID, sessionIndex, originalErr); err != nil {
-		return nil, err
-	}
-	return r.readV1SessionContentByIndex(ctx, checkpointID, sessionIndex, originalErr)
-}
-
 func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
 	content, err := r.v1.ReadSessionContent(ctx, checkpointID, sessionIndex)
 	if err == nil {
@@ -330,13 +351,6 @@ func (r *DualCheckpointReader) readV1SessionContentByIndex(ctx context.Context, 
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
 	return nil, fallbackReadError(originalErr, "read v1 session content", err)
-}
-
-func (r *DualCheckpointReader) readSingleV1SessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*CommittedMetadata, error) {
-	if err := r.requireSingleV1Session(ctx, checkpointID, sessionIndex, originalErr); err != nil {
-		return nil, err
-	}
-	return r.readV1SessionMetadataByIndex(ctx, checkpointID, sessionIndex, originalErr)
 }
 
 func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*CommittedMetadata, error) {
@@ -350,18 +364,19 @@ func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context,
 	return nil, fallbackReadError(originalErr, "read v1 session metadata", err)
 }
 
-func (r *DualCheckpointReader) requireSingleV1Session(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) error {
+func (r *DualCheckpointReader) readV1FallbackSummary(ctx context.Context, checkpointID id.CheckpointID, originalErr error) (*CheckpointSummary, error) {
 	summary, err := r.v1.ReadCommitted(ctx, checkpointID)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr //nolint:wrapcheck // Propagating context cancellation
-		}
-		return fallbackReadError(originalErr, "read v1 checkpoint summary", err)
+	if err == nil {
+		return summary, nil
 	}
-	if summary == nil || len(summary.Sessions) != 1 || sessionIndex != 0 {
-		return originalErr
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
-	return nil
+	return nil, fallbackReadError(originalErr, "read v1 checkpoint summary", err)
+}
+
+func hasSingleV1FallbackSession(summary *CheckpointSummary, sessionIndex int) bool {
+	return summary != nil && len(summary.Sessions) == 1 && sessionIndex == 0
 }
 
 func fallbackReadError(primaryErr error, fallbackOperation string, fallbackErr error) error {
