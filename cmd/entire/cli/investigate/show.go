@@ -51,6 +51,22 @@ func RunShow(ctx context.Context, in ShowInput, deps ShowDeps) error {
 	if deps.ManifestStore == nil {
 		return errors.New("show: manifest store not wired")
 	}
+
+	// Fast path: a full 12-hex run id resolves via Glob + one file read.
+	runID := strings.TrimSpace(in.RunID)
+	if IsValidRunID(runID) {
+		m, ok, err := deps.ManifestStore.FindByRunID(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("find manifest %s: %w", runID, err)
+		}
+		if !ok {
+			return fmt.Errorf("no investigation found with run id %q", runID)
+		}
+		printShowSummary(in.Out, m)
+		printShowFindings(in.Out, m)
+		return nil
+	}
+
 	manifests, err := deps.ManifestStore.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list manifests: %w", err)
@@ -60,64 +76,22 @@ func RunShow(ctx context.Context, in ShowInput, deps ShowDeps) error {
 		return nil
 	}
 
-	m, resolveErr := resolveShowTarget(manifests, in.RunID)
-	if resolveErr != nil {
-		return resolveErr
-	}
-	printShowSummary(in.Out, m)
-	printShowFindings(in.Out, m)
-	return nil
-}
-
-// resolveShowTarget picks the manifest matching runID using exact match
-// first, then unique-prefix match. Errors are user-facing strings so
-// they render usefully via wrapSilent at the cobra layer.
-func resolveShowTarget(manifests []LocalManifest, runID string) (LocalManifest, error) {
-	if strings.TrimSpace(runID) == "" {
-		if len(manifests) == 1 {
-			return manifests[0], nil
-		}
-		return LocalManifest{}, ambiguousShowError(manifests, "")
-	}
-	// Exact match first.
-	for _, m := range manifests {
-		if m.RunID == runID {
-			return m, nil
-		}
-	}
-	// Prefix match.
-	var matches []LocalManifest
-	for _, m := range manifests {
-		if strings.HasPrefix(m.RunID, runID) {
-			matches = append(matches, m)
-		}
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	if len(matches) == 0 {
-		return LocalManifest{}, fmt.Errorf("no investigation found with run id or prefix %q", runID)
-	}
-	return LocalManifest{}, ambiguousShowError(matches, runID)
-}
-
-// ambiguousShowError formats a list of candidate run ids for the user
-// to choose from when their input matched 0 or 2+ manifests.
-func ambiguousShowError(candidates []LocalManifest, runID string) error {
-	sorted := append([]LocalManifest(nil), candidates...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].StartedAt.After(sorted[j].StartedAt)
-	})
-	var b strings.Builder
 	if runID == "" {
-		b.WriteString("multiple investigations available — pass a run id (or unique prefix):\n")
-	} else {
-		fmt.Fprintf(&b, "ambiguous run id prefix %q matches multiple investigations:\n", runID)
+		if len(manifests) == 1 {
+			printShowSummary(in.Out, manifests[0])
+			printShowFindings(in.Out, manifests[0])
+			return nil
+		}
+		return ambiguousRunIDError(manifests, "")
 	}
-	for _, m := range sorted {
-		fmt.Fprintf(&b, "  %s  %s\n", m.RunID, m.Topic)
+
+	resolved, err := ResolveByRunID(manifests, runID)
+	if err != nil {
+		return err
 	}
-	return errors.New(strings.TrimRight(b.String(), "\n"))
+	printShowSummary(in.Out, resolved[0])
+	printShowFindings(in.Out, resolved[0])
+	return nil
 }
 
 // printShowSummary writes the header block (prompt, agents, outcome,

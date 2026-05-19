@@ -209,6 +209,56 @@ func (s *LocalManifestStore) FindByRunID(ctx context.Context, runID string) (Loc
 	return m, true, nil
 }
 
+// ResolveByRunID matches a (possibly partial) run ID against the supplied
+// manifest list. Exact match wins; otherwise unique-prefix wins. Returns
+// a slice (always length 1 on success) so callers handle the not-found
+// and ambiguous cases via the error.
+//
+// The shape mirrors what show and clean both want: an exact 12-hex match
+// resolves O(1), a unique prefix expands to exactly one manifest, and any
+// other case produces a user-readable error listing the candidates.
+func ResolveByRunID(manifests []LocalManifest, runID string) ([]LocalManifest, error) {
+	for _, m := range manifests {
+		if m.RunID == runID {
+			return []LocalManifest{m}, nil
+		}
+	}
+	var prefixMatches []LocalManifest
+	for _, m := range manifests {
+		if strings.HasPrefix(m.RunID, runID) {
+			prefixMatches = append(prefixMatches, m)
+		}
+	}
+	switch len(prefixMatches) {
+	case 0:
+		return nil, fmt.Errorf("no investigation found with run id or prefix %q", runID)
+	case 1:
+		return prefixMatches, nil
+	default:
+		return nil, ambiguousRunIDError(prefixMatches, runID)
+	}
+}
+
+// ambiguousRunIDError formats a list of candidate run ids for the user
+// to choose from. When runID is empty, the header asks the user to pass a
+// run id; otherwise it reports the ambiguous prefix.
+func ambiguousRunIDError(candidates []LocalManifest, runID string) error {
+	sorted := append([]LocalManifest(nil), candidates...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].StartedAt.After(sorted[j].StartedAt)
+	})
+	var b strings.Builder
+	if runID == "" {
+		b.WriteString("multiple investigations available — pass a run id (or unique prefix):\n")
+	} else {
+		fmt.Fprintf(&b, "ambiguous run id prefix %q matches multiple investigations:\n", runID)
+	}
+	for _, m := range sorted {
+		fmt.Fprintf(&b, "  %s  %s\n", m.RunID, m.Topic)
+	}
+	return errors.New(strings.TrimRight(b.String(), "\n"))
+}
+
 // Latest returns the most recent manifest in the store, identified by the
 // lexicographically largest filename (filenames are <timestamp>-<runID>.json
 // where the timestamp prefix sorts chronologically). The bool reports

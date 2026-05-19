@@ -104,40 +104,14 @@ func RunClean(ctx context.Context, in CleanInput, deps CleanDeps) error {
 }
 
 // selectCleanTargets resolves the manifest list to the target set.
-// Mirrors show.resolveShowTarget for the single-id case: exact match
-// wins, then unique-prefix match. Returns a descriptive error for
-// ambiguous or missing matches.
+// For --all, returns every manifest. For a run id (or prefix), defers
+// to ResolveByRunID for the exact-then-prefix match logic shared with
+// show.
 func selectCleanTargets(manifests []LocalManifest, runID string, all bool) ([]LocalManifest, error) {
 	if all {
 		return manifests, nil
 	}
-	for _, m := range manifests {
-		if m.RunID == runID {
-			return []LocalManifest{m}, nil
-		}
-	}
-	var prefixMatches []LocalManifest
-	for _, m := range manifests {
-		if strings.HasPrefix(m.RunID, runID) {
-			prefixMatches = append(prefixMatches, m)
-		}
-	}
-	switch len(prefixMatches) {
-	case 0:
-		return nil, fmt.Errorf("no investigation found with run id or prefix %q", runID)
-	case 1:
-		return prefixMatches, nil
-	default:
-		sort.SliceStable(prefixMatches, func(i, j int) bool {
-			return prefixMatches[i].StartedAt.After(prefixMatches[j].StartedAt)
-		})
-		var b strings.Builder
-		fmt.Fprintf(&b, "ambiguous run id prefix %q matches multiple investigations:\n", runID)
-		for _, m := range prefixMatches {
-			fmt.Fprintf(&b, "  %s  %s\n", m.RunID, m.Topic)
-		}
-		return nil, errors.New(strings.TrimRight(b.String(), "\n"))
-	}
+	return ResolveByRunID(manifests, runID)
 }
 
 // printCleanSummary lists targets before the confirmation prompt.
