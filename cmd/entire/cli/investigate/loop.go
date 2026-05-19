@@ -30,8 +30,6 @@ package investigate
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -257,7 +255,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	state.Turn++
 	round := ((state.Turn - 1) / len(state.Agents)) + 1
 
-	preFindings := hashFile(ctx, in.FindingsDoc)
+	preFindings := fileFingerprint(ctx, in.FindingsDoc)
 
 	deps.Progress.TurnStarted(agentName, state.Turn, round, cfg.maxPerAgent)
 
@@ -304,7 +302,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	runErr := cmd.Run()
 	turnDuration := cfg.now().Sub(turnStart)
 
-	postFindings := hashFile(ctx, in.FindingsDoc)
+	postFindings := fileFingerprint(ctx, in.FindingsDoc)
 
 	if runErr != nil {
 		turn := TurnStance{
@@ -507,29 +505,24 @@ func recordFailureStance(state *RunState, round int, agent string, err error, no
 	state.UpdatedAt = now()
 }
 
-// hashFile returns the SHA-256 of the file at path as a hex string. Returns
-// the empty string when the file is missing or unreadable; in that case we
-// also emit a Debug log so operators can spot doc-path misconfiguration.
+// fileFingerprint returns "<size>:<unix-nanos-mtime>" for the file at path,
+// or the empty string when the file is missing or unreadable. Used to
+// drive PlanChanged: stat is enough to detect that the agent rewrote the
+// findings doc, and avoids re-hashing a growing document on every turn
+// (the SHA approach was O(turns² · size) bytes hashed across a run).
 //
 // We deliberately do not surface the error: the loop should keep running
 // even if the agent has not yet created the findings file (turn 1 of a new
 // run usually creates it from a template), and a missing file is detected
-// downstream by comparing the empty hash before vs. the post-turn hash.
-func hashFile(ctx context.Context, path string) string {
-	f, err := os.Open(path) //nolint:gosec // path comes from validated LoopInput
+// downstream by comparing the empty fingerprint before vs. after the turn.
+func fileFingerprint(ctx context.Context, path string) string {
+	info, err := os.Stat(path)
 	if err != nil {
-		logging.Debug(ctx, "investigate: hash file open failed",
+		logging.Debug(ctx, "investigate: stat findings doc failed",
 			slogString("path", path), sErr(err))
 		return ""
 	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		logging.Debug(ctx, "investigate: hash file read failed",
-			slogString("path", path), sErr(err))
-		return ""
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	return fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
 }
 
 // --- small slog helpers ---------------------------------------------------
