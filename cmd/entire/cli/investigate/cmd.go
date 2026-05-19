@@ -16,7 +16,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/spawn"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitexec"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/mdrender"
@@ -1050,14 +1050,10 @@ func newRunID() (string, error) {
 }
 
 // currentHeadSHA returns the current HEAD commit hash as a 40-char hex
-// string. Mirrors review.currentHeadSHA — kept local to avoid taking a
-// dependency on the review package.
+// string. Thin wrapper around gitexec.HeadSHA preserved so existing call
+// sites don't change.
 func currentHeadSHA(ctx context.Context, repoRoot string) (string, error) {
-	out, err := runGit(ctx, repoRoot, "rev-parse", "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
-	}
-	return strings.TrimSpace(out), nil
+	return gitexec.HeadSHA(ctx, repoRoot)
 }
 
 // wrapSilent applies the silent-error wrapper if it is non-nil. Mirrors
@@ -1086,21 +1082,8 @@ func composeAlwaysPrompt(configured, perRun string) string {
 	}
 }
 
-// runGit runs `git <args>` in repoDir and returns stdout as a string. We
-// keep a local copy rather than importing review's helper to avoid
-// coupling cmd/entire/cli/investigate to cmd/entire/cli/review.
+// runGit runs `git <args>` in repoDir and returns stdout as a string. Thin
+// wrapper around gitexec.Run preserved so existing call sites don't change.
 func runGit(ctx context.Context, repoRoot string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repoRoot
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		stderrTxt := strings.TrimSpace(stderr.String())
-		if stderrTxt != "" {
-			return "", fmt.Errorf("git %s: %w (stderr: %s)", args[0], err, stderrTxt)
-		}
-		return "", fmt.Errorf("git %s: %w", args[0], err)
-	}
-	return string(out), nil
+	return gitexec.Run(ctx, repoRoot, args...)
 }

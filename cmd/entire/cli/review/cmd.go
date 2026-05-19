@@ -14,13 +14,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 
 	"charm.land/huh/v2"
 	git "github.com/go-git/go-git/v6"
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/gitexec"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
@@ -832,9 +832,5 @@ var _ reviewtypes.AgentReviewer = (*perAgentConfiguredReviewer)(nil)
 
 // currentHeadSHA returns the current HEAD commit hash as a 40-char hex string.
 func currentHeadSHA(ctx context.Context, repoRoot string) (string, error) {
-	out, err := runGit(ctx, repoRoot, "rev-parse", "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
-	}
-	return strings.TrimSpace(out), nil
+	return gitexec.HeadSHA(ctx, repoRoot)
 }
