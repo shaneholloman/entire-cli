@@ -3,11 +3,13 @@ package checkpoint
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +139,49 @@ func TestV2ReadSessionContent_MissingTranscript_ReturnsError(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoTranscript)
 }
 
+func TestV2FetchRemoteFullRefsUsesStoreRepository(t *testing.T) {
+	// Cannot use t.Parallel because this test changes cwd to verify the store
+	// repository controls remote resolution.
+	ctx := context.Background()
+
+	remoteRepo := initTestRepo(t)
+	remoteRoot := repoRootForTest(t, remoteRepo)
+	remoteStore := NewV2GitStore(remoteRepo)
+	cpID := id.MustCheckpointID("a7a8a9aaabac")
+	require.NoError(t, remoteStore.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-remote",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"remote":true}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+
+	localRepo := initTestRepo(t)
+	localRoot := repoRootForTest(t, localRepo)
+	addOriginRemote(t, localRoot, remoteRoot)
+
+	cwdRemoteRepo := initTestRepo(t)
+	cwdRemoteRoot := repoRootForTest(t, cwdRemoteRepo)
+	cwdRepo := initTestRepo(t)
+	cwdRoot := repoRootForTest(t, cwdRepo)
+	addOriginRemote(t, cwdRoot, cwdRemoteRoot)
+	t.Chdir(cwdRoot)
+
+	localStore := NewV2GitStore(localRepo)
+	require.NoError(t, localStore.fetchRemoteFullRefs(ctx))
+
+	reopenedLocalRepo, err := git.PlainOpen(localRoot)
+	require.NoError(t, err)
+	_, err = reopenedLocalRepo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.NoError(t, err)
+
+	reopenedCWDRepo, err := git.PlainOpen(cwdRoot)
+	require.NoError(t, err)
+	_, err = reopenedCWDRepo.Reference(plumbing.ReferenceName(paths.V2FullCurrentRefName), true)
+	require.Error(t, err)
+}
+
 func TestV2ReadSessionMetadataAndPrompts_ReturnsWithoutTranscript(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
@@ -167,6 +212,24 @@ func TestV2ReadSessionMetadataAndPrompts_ReturnsWithoutTranscript(t *testing.T) 
 	assert.Equal(t, "session-meta-only", content.Metadata.SessionID)
 	assert.Contains(t, content.Prompts, "test prompt")
 	assert.Empty(t, content.Transcript)
+}
+
+func repoRootForTest(t *testing.T, repo *git.Repository) string {
+	t.Helper()
+
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+	return worktree.Filesystem().Root()
+}
+
+func addOriginRemote(t *testing.T, repoRoot, remoteRoot string) {
+	t.Helper()
+
+	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", remoteRoot)
+	cmd.Dir = repoRoot
+	cmd.Env = testutil.GitIsolatedEnv()
+	output, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "git remote add origin output:\n%s", output)
 }
 
 func TestV2ReadSessionMetadata_DoesNotRequireRawTranscript(t *testing.T) {

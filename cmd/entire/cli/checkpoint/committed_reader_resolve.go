@@ -222,15 +222,24 @@ func (r *DualCheckpointReader) ReadSessionMetadataAndPrompts(ctx context.Context
 		if v2CheckpointExists {
 			return nil, err
 		}
+		return r.readV1SessionMetadataAndPromptsByIndex(ctx, checkpointID, sessionIndex, err)
 	}
-	content, fallbackErr := r.v1.ReadSessionMetadataAndPrompts(ctx, checkpointID, sessionIndex)
-	if fallbackErr == nil {
-		return content, nil
+	sessionID, sessionIDErr := r.v2SessionID(ctx, checkpointID, sessionIndex)
+	if sessionIDErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
+		}
+		originalErr := fallbackReadError(err, "read v2 session metadata for v1 fallback", sessionIDErr)
+		summary, summaryErr := r.readV1FallbackSummary(ctx, checkpointID, originalErr)
+		if summaryErr != nil {
+			return nil, summaryErr
+		}
+		if !hasSingleV1FallbackSession(summary, sessionIndex) {
+			return nil, originalErr
+		}
+		return r.readV1SessionMetadataAndPromptsByIndex(ctx, checkpointID, sessionIndex, originalErr)
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
-	}
-	return nil, fallbackReadError(err, "read v1 session metadata and prompts", fallbackErr)
+	return r.readV1SessionMetadataAndPromptsByID(ctx, checkpointID, sessionID, err)
 }
 
 func (r *DualCheckpointReader) ReadSessionPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (string, error) {
@@ -390,6 +399,37 @@ func (r *DualCheckpointReader) readV1SessionMetadataByIndex(ctx context.Context,
 		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
 	}
 	return nil, fallbackReadError(originalErr, "read v1 session metadata", err)
+}
+
+func (r *DualCheckpointReader) readV1SessionMetadataAndPromptsByID(ctx context.Context, checkpointID id.CheckpointID, sessionID string, originalErr error) (*SessionContent, error) {
+	summary, err := r.readV1FallbackSummary(ctx, checkpointID, originalErr)
+	if err != nil {
+		return nil, err
+	}
+	if summary == nil {
+		return nil, originalErr
+	}
+	for i := range len(summary.Sessions) {
+		content, readErr := r.v1.ReadSessionMetadataAndPrompts(ctx, checkpointID, i)
+		if readErr != nil {
+			continue
+		}
+		if content != nil && content.Metadata.SessionID == sessionID {
+			return content, nil
+		}
+	}
+	return nil, fallbackReadError(originalErr, "read v1 fallback session metadata and prompts", fmt.Errorf("session %q not found in checkpoint %s", sessionID, checkpointID))
+}
+
+func (r *DualCheckpointReader) readV1SessionMetadataAndPromptsByIndex(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int, originalErr error) (*SessionContent, error) {
+	content, err := r.v1.ReadSessionMetadataAndPrompts(ctx, checkpointID, sessionIndex)
+	if err == nil {
+		return content, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr //nolint:wrapcheck // Propagating context cancellation
+	}
+	return nil, fallbackReadError(originalErr, "read v1 session metadata and prompts", err)
 }
 
 func (r *DualCheckpointReader) readV1FallbackSummary(ctx context.Context, checkpointID id.CheckpointID, originalErr error) (*CheckpointSummary, error) {

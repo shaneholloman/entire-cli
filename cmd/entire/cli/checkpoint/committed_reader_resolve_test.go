@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -232,6 +233,52 @@ func TestDualCheckpointReader_ReadSessionMetadataAndPromptsDoesNotUseSingleV1Fal
 	require.Nil(t, content)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
+func TestDualCheckpointReader_ReadSessionMetadataAndPromptsDoesNotFallbackByIndexWhenV2SessionMetadataMalformed(t *testing.T) {
+	t.Parallel()
+
+	repo := initTestRepo(t)
+	v1Store := NewGitStore(repo)
+	v2Store := NewV2GitStore(repo)
+	ctx := context.Background()
+	cpID := id.MustCheckpointID("909090909090")
+
+	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-a",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v1-session-a"}` + "\n")),
+		Prompts:      []string{"wrong prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-b",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v1-session-b"}` + "\n")),
+		Prompts:      []string{"right prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+	require.NoError(t, v2Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-b",
+		Strategy:          "manual-commit",
+		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
+		Prompts:           []string{"v2 prompt"},
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	}))
+	corruptV2MainSessionMetadata(t, repo, cpID, 0)
+
+	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
+
+	content, err := reader.ReadSessionMetadataAndPrompts(ctx, cpID, 0)
+	require.Nil(t, content)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to parse session metadata")
 }
 
 func TestDualCheckpointReader_ReadSessionContentReturnsV2AndFallbackErrors(t *testing.T) {
@@ -608,6 +655,59 @@ func corruptV2MainMetadata(t *testing.T, repo *git.Repository, cpID id.Checkpoin
 
 	commitHash, err := CreateCommit(context.Background(), repo, rootTreeHash, parentHash,
 		"corrupt metadata for test", "Test", "test@test.com")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Storer.SetReference(
+		plumbing.NewHashReference(refName, commitHash)))
+}
+
+func corruptV2MainSessionMetadata(t *testing.T, repo *git.Repository, cpID id.CheckpointID, sessionIndex int) {
+	t.Helper()
+
+	refName := plumbing.ReferenceName(paths.V2MainRefName)
+	ref, err := repo.Storer.Reference(refName)
+	require.NoError(t, err)
+	parentHash := ref.Hash()
+
+	parentCommit, err := repo.CommitObject(parentHash)
+	require.NoError(t, err)
+	rootTree, err := parentCommit.Tree()
+	require.NoError(t, err)
+
+	cpTree, err := rootTree.Tree(cpID.Path())
+	require.NoError(t, err)
+	metadataFile, err := cpTree.File(paths.MetadataFileName)
+	require.NoError(t, err)
+
+	garbageBlob, err := CreateBlobFromContent(repo, []byte(`{invalid json`))
+	require.NoError(t, err)
+
+	sessionTreeHash, err := storeTree(repo, []object.TreeEntry{
+		{Name: paths.MetadataFileName, Mode: filemode.Regular, Hash: garbageBlob},
+	})
+	require.NoError(t, err)
+
+	cpTreeHash, err := storeTree(repo, []object.TreeEntry{
+		{Name: strconv.Itoa(sessionIndex), Mode: filemode.Dir, Hash: sessionTreeHash},
+		{Name: paths.MetadataFileName, Mode: filemode.Regular, Hash: metadataFile.Hash},
+	})
+	require.NoError(t, err)
+
+	parts := strings.SplitN(cpID.Path(), "/", 2)
+	require.Len(t, parts, 2)
+
+	shardTreeHash, err := storeTree(repo, []object.TreeEntry{
+		{Name: parts[1], Mode: filemode.Dir, Hash: cpTreeHash},
+	})
+	require.NoError(t, err)
+
+	rootTreeHash, err := storeTree(repo, []object.TreeEntry{
+		{Name: parts[0], Mode: filemode.Dir, Hash: shardTreeHash},
+	})
+	require.NoError(t, err)
+
+	commitHash, err := CreateCommit(context.Background(), repo, rootTreeHash, parentHash,
+		"corrupt v2 session metadata for test", "Test", "test@test.com")
 	require.NoError(t, err)
 
 	require.NoError(t, repo.Storer.SetReference(

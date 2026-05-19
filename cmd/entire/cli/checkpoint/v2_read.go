@@ -401,8 +401,13 @@ func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	fetchTarget := v2FullRefsFetchTarget(ctx)
-	output, err := remote.LsRemote(ctx, fetchTarget, paths.V2FullRefPrefix+"*")
+	repoRoot, _, err := s.gs.repoDirs(ctx)
+	if err != nil {
+		return err
+	}
+
+	fetchTarget := v2FullRefsFetchTarget(ctx, repoRoot)
+	output, err := remote.LsRemoteInDir(ctx, repoRoot, fetchTarget, paths.V2FullRefPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("ls-remote failed: %w", err)
 	}
@@ -435,6 +440,7 @@ func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
 		RefSpecs: refSpecs,
 		NoTags:   true,
 		NoFilter: true,
+		Dir:      repoRoot,
 	}); fetchErr != nil {
 		return fmt.Errorf("fetch failed: %s: %w", fetchOutput, fetchErr)
 	}
@@ -442,8 +448,8 @@ func (s *V2GitStore) fetchRemoteFullRefs(ctx context.Context) error {
 	return nil
 }
 
-func v2FullRefsFetchTarget(ctx context.Context) string {
-	target, err := remote.FetchURL(ctx)
+func v2FullRefsFetchTarget(ctx context.Context, repoRoot string) string {
+	target, err := remote.FetchURL(ctx, remote.FetchURLOptions{WorktreeRoot: repoRoot})
 	if err == nil && target != "" {
 		return target
 	}
