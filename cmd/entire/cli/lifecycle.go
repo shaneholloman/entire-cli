@@ -1110,132 +1110,132 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 	}
 }
 
-// adoptReviewEnv tags the session as a review session when ENTIRE_REVIEW_*
-// env vars are present on the current process. `entire review` sets these
-// vars on the spawned agent process; the lifecycle hook (a child of the agent)
-// inherits them naturally. Agent and starting-SHA checks protect against stale
-// ENTIRE_REVIEW_* values inherited from a parent shell or a nested invocation.
+// envAdoptionSpec carries the kind-specific bits of env-driven session
+// tagging. The shared scaffolding (idempotence guard, SESSION/AGENT/
+// STARTING_SHA gates) lives in tryAdoptEnv; apply runs only after the gates
+// pass and is responsible for decoding the kind-specific payload, mutating
+// state.Kind and the related fields, and emitting the success log.
+type envAdoptionSpec struct {
+	kindLabel      string // "review" or "investigate" — log prefix
+	envSession     string
+	envAgent       string
+	envStartingSHA string
+	apply          func(ctx context.Context, state *session.State, expectedAgent string)
+}
+
+// tryAdoptEnv runs the shared env-adoption protocol for a launched-agent
+// process and delegates kind-specific decode/apply to spec.apply.
 //
-// Adoption is idempotent: if state.Kind is already set (subsequent turns of
-// a review session) the function returns without modifying state.
+// The protocol:
+//  1. If state.Kind is already set, do nothing — adoption is idempotent
+//     across turns, and a session is review OR investigate, not both.
+//  2. envSession must be "1". `entire review` / `entire investigate` set
+//     this on the spawned agent process; the lifecycle hook (a child of
+//     the agent) inherits it naturally.
+//  3. envAgent must match the hook's agent — protects against stale env
+//     vars inherited from a parent shell or a nested invocation.
+//  4. envStartingSHA must match the session's BaseCommit — protects
+//     against env vars surviving a commit boundary.
 //
-// Failure modes are silent at the user level but logged for diagnostics:
-//   - EnvSession unset or not "1": not a review session; return, no tagging.
-//   - EnvAgent does not match the hook agent: leave session untagged.
-//   - EnvStartingSHA does not match the session base commit: leave untagged.
-//   - EnvSkills malformed JSON: log warning, leave session untagged to avoid
-//     corrupting metadata with junk data.
-func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent string) {
-	// Already tagged — don't re-apply on subsequent turns.
+// All failures log at debug/warn and leave state untagged.
+func tryAdoptEnv(ctx context.Context, state *session.State, expectedAgent string, spec envAdoptionSpec) {
 	if state.Kind != "" {
 		return
 	}
-	if envSession := os.Getenv(review.EnvSession); envSession != "1" {
-		logging.Debug(ctx, "review env adoption skipped: ENTIRE_REVIEW_SESSION is not \"1\"",
+	if envSession := os.Getenv(spec.envSession); envSession != "1" {
+		logging.Debug(ctx, spec.kindLabel+" env adoption skipped: "+spec.envSession+" is not \"1\"",
 			slog.String("expected_agent", expectedAgent),
 			slog.String("observed_value", envSession))
 		return
 	}
-	envAgent := os.Getenv(review.EnvAgent)
+	envAgent := os.Getenv(spec.envAgent)
 	if envAgent != expectedAgent {
-		logging.Warn(ctx, "review env adoption skipped: agent mismatch",
+		logging.Warn(ctx, spec.kindLabel+" env adoption skipped: agent mismatch",
 			slog.String("env_agent", envAgent),
 			slog.String("hook_agent", expectedAgent))
 		return
 	}
-	startingSHA := os.Getenv(review.EnvStartingSHA)
+	startingSHA := os.Getenv(spec.envStartingSHA)
 	if startingSHA == "" || state.BaseCommit == "" || startingSHA != state.BaseCommit {
-		logging.Warn(ctx, "review env adoption skipped: starting SHA mismatch",
+		logging.Warn(ctx, spec.kindLabel+" env adoption skipped: starting SHA mismatch",
 			slog.String("env_starting_sha", startingSHA),
 			slog.String("state_base_commit", state.BaseCommit))
 		return
 	}
-	skills, err := review.DecodeSkills(os.Getenv(review.EnvSkills))
-	if err != nil {
-		logging.Warn(ctx, "review env adoption failed: invalid skills JSON",
-			slog.String("err", err.Error()))
-		return
-	}
-	state.Kind = session.KindAgentReview
-	state.ReviewSkills = skills
-	state.ReviewPrompt = os.Getenv(review.EnvPrompt)
-	logging.Debug(ctx, "adopted review env",
-		slog.String("agent", envAgent),
-		slog.Int("skill_count", len(skills)))
+	spec.apply(ctx, state, envAgent)
+}
+
+// adoptReviewEnv tags the session as a review session when ENTIRE_REVIEW_*
+// env vars are present on the current process.
+func adoptReviewEnv(ctx context.Context, state *session.State, expectedAgent string) {
+	tryAdoptEnv(ctx, state, expectedAgent, envAdoptionSpec{
+		kindLabel:      "review",
+		envSession:     review.EnvSession,
+		envAgent:       review.EnvAgent,
+		envStartingSHA: review.EnvStartingSHA,
+		apply: func(ctx context.Context, state *session.State, envAgent string) {
+			skills, err := review.DecodeSkills(os.Getenv(review.EnvSkills))
+			if err != nil {
+				logging.Warn(ctx, "review env adoption failed: invalid skills JSON",
+					slog.String("err", err.Error()))
+				return
+			}
+			state.Kind = session.KindAgentReview
+			state.ReviewSkills = skills
+			state.ReviewPrompt = os.Getenv(review.EnvPrompt)
+			logging.Debug(ctx, "adopted review env",
+				slog.String("agent", envAgent),
+				slog.Int("skill_count", len(skills)))
+		},
+	})
 }
 
 // adoptInvestigateEnv tags the session as an investigation session when
-// ENTIRE_INVESTIGATE_* env vars are present on the current process. Mirrors
-// adoptReviewEnv exactly, but for investigate. Idempotent: if state.Kind is
-// already set (e.g., a review session inherited from an outer process or a
-// re-invocation of this function on the same state), the function returns
-// without modifying state — a session is review OR investigate, not both.
+// ENTIRE_INVESTIGATE_* env vars are present on the current process.
 //
 // Adoption ordering: adoptReviewEnv runs first; if both env families are
 // somehow set on the same process, review wins. Production strips
 // ENTIRE_REVIEW_* in AppendInvestigateEnv before spawning each per-turn
 // agent process, so this conflict cannot happen for fresh investigate spawns
-// — but the short-circuit on state.Kind != "" makes the conflict harmless if
-// it ever arises.
-//
-// Failure modes are silent at the user level but logged for diagnostics:
-//   - EnvSession unset or not "1": not an investigate session; return.
-//   - EnvAgent does not match the hook agent: leave session untagged.
-//   - EnvStartingSHA does not match the session base commit: leave untagged.
-//   - EnvRound or EnvTurn not parseable as int: log warning, leave untagged.
+// — but tryAdoptEnv's short-circuit on state.Kind != "" makes the conflict
+// harmless if it ever arises.
 func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgent string) {
-	if state.Kind != "" {
-		return
-	}
-	if envSession := os.Getenv(investigate.EnvSession); envSession != "1" {
-		logging.Debug(ctx, "investigate env adoption skipped: ENTIRE_INVESTIGATE_SESSION is not \"1\"",
-			slog.String("expected_agent", expectedAgent),
-			slog.String("observed_value", envSession))
-		return
-	}
-	envAgent := os.Getenv(investigate.EnvAgent)
-	if envAgent != expectedAgent {
-		logging.Warn(ctx, "investigate env adoption skipped: agent mismatch",
-			slog.String("env_agent", envAgent),
-			slog.String("hook_agent", expectedAgent))
-		return
-	}
-	startingSHA := os.Getenv(investigate.EnvStartingSHA)
-	if startingSHA == "" || state.BaseCommit == "" || startingSHA != state.BaseCommit {
-		logging.Warn(ctx, "investigate env adoption skipped: starting SHA mismatch",
-			slog.String("env_starting_sha", startingSHA),
-			slog.String("state_base_commit", state.BaseCommit))
-		return
-	}
-	round, roundErr := strconv.Atoi(os.Getenv(investigate.EnvRound))
-	turn, turnErr := strconv.Atoi(os.Getenv(investigate.EnvTurn))
-	if roundErr != nil || turnErr != nil {
-		logging.Warn(ctx, "investigate env adoption failed: invalid round/turn",
-			slog.String("round_err", errString(roundErr)),
-			slog.String("turn_err", errString(turnErr)))
-		return
-	}
-	runID := os.Getenv(investigate.EnvRunID)
-	// Reject empty or malformed RunID — downstream condensation joins
-	// session metadata by run ID, and tagging a session with no/invalid
-	// ID would leak into checkpoint metadata as junk data. Better to
-	// leave the session untagged and warn.
-	if !investigate.IsValidRunID(runID) {
-		logging.Warn(ctx, "investigate env adoption skipped: invalid run id",
-			slog.String("env_run_id", runID))
-		return
-	}
-	state.Kind = session.KindAgentInvestigate
-	state.InvestigateRunID = runID
-	state.InvestigateRound = round
-	state.InvestigateTurn = turn
-	state.InvestigateTopic = os.Getenv(investigate.EnvTopic)
-	state.InvestigatePrompt = os.Getenv(investigate.EnvPrompt)
-	logging.Debug(ctx, "adopted investigate env",
-		slog.String("agent", envAgent),
-		slog.String("run_id", state.InvestigateRunID),
-		slog.Int("round", round),
-		slog.Int("turn", turn))
+	tryAdoptEnv(ctx, state, expectedAgent, envAdoptionSpec{
+		kindLabel:      "investigate",
+		envSession:     investigate.EnvSession,
+		envAgent:       investigate.EnvAgent,
+		envStartingSHA: investigate.EnvStartingSHA,
+		apply: func(ctx context.Context, state *session.State, envAgent string) {
+			round, roundErr := strconv.Atoi(os.Getenv(investigate.EnvRound))
+			turn, turnErr := strconv.Atoi(os.Getenv(investigate.EnvTurn))
+			if roundErr != nil || turnErr != nil {
+				logging.Warn(ctx, "investigate env adoption failed: invalid round/turn",
+					slog.String("round_err", errString(roundErr)),
+					slog.String("turn_err", errString(turnErr)))
+				return
+			}
+			runID := os.Getenv(investigate.EnvRunID)
+			// Reject empty or malformed RunID — downstream condensation joins
+			// session metadata by run ID, and tagging a session with no/invalid
+			// ID would leak into checkpoint metadata as junk data.
+			if !investigate.IsValidRunID(runID) {
+				logging.Warn(ctx, "investigate env adoption skipped: invalid run id",
+					slog.String("env_run_id", runID))
+				return
+			}
+			state.Kind = session.KindAgentInvestigate
+			state.InvestigateRunID = runID
+			state.InvestigateRound = round
+			state.InvestigateTurn = turn
+			state.InvestigateTopic = os.Getenv(investigate.EnvTopic)
+			state.InvestigatePrompt = os.Getenv(investigate.EnvPrompt)
+			logging.Debug(ctx, "adopted investigate env",
+				slog.String("agent", envAgent),
+				slog.String("run_id", state.InvestigateRunID),
+				slog.Int("round", round),
+				slog.Int("turn", turn))
+		},
+	})
 }
 
 // errString returns "" for a nil error, err.Error() otherwise. Local helper
