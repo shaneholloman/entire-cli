@@ -149,8 +149,8 @@ func composeFixPrompt(manifest LocalManifest, findings string) string {
 	b.WriteString("grounded context to plan the next step. Do not re-investigate the same\n")
 	b.WriteString("question — assume the findings are correct unless you find direct\n")
 	b.WriteString("evidence to the contrary.\n\n")
-	if topic := strings.TrimSpace(manifest.Topic); topic != "" {
-		fmt.Fprintf(&b, "Topic: %s\n", topic)
+	if prompt := strings.TrimSpace(manifest.Topic); prompt != "" {
+		fmt.Fprintf(&b, "Investigation: %s\n", prompt)
 	}
 	if manifest.RunID != "" {
 		fmt.Fprintf(&b, "Run ID: %s\n", manifest.RunID)

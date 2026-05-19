@@ -120,13 +120,13 @@ func ambiguousShowError(candidates []LocalManifest, runID string) error {
 	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
-// printShowSummary writes the header block (topic, agents, outcome,
+// printShowSummary writes the header block (prompt, agents, outcome,
 // timestamps, stances per agent) to w. Keeps the format compact and
 // stable so users can grep its output.
 func printShowSummary(w io.Writer, m LocalManifest) {
 	fmt.Fprintf(w, "Investigation %s\n", m.RunID)
 	if m.Topic != "" {
-		fmt.Fprintf(w, "Topic:    %s\n", m.Topic)
+		fmt.Fprintf(w, "Prompt:   %s\n", m.Topic)
 	}
 	if len(m.Agents) > 0 {
 		fmt.Fprintf(w, "Agents:   %s\n", strings.Join(m.Agents, ", "))

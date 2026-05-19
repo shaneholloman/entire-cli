@@ -155,11 +155,11 @@ func printCleanSummary(w io.Writer, targets []LocalManifest, all bool) {
 		return sorted[i].StartedAt.After(sorted[j].StartedAt)
 	})
 	for _, m := range sorted {
-		topic := m.Topic
-		if topic == "" {
-			topic = "(no topic)"
+		prompt := m.Topic
+		if prompt == "" {
+			prompt = "(no prompt)"
 		}
-		fmt.Fprintf(w, "  %s  %s\n", m.RunID, topic)
+		fmt.Fprintf(w, "  %s  %s\n", m.RunID, prompt)
 	}
 }
 

@@ -76,8 +76,8 @@ func TestRunShow_SingleManifestDefaults(t *testing.T) {
 	if !strings.Contains(s, "Investigation abcdef012345") {
 		t.Errorf("output missing header: %q", s)
 	}
-	if !strings.Contains(s, "Topic:    only topic") {
-		t.Errorf("output missing topic: %q", s)
+	if !strings.Contains(s, "Prompt:   only topic") {
+		t.Errorf("output missing prompt: %q", s)
 	}
 	if !strings.Contains(s, "Outcome:  quorum") {
 		t.Errorf("output missing outcome: %q", s)

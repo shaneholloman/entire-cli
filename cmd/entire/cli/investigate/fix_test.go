@@ -75,7 +75,7 @@ func TestRunFix_PicksMostRecent(t *testing.T) {
 	if !rec.called {
 		t.Fatal("Launch was not called")
 	}
-	if !strings.Contains(rec.prompt, "Topic: newest topic") {
+	if !strings.Contains(rec.prompt, "Investigation: newest topic") {
 		t.Errorf("prompt did not reference newest topic: %q", rec.prompt)
 	}
 	if !strings.Contains(rec.prompt, "Run ID: bbbbbbbbbbbb") {
@@ -103,7 +103,7 @@ func TestRunFix_ResolvesByRunID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFix: %v", err)
 	}
-	if !strings.Contains(rec.prompt, "Topic: older topic") {
+	if !strings.Contains(rec.prompt, "Investigation: older topic") {
 		t.Errorf("prompt should target the requested run, got: %q", rec.prompt)
 	}
 }
@@ -201,8 +201,8 @@ func TestRunFix_ComposesPromptBody(t *testing.T) {
 	if !strings.Contains(rec.prompt, strings.TrimSpace(findings)) {
 		t.Errorf("prompt missing findings body verbatim: %q", rec.prompt)
 	}
-	if !strings.Contains(rec.prompt, "Topic: Why is checkout flaky?") {
-		t.Errorf("prompt missing topic line: %q", rec.prompt)
+	if !strings.Contains(rec.prompt, "Investigation: Why is checkout flaky?") {
+		t.Errorf("prompt missing investigation line: %q", rec.prompt)
 	}
 }
 
