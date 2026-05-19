@@ -70,6 +70,10 @@ var runGhFn = runGhExec
 // runGhExec is the production runGhFn implementation. Returns gh's stdout
 // bytes, or an error wrapping any exec failure with stderr captured. Returns
 // ErrGhNotFound when `gh` is missing from PATH.
+//
+// The full args are passed to gh as-is, but the error returned to callers
+// redacts any URL userinfo so an OAuth token embedded in --issue-link
+// (https://user:TOKEN@github.com/...) never reaches stderr or logs.
 func runGhExec(ctx context.Context, args ...string) ([]byte, error) {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return nil, ErrGhNotFound
@@ -79,13 +83,36 @@ func runGhExec(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		safeArgs := redactArgsForError(args)
 		stderrStr := strings.TrimSpace(stderr.String())
 		if stderrStr != "" {
-			return nil, fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, stderrStr)
+			return nil, fmt.Errorf("gh %s: %w: %s", safeArgs, err, stderrStr)
 		}
-		return nil, fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+		return nil, fmt.Errorf("gh %s: %w", safeArgs, err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// redactArgsForError joins gh CLI args with spaces, replacing any arg that
+// parses as a URL with userinfo by its Redacted() form. Used to keep
+// credentials out of error strings and logs without changing what gets
+// passed to gh itself.
+func redactArgsForError(args []string) string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = redactURLUserinfo(a)
+	}
+	return strings.Join(out, " ")
+}
+
+// redactURLUserinfo returns s with any URL userinfo elided. Returns s
+// unchanged when it does not parse as a URL or has no userinfo component.
+func redactURLUserinfo(s string) string {
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	return u.Redacted()
 }
 
 // ResolveIssueLink resolves a GitHub issue or PR URL via the gh CLI and

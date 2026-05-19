@@ -237,6 +237,50 @@ func TestResolveIssueLink_RedactsCredentialsInErrors(t *testing.T) {
 	}
 }
 
+// TestRedactArgsForError_StripsURLCredentials covers the production error
+// path in runGhExec: args are joined into the wrapped error returned to
+// the caller, and any URL embedding userinfo must be redacted before it
+// reaches stderr or logs. This is the path the prior
+// TestResolveIssueLink_RedactsCredentialsInErrors test missed (it stubbed
+// runGhFn entirely, bypassing the error-format code).
+func TestRedactArgsForError_StripsURLCredentials(t *testing.T) {
+	t.Parallel()
+	const secret = "ghp_supersecrettoken"
+	args := []string{
+		"issue", "view",
+		"https://user:" + secret + "@github.com/owner/repo/issues/42",
+		"--json", "title,body",
+	}
+	got := redactArgsForError(args)
+	if strings.Contains(got, secret) {
+		t.Fatalf("redacted args still contain credential: %s", got)
+	}
+	// The redacted URL keeps the structure visible; only the credential
+	// portion is elided — useful debugging signal stays intact.
+	if !strings.Contains(got, "github.com/owner/repo/issues/42") {
+		t.Errorf("redacted args lost the URL path: %s", got)
+	}
+}
+
+// TestRedactURLUserinfo covers the leaf helper directly.
+func TestRedactURLUserinfo(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"https://user:secret@github.com/owner/repo", "https://user:xxxxx@github.com/owner/repo"},
+		{"https://github.com/owner/repo", "https://github.com/owner/repo"}, // no userinfo, unchanged
+		{"--json", "--json"},       // not a URL, unchanged
+		{"plain-arg", "plain-arg"}, // not a URL, unchanged
+	}
+	for _, c := range cases {
+		if got := redactURLUserinfo(c.in); got != c.want {
+			t.Errorf("redactURLUserinfo(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // TestResolveIssueLink_FencesUntrustedBody verifies that an adversarial
 // issue body containing prompt-injection payloads (fake "## Turn N"
 // headings, IGNORE-PREVIOUS-INSTRUCTIONS strings, embedded </untrusted>
