@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strconv"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/spawn"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/uiform"
 )
 
 // AgentChoice is one row in the investigate picker. Name is the agent
@@ -32,16 +32,11 @@ type AgentChoice struct {
 	Label string
 }
 
-// newAccessibleForm creates a huh form with accessibility mode enabled
-// when the ACCESSIBLE env var is set. Mirrors cli.NewAccessibleForm
-// without requiring an import of the cli package (which would be
-// circular).
+// newAccessibleForm creates a huh form with Entire's standard theme,
+// switching to accessibility mode when ACCESSIBLE is set. Thin wrapper
+// around uiform.New preserved so existing call sites don't change.
 func newAccessibleForm(groups ...*huh.Group) *huh.Form {
-	form := huh.NewForm(groups...).WithTheme(huh.ThemeFunc(huh.ThemeDracula))
-	if os.Getenv("ACCESSIBLE") != "" {
-		form = form.WithAccessible(true)
-	}
-	return form
+	return uiform.New(groups...)
 }
 
 // ConfirmFirstRunSetup prints a banner framing the picker as first-run
