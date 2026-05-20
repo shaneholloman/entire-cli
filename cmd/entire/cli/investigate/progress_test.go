@@ -3,7 +3,6 @@ package investigate
 import (
 	"bytes"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -43,17 +42,18 @@ func TestTextProgressSink_NilWriter(t *testing.T) {
 	sink.RunFinished(OutcomeQuorum)
 }
 
-// TestNullProgressSink_ImplementsInterface is a compile-time guard;
-// nullProgressSink is the default when LoopDeps.Progress is nil. Failures
-// taking shape, duration, or error arguments would be regressions.
-func TestNullProgressSink_ImplementsInterface(t *testing.T) {
+// Compile-time guard: nullProgressSink must satisfy ProgressSink so the
+// loop can use it as the default when LoopDeps.Progress is nil.
+var _ ProgressSink = nullProgressSink{}
+
+// TestNullProgressSink_NoPanic verifies the default sink's methods are
+// safe to call. A panic here would break any loop run that doesn't wire a
+// progress sink.
+func TestNullProgressSink_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	var s ProgressSink = nullProgressSink{}
+	s := nullProgressSink{}
 	s.TurnStarted("a", 1, 1, 1)
 	s.TurnFinished("a", 1, stanceReject, 0, true, errors.New("x"), "")
 	s.RunFinished(OutcomeStalled)
-	if !strings.HasPrefix(string(OutcomeQuorum), "qu") {
-		t.Errorf("sanity check on OutcomeQuorum failed")
-	}
 }
