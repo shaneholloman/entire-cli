@@ -276,10 +276,7 @@ func runOneTurn(ctx context.Context, cfg turnConfig, state *RunState) turnOutcom
 	env := AppendInvestigateEnv(os.Environ(), AppendOptions{
 		AgentName:   agentName,
 		RunID:       in.RunID,
-		Round:       round,
-		Turn:        state.Turn,
 		Topic:       in.Topic,
-		Prompt:      prompt,
 		FindingsDoc: in.FindingsDoc,
 		StateDoc:    cfg.stateDoc,
 		StartingSHA: in.StartingSHA,

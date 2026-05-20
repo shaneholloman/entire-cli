@@ -4338,12 +4338,9 @@ func TestCommittedMetadata_ReviewFields(t *testing.T) {
 func TestCommittedMetadata_InvestigateFields(t *testing.T) {
 	t.Parallel()
 	m := CommittedMetadata{
-		Kind:              "agent_investigate",
-		InvestigateRunID:  "abcdef012345",
-		InvestigateRound:  3,
-		InvestigateTurn:   7,
-		InvestigateTopic:  "Why is checkout flaky?",
-		InvestigatePrompt: "Investigate the checkout flake.",
+		Kind:             "agent_investigate",
+		InvestigateRunID: "abcdef012345",
+		InvestigateTopic: "Why is checkout flaky?",
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -4360,17 +4357,8 @@ func TestCommittedMetadata_InvestigateFields(t *testing.T) {
 	if got, ok := raw["investigate_run_id"].(string); !ok || got != "abcdef012345" {
 		t.Errorf(`expected "investigate_run_id":"abcdef012345", got %v`, raw["investigate_run_id"])
 	}
-	if got, ok := raw["investigate_round"].(float64); !ok || got != 3 {
-		t.Errorf(`expected "investigate_round":3, got %v`, raw["investigate_round"])
-	}
-	if got, ok := raw["investigate_turn"].(float64); !ok || got != 7 {
-		t.Errorf(`expected "investigate_turn":7, got %v`, raw["investigate_turn"])
-	}
 	if got, ok := raw["investigate_topic"].(string); !ok || got != "Why is checkout flaky?" {
 		t.Errorf(`expected "investigate_topic" present, got %v`, raw["investigate_topic"])
-	}
-	if got, ok := raw["investigate_prompt"].(string); !ok || got != "Investigate the checkout flake." {
-		t.Errorf(`expected "investigate_prompt" present, got %v`, raw["investigate_prompt"])
 	}
 
 	// Zero-value CommittedMetadata must omit all the investigate keys
@@ -4380,7 +4368,7 @@ func TestCommittedMetadata_InvestigateFields(t *testing.T) {
 		t.Fatalf("marshal zero: %v", err)
 	}
 	zs := string(bZero)
-	for _, key := range []string{"investigate_run_id", "investigate_round", "investigate_turn", "investigate_topic", "investigate_prompt"} {
+	for _, key := range []string{"investigate_run_id", "investigate_topic"} {
 		if strings.Contains(zs, `"`+key+`"`) {
 			t.Errorf(`expected zero-value CommittedMetadata to omit %q, got %s`, key, zs)
 		}
@@ -4568,20 +4556,17 @@ func TestWriteCommitted_PropagatesHasInvestigation(t *testing.T) {
 
 	// First session: investigate session, sets HasInvestigation=true.
 	if err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
-		CheckpointID:      checkpointID,
-		SessionID:         "investigate-session-1",
-		Strategy:          "manual-commit",
-		Agent:             agent.AgentTypeClaudeCode,
-		Transcript:        redact.AlreadyRedacted([]byte("transcript A")),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
-		Kind:              "agent_investigate",
-		HasInvestigation:  true,
-		InvestigateRunID:  "0123456789ab",
-		InvestigateRound:  1,
-		InvestigateTurn:   1,
-		InvestigateTopic:  "Why is X flaky?",
-		InvestigatePrompt: "Investigate the X flake.",
+		CheckpointID:     checkpointID,
+		SessionID:        "investigate-session-1",
+		Strategy:         "manual-commit",
+		Agent:            agent.AgentTypeClaudeCode,
+		Transcript:       redact.AlreadyRedacted([]byte("transcript A")),
+		AuthorName:       "Test",
+		AuthorEmail:      "test@test.com",
+		Kind:             "agent_investigate",
+		HasInvestigation: true,
+		InvestigateRunID: "0123456789ab",
+		InvestigateTopic: "Why is X flaky?",
 	}); err != nil {
 		t.Fatalf("first WriteCommitted: %v", err)
 	}
@@ -4623,20 +4608,17 @@ func TestCommittedMetadata_InvestigateFieldsRoundTrip(t *testing.T) {
 	checkpointID := id.MustCheckpointID("11223344aabb")
 
 	if err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
-		CheckpointID:      checkpointID,
-		SessionID:         "investigate-roundtrip",
-		Strategy:          "manual-commit",
-		Agent:             agent.AgentTypeClaudeCode,
-		Transcript:        redact.AlreadyRedacted([]byte("transcript")),
-		AuthorName:        "Test",
-		AuthorEmail:       "test@test.com",
-		Kind:              "agent_investigate",
-		HasInvestigation:  true,
-		InvestigateRunID:  "abcdef012345",
-		InvestigateRound:  3,
-		InvestigateTurn:   7,
-		InvestigateTopic:  "topic-x",
-		InvestigatePrompt: "prompt-y",
+		CheckpointID:     checkpointID,
+		SessionID:        "investigate-roundtrip",
+		Strategy:         "manual-commit",
+		Agent:            agent.AgentTypeClaudeCode,
+		Transcript:       redact.AlreadyRedacted([]byte("transcript")),
+		AuthorName:       "Test",
+		AuthorEmail:      "test@test.com",
+		Kind:             "agent_investigate",
+		HasInvestigation: true,
+		InvestigateRunID: "abcdef012345",
+		InvestigateTopic: "topic-x",
 	}); err != nil {
 		t.Fatalf("WriteCommitted: %v", err)
 	}
@@ -4648,16 +4630,7 @@ func TestCommittedMetadata_InvestigateFieldsRoundTrip(t *testing.T) {
 	if meta.InvestigateRunID != "abcdef012345" {
 		t.Errorf("InvestigateRunID: got %q", meta.InvestigateRunID)
 	}
-	if meta.InvestigateRound != 3 {
-		t.Errorf("InvestigateRound: got %d, want 3", meta.InvestigateRound)
-	}
-	if meta.InvestigateTurn != 7 {
-		t.Errorf("InvestigateTurn: got %d, want 7", meta.InvestigateTurn)
-	}
 	if meta.InvestigateTopic != "topic-x" {
 		t.Errorf("InvestigateTopic: got %q", meta.InvestigateTopic)
-	}
-	if meta.InvestigatePrompt != "prompt-y" {
-		t.Errorf("InvestigatePrompt: got %q", meta.InvestigatePrompt)
 	}
 }

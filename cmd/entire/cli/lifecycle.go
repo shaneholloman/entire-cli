@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -432,10 +431,7 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 			state.ReviewPrompt == before.ReviewPrompt &&
 			slices.Equal(state.ReviewSkills, before.ReviewSkills) &&
 			state.InvestigateRunID == before.InvestigateRunID &&
-			state.InvestigateRound == before.InvestigateRound &&
-			state.InvestigateTurn == before.InvestigateTurn &&
-			state.InvestigateTopic == before.InvestigateTopic &&
-			state.InvestigatePrompt == before.InvestigatePrompt {
+			state.InvestigateTopic == before.InvestigateTopic {
 			return strategy.ErrMutationSkip
 		}
 		return nil
@@ -1206,14 +1202,6 @@ func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgen
 		envAgent:       investigate.EnvAgent,
 		envStartingSHA: investigate.EnvStartingSHA,
 		apply: func(ctx context.Context, state *session.State, envAgent string) {
-			round, roundErr := strconv.Atoi(os.Getenv(investigate.EnvRound))
-			turn, turnErr := strconv.Atoi(os.Getenv(investigate.EnvTurn))
-			if roundErr != nil || turnErr != nil {
-				logging.Warn(ctx, "investigate env adoption failed: invalid round/turn",
-					slog.String("round_err", errString(roundErr)),
-					slog.String("turn_err", errString(turnErr)))
-				return
-			}
 			runID := os.Getenv(investigate.EnvRunID)
 			// Reject empty or malformed RunID — downstream condensation joins
 			// session metadata by run ID, and tagging a session with no/invalid
@@ -1225,24 +1213,10 @@ func adoptInvestigateEnv(ctx context.Context, state *session.State, expectedAgen
 			}
 			state.Kind = session.KindAgentInvestigate
 			state.InvestigateRunID = runID
-			state.InvestigateRound = round
-			state.InvestigateTurn = turn
 			state.InvestigateTopic = os.Getenv(investigate.EnvTopic)
-			state.InvestigatePrompt = os.Getenv(investigate.EnvPrompt)
 			logging.Debug(ctx, "adopted investigate env",
 				slog.String("agent", envAgent),
-				slog.String("run_id", state.InvestigateRunID),
-				slog.Int("round", round),
-				slog.Int("turn", turn))
+				slog.String("run_id", state.InvestigateRunID))
 		},
 	})
-}
-
-// errString returns "" for a nil error, err.Error() otherwise. Local helper
-// to keep slog attrs tidy in the env-adoption functions above.
-func errString(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }

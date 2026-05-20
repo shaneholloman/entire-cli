@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +37,6 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 
 	const (
 		runID    = "0123456789ab"
-		round    = 1
-		turn     = 1
 		topic    = "how-does-x-work"
 		userText = "Please investigate how X works on this branch."
 		findings = "/tmp/investigate-findings.md"
@@ -53,10 +50,7 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 		investigate.EnvSession + "=1",
 		investigate.EnvAgent + "=claude-code",
 		investigate.EnvRunID + "=" + runID,
-		investigate.EnvRound + "=" + strconv.Itoa(round),
-		investigate.EnvTurn + "=" + strconv.Itoa(turn),
 		investigate.EnvTopic + "=" + topic,
-		investigate.EnvPrompt + "=" + userText,
 		investigate.EnvFindingsDoc + "=" + findings,
 		investigate.EnvStateDoc + "=" + stateP,
 		investigate.EnvStartingSHA + "=" + env.GetHeadHash(),
@@ -80,17 +74,8 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 	if state.InvestigateRunID != runID {
 		t.Fatalf("state.InvestigateRunID = %q, want %q", state.InvestigateRunID, runID)
 	}
-	if state.InvestigateRound != round {
-		t.Fatalf("state.InvestigateRound = %d, want %d", state.InvestigateRound, round)
-	}
-	if state.InvestigateTurn != turn {
-		t.Fatalf("state.InvestigateTurn = %d, want %d", state.InvestigateTurn, turn)
-	}
 	if state.InvestigateTopic != topic {
 		t.Fatalf("state.InvestigateTopic = %q, want %q", state.InvestigateTopic, topic)
-	}
-	if state.InvestigatePrompt != userText {
-		t.Fatalf("state.InvestigatePrompt = %q, want %q", state.InvestigatePrompt, userText)
 	}
 
 	// Drive the rest of the session: file edit, transcript, stop, commit.
@@ -124,17 +109,8 @@ func TestInvestigate_EnvVarAdoptionCondensesMetadataOnNextCommit(t *testing.T) {
 	if metadata.InvestigateRunID != runID {
 		t.Fatalf("metadata.InvestigateRunID = %q, want %q", metadata.InvestigateRunID, runID)
 	}
-	if metadata.InvestigateRound != round {
-		t.Fatalf("metadata.InvestigateRound = %d, want %d", metadata.InvestigateRound, round)
-	}
-	if metadata.InvestigateTurn != turn {
-		t.Fatalf("metadata.InvestigateTurn = %d, want %d", metadata.InvestigateTurn, turn)
-	}
 	if metadata.InvestigateTopic != topic {
 		t.Fatalf("metadata.InvestigateTopic = %q, want %q", metadata.InvestigateTopic, topic)
-	}
-	if metadata.InvestigatePrompt != userText {
-		t.Fatalf("metadata.InvestigatePrompt = %q, want %q", metadata.InvestigatePrompt, userText)
 	}
 }
 

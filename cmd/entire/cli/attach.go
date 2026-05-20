@@ -38,61 +38,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// AttachOptions parameterizes AttachSession.
-//
-// AttachSession is a state-only tagger: it does not read the transcript,
-// create checkpoints, or amend commits. Use runAttach for the full
-// transcript+checkpoint flow; AttachSession is for retroactively marking
-// a tracked session as an agent_review.
-type AttachOptions struct {
-	SessionID    string
-	ReviewSkills []string
-	ReviewPrompt string
-}
-
-// AttachSession tags an existing session as an agent_review.
-//
-// Behavior:
-//   - The session must already be tracked (state file present); a missing
-//     session returns "session %q not found".
-//   - Tagging is idempotent: re-tagging overwrites ReviewSkills and
-//     ReviewPrompt and leaves state.Kind unchanged.
-//   - Cross-kind retagging is rejected: a session already tagged as a
-//     different Kind cannot be retagged as a review.
-func AttachSession(ctx context.Context, opts AttachOptions) error {
-	if opts.SessionID == "" {
-		return errors.New("AttachSession: SessionID is required")
-	}
-
-	store, err := session.NewStateStore(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to open session store: %w", err)
-	}
-	state, err := store.Load(ctx, opts.SessionID)
-	if err != nil {
-		return fmt.Errorf("failed to load session state: %w", err)
-	}
-	if state == nil {
-		return fmt.Errorf("session %q not found", opts.SessionID)
-	}
-
-	if state.Kind != "" && state.Kind != session.KindAgentReview {
-		return fmt.Errorf(
-			"session %q is already tagged as %s; cannot retag as %s",
-			opts.SessionID, string(state.Kind), session.KindAgentReview,
-		)
-	}
-
-	state.Kind = session.KindAgentReview
-	state.ReviewSkills = opts.ReviewSkills
-	state.ReviewPrompt = opts.ReviewPrompt
-
-	if err := store.Save(ctx, state); err != nil {
-		return fmt.Errorf("failed to save session state: %w", err)
-	}
-	return nil
-}
-
 // attachOptions carries optional flags for runAttach. Force is the original
 // flag; Review opts the attach into recording the session as an
 // agent_review in the checkpoint metadata.

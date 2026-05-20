@@ -705,22 +705,19 @@ func TestKind_IsInvestigate(t *testing.T) {
 	}
 }
 
-// TestState_InvestigateRoundTrip pins the JSON wire format for the new
+// TestState_InvestigateRoundTrip pins the JSON wire format for the
 // investigate fields on State so a future tag rename or migration can't
 // silently drop persisted fields.
 func TestState_InvestigateRoundTrip(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
 	s := State{
-		SessionID:         "2026-04-20-uuid",
-		BaseCommit:        "abc",
-		StartedAt:         now,
-		Kind:              KindAgentInvestigate,
-		InvestigateRunID:  "abcdef012345",
-		InvestigateRound:  2,
-		InvestigateTurn:   5,
-		InvestigateTopic:  "Why is checkout flaky?",
-		InvestigatePrompt: "Investigate the checkout flake.",
+		SessionID:        "2026-04-20-uuid",
+		BaseCommit:       "abc",
+		StartedAt:        now,
+		Kind:             KindAgentInvestigate,
+		InvestigateRunID: "abcdef012345",
+		InvestigateTopic: "Why is checkout flaky?",
 	}
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -738,17 +735,8 @@ func TestState_InvestigateRoundTrip(t *testing.T) {
 	if got, ok := raw["investigate_run_id"].(string); !ok || got != "abcdef012345" {
 		t.Errorf("investigate_run_id = %v", raw["investigate_run_id"])
 	}
-	if got, ok := raw["investigate_round"].(float64); !ok || got != 2 {
-		t.Errorf("investigate_round = %v", raw["investigate_round"])
-	}
-	if got, ok := raw["investigate_turn"].(float64); !ok || got != 5 {
-		t.Errorf("investigate_turn = %v", raw["investigate_turn"])
-	}
 	if got, ok := raw["investigate_topic"].(string); !ok || got != "Why is checkout flaky?" {
 		t.Errorf("investigate_topic = %v", raw["investigate_topic"])
-	}
-	if got, ok := raw["investigate_prompt"].(string); !ok || got != "Investigate the checkout flake." {
-		t.Errorf("investigate_prompt = %v", raw["investigate_prompt"])
 	}
 
 	// Round-trip back into a State and verify field values survive.
@@ -762,17 +750,8 @@ func TestState_InvestigateRoundTrip(t *testing.T) {
 	if got.InvestigateRunID != "abcdef012345" {
 		t.Errorf("InvestigateRunID = %q", got.InvestigateRunID)
 	}
-	if got.InvestigateRound != 2 {
-		t.Errorf("InvestigateRound = %d", got.InvestigateRound)
-	}
-	if got.InvestigateTurn != 5 {
-		t.Errorf("InvestigateTurn = %d", got.InvestigateTurn)
-	}
 	if got.InvestigateTopic != "Why is checkout flaky?" {
 		t.Errorf("InvestigateTopic = %q", got.InvestigateTopic)
-	}
-	if got.InvestigatePrompt != "Investigate the checkout flake." {
-		t.Errorf("InvestigatePrompt = %q", got.InvestigatePrompt)
 	}
 
 	// Zero-value: omitempty must keep the keys out of marshalled output for a
@@ -783,7 +762,7 @@ func TestState_InvestigateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	zs := string(zb)
-	for _, key := range []string{"investigate_run_id", "investigate_round", "investigate_turn", "investigate_topic", "investigate_prompt"} {
+	for _, key := range []string{"investigate_run_id", "investigate_topic"} {
 		if strings.Contains(zs, `"`+key+`"`) {
 			t.Errorf("expected zero-value State to omit %q, got %s", key, zs)
 		}

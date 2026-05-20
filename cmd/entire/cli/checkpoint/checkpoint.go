@@ -341,23 +341,10 @@ type WriteCommittedOptions struct {
 	// run (only meaningful when Kind is an investigate kind).
 	InvestigateRunID string
 
-	// InvestigateRound is the round number (1-indexed) within the
-	// investigation run (only meaningful when Kind is an investigate kind).
-	InvestigateRound int
-
-	// InvestigateTurn is the overall turn index (1-indexed) within the
-	// investigation run (only meaningful when Kind is an investigate kind).
-	InvestigateTurn int
-
 	// InvestigateTopic is the human-readable topic the investigation was
 	// asked to investigate (only meaningful when Kind is an investigate
 	// kind).
 	InvestigateTopic string
-
-	// InvestigatePrompt is the actual text of the investigation request
-	// (composed prompt sent to the agent for this turn). Only meaningful
-	// when Kind is an investigate kind.
-	InvestigatePrompt string
 
 	// HasInvestigation is set by the caller when this session should mark
 	// its checkpoint as part of an investigation. The caller computes this
@@ -550,22 +537,9 @@ type CommittedMetadata struct {
 	// run. Only set when Kind is an investigate kind.
 	InvestigateRunID string `json:"investigate_run_id,omitempty"`
 
-	// InvestigateRound is the round number (1-indexed) within the
-	// investigation run. Only set when Kind is an investigate kind.
-	InvestigateRound int `json:"investigate_round,omitempty"`
-
-	// InvestigateTurn is the overall turn index (1-indexed) within the
-	// investigation run. Only set when Kind is an investigate kind.
-	InvestigateTurn int `json:"investigate_turn,omitempty"`
-
 	// InvestigateTopic is the human-readable topic the investigation was
 	// asked to investigate. Only set when Kind is an investigate kind.
 	InvestigateTopic string `json:"investigate_topic,omitempty"`
-
-	// InvestigatePrompt is the actual text of the investigation request
-	// (composed prompt sent to the agent for this turn). Only set when
-	// Kind is an investigate kind.
-	InvestigatePrompt string `json:"investigate_prompt,omitempty"`
 }
 
 // GetTranscriptStart returns the transcript line offset at which this checkpoint's data begins.

@@ -350,12 +350,8 @@ type checkpointSessionJSON struct {
 	Summary      *checkpointSessionSummary `json:"summary,omitempty"`
 
 	// Investigation tagging — set only on sessions whose Kind is an
-	// investigate kind. Mirrors review's choice to keep the prompt body
-	// (InvestigatePrompt) out of the export envelope; consumers that need
-	// it can read the metadata directly.
+	// investigate kind.
 	InvestigateRunID string `json:"investigate_run_id,omitempty"`
-	InvestigateRound int    `json:"investigate_round,omitempty"`
-	InvestigateTurn  int    `json:"investigate_turn,omitempty"`
 	InvestigateTopic string `json:"investigate_topic,omitempty"`
 
 	// Error is set when this session's metadata could not be read. The Index
@@ -491,8 +487,6 @@ func sessionMetadataToJSON(idx int, meta *checkpoint.CommittedMetadata) checkpoi
 		ToolUseID:        meta.ToolUseID,
 		FilesTouched:     meta.FilesTouched,
 		InvestigateRunID: meta.InvestigateRunID,
-		InvestigateRound: meta.InvestigateRound,
-		InvestigateTurn:  meta.InvestigateTurn,
 		InvestigateTopic: meta.InvestigateTopic,
 	}
 	if !meta.CreatedAt.IsZero() {

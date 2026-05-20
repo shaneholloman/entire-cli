@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1610,16 +1609,13 @@ const testInvestigateRunID = "abcdef012345"
 // setInvestigateEnv populates all ENTIRE_INVESTIGATE_* env vars for a test
 // using t.Setenv (so they are restored at test end). agentName must match
 // the hook's agent for adoption to succeed.
-func setInvestigateEnv(t *testing.T, agentName, startingSHA string, round, turn int, topic, prompt string) {
+func setInvestigateEnv(t *testing.T, agentName, startingSHA, topic string) {
 	t.Helper()
 	t.Setenv(investigate.EnvSession, "1")
 	t.Setenv(investigate.EnvAgent, agentName)
 	t.Setenv(investigate.EnvStartingSHA, startingSHA)
 	t.Setenv(investigate.EnvRunID, testInvestigateRunID)
-	t.Setenv(investigate.EnvRound, strconv.Itoa(round))
-	t.Setenv(investigate.EnvTurn, strconv.Itoa(turn))
 	t.Setenv(investigate.EnvTopic, topic)
-	t.Setenv(investigate.EnvPrompt, prompt)
 }
 
 // TestAdoptInvestigateEnv_Success verifies that adoptInvestigateEnv tags the
@@ -1637,8 +1633,7 @@ func TestAdoptInvestigateEnv_Success(t *testing.T) {
 
 	ag := newMockAgent()
 	headSHA := testutil.GetHeadHash(t, tmp)
-	setInvestigateEnv(t, string(ag.Name()), headSHA, 2, 5,
-		"Why is checkout flaky?", "Investigate the checkout flake.")
+	setInvestigateEnv(t, string(ag.Name()), headSHA, "Why is checkout flaky?")
 
 	sessionID := "test-investigate-env-success"
 	state := &session.State{
@@ -1653,17 +1648,8 @@ func TestAdoptInvestigateEnv_Success(t *testing.T) {
 	if state.InvestigateRunID != testInvestigateRunID {
 		t.Errorf("InvestigateRunID: got %q", state.InvestigateRunID)
 	}
-	if state.InvestigateRound != 2 {
-		t.Errorf("InvestigateRound: got %d, want 2", state.InvestigateRound)
-	}
-	if state.InvestigateTurn != 5 {
-		t.Errorf("InvestigateTurn: got %d, want 5", state.InvestigateTurn)
-	}
 	if state.InvestigateTopic != "Why is checkout flaky?" {
 		t.Errorf("InvestigateTopic: got %q", state.InvestigateTopic)
-	}
-	if state.InvestigatePrompt != "Investigate the checkout flake." {
-		t.Errorf("InvestigatePrompt: got %q", state.InvestigatePrompt)
 	}
 }
 
@@ -1682,7 +1668,7 @@ func TestAdoptInvestigateEnv_AgentMismatch(t *testing.T) {
 
 	headSHA := testutil.GetHeadHash(t, tmp)
 	// Env says claude-code; the hook is "codex" — mismatch must skip adoption.
-	setInvestigateEnv(t, "claude-code", headSHA, 1, 1, "topic", "prompt")
+	setInvestigateEnv(t, "claude-code", headSHA, "topic")
 
 	state := &session.State{
 		SessionID:  "test-investigate-env-agent-mismatch",
@@ -1713,7 +1699,7 @@ func TestAdoptInvestigateEnv_StaleStartingSHA(t *testing.T) {
 
 	ag := newMockAgent()
 	// "deadbeef" vs state.BaseCommit "cafebabe" — different SHAs.
-	setInvestigateEnv(t, string(ag.Name()), "deadbeef", 1, 1, "topic", "prompt")
+	setInvestigateEnv(t, string(ag.Name()), "deadbeef", "topic")
 
 	state := &session.State{
 		SessionID:  "test-investigate-env-stale-sha",
@@ -1741,8 +1727,7 @@ func TestAdoptInvestigateEnv_AlreadyTaggedNotOverwritten(t *testing.T) {
 
 	ag := newMockAgent()
 	headSHA := testutil.GetHeadHash(t, tmp)
-	setInvestigateEnv(t, string(ag.Name()), headSHA, 2, 5,
-		"topic", "prompt")
+	setInvestigateEnv(t, string(ag.Name()), headSHA, "topic")
 
 	// Pre-tag the state as a review session.
 	state := &session.State{
@@ -1759,9 +1744,6 @@ func TestAdoptInvestigateEnv_AlreadyTaggedNotOverwritten(t *testing.T) {
 	}
 	if state.InvestigateRunID != "" {
 		t.Errorf("InvestigateRunID: got %q, want empty (must not be set)", state.InvestigateRunID)
-	}
-	if state.InvestigateRound != 0 {
-		t.Errorf("InvestigateRound: got %d, want 0 (must not be set)", state.InvestigateRound)
 	}
 	if state.InvestigateTopic != "" {
 		t.Errorf("InvestigateTopic: got %q, want empty (must not be set)", state.InvestigateTopic)
@@ -1786,10 +1768,7 @@ func TestAdoptInvestigateEnv_SessionEnvNotOne(t *testing.T) {
 	t.Setenv(investigate.EnvAgent, string(ag.Name()))
 	t.Setenv(investigate.EnvStartingSHA, headSHA)
 	t.Setenv(investigate.EnvRunID, testInvestigateRunID)
-	t.Setenv(investigate.EnvRound, "1")
-	t.Setenv(investigate.EnvTurn, "1")
 	t.Setenv(investigate.EnvTopic, "topic")
-	t.Setenv(investigate.EnvPrompt, "prompt")
 
 	state := &session.State{
 		SessionID:  "test-investigate-env-session-not-one",
@@ -1799,44 +1778,6 @@ func TestAdoptInvestigateEnv_SessionEnvNotOne(t *testing.T) {
 
 	if state.Kind != "" {
 		t.Errorf("Kind: got %q, want empty when SESSION!=\"1\"", state.Kind)
-	}
-}
-
-// TestAdoptInvestigateEnv_InvalidRound verifies that a non-integer
-// ENTIRE_INVESTIGATE_ROUND value leaves the session untagged (rather than
-// silently coercing to 0 or panicking).
-func TestAdoptInvestigateEnv_InvalidRound(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Chdir() and t.Setenv()
-	tmp := t.TempDir()
-	testutil.InitRepo(t, tmp)
-	testutil.WriteFile(t, tmp, "f.txt", "x")
-	testutil.GitAdd(t, tmp, "f.txt")
-	testutil.GitCommit(t, tmp, "init")
-	t.Chdir(tmp)
-	paths.ClearWorktreeRootCache()
-
-	ag := newMockAgent()
-	headSHA := testutil.GetHeadHash(t, tmp)
-	t.Setenv(investigate.EnvSession, "1")
-	t.Setenv(investigate.EnvAgent, string(ag.Name()))
-	t.Setenv(investigate.EnvStartingSHA, headSHA)
-	t.Setenv(investigate.EnvRunID, testInvestigateRunID)
-	t.Setenv(investigate.EnvRound, "abc") // invalid
-	t.Setenv(investigate.EnvTurn, "1")
-	t.Setenv(investigate.EnvTopic, "topic")
-	t.Setenv(investigate.EnvPrompt, "prompt")
-
-	state := &session.State{
-		SessionID:  "test-investigate-env-invalid-round",
-		BaseCommit: headSHA,
-	}
-	adoptInvestigateEnv(context.Background(), state, string(ag.Name()))
-
-	if state.Kind != "" {
-		t.Errorf("Kind: got %q, want empty for invalid round", state.Kind)
-	}
-	if state.InvestigateRound != 0 {
-		t.Errorf("InvestigateRound: got %d, want 0 (untouched)", state.InvestigateRound)
 	}
 }
 
@@ -1873,10 +1814,7 @@ func TestAdoptInvestigateEnv_RejectsBadRunID(t *testing.T) {
 			t.Setenv(investigate.EnvAgent, string(ag.Name()))
 			t.Setenv(investigate.EnvStartingSHA, headSHA)
 			t.Setenv(investigate.EnvRunID, tc.runID)
-			t.Setenv(investigate.EnvRound, "1")
-			t.Setenv(investigate.EnvTurn, "1")
 			t.Setenv(investigate.EnvTopic, "topic")
-			t.Setenv(investigate.EnvPrompt, "prompt")
 
 			state := &session.State{
 				SessionID:  "test-investigate-env-bad-run-id-" + tc.name,

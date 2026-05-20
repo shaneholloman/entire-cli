@@ -727,10 +727,7 @@ func TestCondenseSession_TagsCheckpointSummaryWithHasInvestigation(t *testing.T)
 	// adoptInvestigateEnv does on the live session-state file.
 	state.Kind = session.KindAgentInvestigate
 	state.InvestigateRunID = "0123456789ab"
-	state.InvestigateRound = 2
-	state.InvestigateTurn = 4
 	state.InvestigateTopic = "Why is checkout flaky?"
-	state.InvestigatePrompt = "Investigate the checkout flake."
 	require.NoError(t, SaveSessionState(context.Background(), state))
 
 	checkpointID := id.MustCheckpointID("aabbccdd1122")
@@ -776,8 +773,5 @@ func TestCondenseSession_TagsCheckpointSummaryWithHasInvestigation(t *testing.T)
 
 	require.Equal(t, string(session.KindAgentInvestigate), meta.Kind, "per-session Kind")
 	require.Equal(t, "0123456789ab", meta.InvestigateRunID, "per-session InvestigateRunID")
-	require.Equal(t, 2, meta.InvestigateRound, "per-session InvestigateRound")
-	require.Equal(t, 4, meta.InvestigateTurn, "per-session InvestigateTurn")
 	require.Equal(t, "Why is checkout flaky?", meta.InvestigateTopic, "per-session InvestigateTopic")
-	require.Equal(t, "Investigate the checkout flake.", meta.InvestigatePrompt, "per-session InvestigatePrompt")
 }

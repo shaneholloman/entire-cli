@@ -660,9 +660,8 @@ func TestExplainExport_HasInvestigation(t *testing.T) {
 }
 
 // TestExplainExport_PerSessionInvestigateFields pins the JSON wire format
-// for the per-session investigate fields. The four fields are populated when
+// for the per-session investigate fields. The fields are populated when
 // the session metadata carries them, and omitted when they are zero-valued.
-// investigate_prompt is intentionally NOT exported (matches review_prompt).
 func TestExplainExport_PerSessionInvestigateFields(t *testing.T) {
 	t.Parallel()
 
@@ -670,8 +669,6 @@ func TestExplainExport_PerSessionInvestigateFields(t *testing.T) {
 		Index:            0,
 		SessionID:        "investigate-session",
 		InvestigateRunID: "0123456789ab",
-		InvestigateRound: 2,
-		InvestigateTurn:  5,
 		InvestigateTopic: "the perf regression in foo()",
 	})
 	require.NoError(t, err)
@@ -679,54 +676,32 @@ func TestExplainExport_PerSessionInvestigateFields(t *testing.T) {
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal(bPopulated, &raw))
 	require.Equal(t, "0123456789ab", raw["investigate_run_id"])
-	// JSON numbers unmarshal to float64.
-	require.InEpsilon(t, float64(2), raw["investigate_round"], 0.0001)
-	require.InEpsilon(t, float64(5), raw["investigate_turn"], 0.0001)
 	require.Equal(t, "the perf regression in foo()", raw["investigate_topic"])
-
-	// investigate_prompt is intentionally not part of the wire format —
-	// the envelope mirrors review's choice to keep prompt bodies out of
-	// the export so consumers branch on the metadata-only flags.
-	require.NotContains(t, raw, "investigate_prompt",
-		"investigate_prompt must not appear in the export envelope")
 
 	bZero, err := json.Marshal(checkpointSessionJSON{Index: 0, SessionID: "no-investigation"})
 	require.NoError(t, err)
-	for _, k := range []string{"investigate_run_id", "investigate_round", "investigate_turn", "investigate_topic"} {
+	for _, k := range []string{"investigate_run_id", "investigate_topic"} {
 		require.NotContains(t, string(bZero), k,
 			"zero-value session must omit %q", k)
 	}
 }
 
 // TestSessionMetadataToJSON_CopiesInvestigateFields pins that
-// sessionMetadataToJSON copies the four investigate fields from
-// CommittedMetadata into the per-session JSON struct. This is the source-
-// of-truth for what consumers see in the envelope.
+// sessionMetadataToJSON copies the investigate fields from CommittedMetadata
+// into the per-session JSON struct.
 func TestSessionMetadataToJSON_CopiesInvestigateFields(t *testing.T) {
 	t.Parallel()
 
 	meta := &checkpoint.CommittedMetadata{
-		SessionID:         "investigate-session",
-		Kind:              "agent_investigate",
-		InvestigateRunID:  "0123456789ab",
-		InvestigateRound:  3,
-		InvestigateTurn:   7,
-		InvestigateTopic:  "topic from metadata.json",
-		InvestigatePrompt: "should NOT appear in export",
+		SessionID:        "investigate-session",
+		Kind:             "agent_investigate",
+		InvestigateRunID: "0123456789ab",
+		InvestigateTopic: "topic from metadata.json",
 	}
 
 	got := sessionMetadataToJSON(0, meta)
 	require.Equal(t, "0123456789ab", got.InvestigateRunID)
-	require.Equal(t, 3, got.InvestigateRound)
-	require.Equal(t, 7, got.InvestigateTurn)
 	require.Equal(t, "topic from metadata.json", got.InvestigateTopic)
-
-	// Marshal again to verify investigate_prompt is dropped at the wire boundary.
-	bs, err := json.Marshal(got)
-	require.NoError(t, err)
-	require.NotContains(t, string(bs), "should NOT appear in export",
-		"investigate_prompt must not leak through sessionMetadataToJSON")
-	require.NotContains(t, string(bs), "investigate_prompt")
 }
 
 // TestBuildCheckpointJSONEnvelope_PropagatesHasInvestigation verifies the
@@ -751,8 +726,6 @@ func TestBuildCheckpointJSONEnvelope_PropagatesHasInvestigation(t *testing.T) {
 				SessionID:        "investigate-session",
 				Kind:             "agent_investigate",
 				InvestigateRunID: "0123456789ab",
-				InvestigateRound: 1,
-				InvestigateTurn:  1,
 				InvestigateTopic: "summary-level topic",
 			}},
 		},
@@ -764,6 +737,5 @@ func TestBuildCheckpointJSONEnvelope_PropagatesHasInvestigation(t *testing.T) {
 		"envelope must mirror CheckpointSummary.HasInvestigation")
 	require.Len(t, envelope.Sessions, 1)
 	require.Equal(t, "0123456789ab", envelope.Sessions[0].InvestigateRunID)
-	require.Equal(t, 1, envelope.Sessions[0].InvestigateRound)
 	require.Equal(t, "summary-level topic", envelope.Sessions[0].InvestigateTopic)
 }

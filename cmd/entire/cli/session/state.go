@@ -138,26 +138,11 @@ type State struct {
 	// non-investigate sessions.
 	InvestigateRunID string `json:"investigate_run_id,omitempty"`
 
-	// InvestigateRound is the round number (1-indexed) within the
-	// investigation run that produced this session. Only meaningful when
-	// Kind is an investigate kind.
-	InvestigateRound int `json:"investigate_round,omitempty"`
-
-	// InvestigateTurn is the overall turn index (1-indexed across rounds)
-	// within the investigation run that produced this session. Only
-	// meaningful when Kind is an investigate kind.
-	InvestigateTurn int `json:"investigate_turn,omitempty"`
-
 	// InvestigateTopic is the human-readable topic the investigation was
 	// asked to investigate. Snapshot at session start so checkpoint
 	// metadata records what the agent was investigating. Only meaningful
 	// when Kind is an investigate kind.
 	InvestigateTopic string `json:"investigate_topic,omitempty"`
-
-	// InvestigatePrompt is the actual text of the investigation request —
-	// the composed prompt sent to the agent for this turn. Always populated
-	// when Kind is an investigate kind.
-	InvestigatePrompt string `json:"investigate_prompt,omitempty"`
 
 	// TurnID is a unique identifier for the current agent turn.
 	// Lifecycle:

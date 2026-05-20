@@ -20,17 +20,8 @@ func TestEnvNamesAreStable(t *testing.T) {
 	if EnvRunID != "ENTIRE_INVESTIGATE_RUN_ID" {
 		t.Errorf("EnvRunID: got %q, want ENTIRE_INVESTIGATE_RUN_ID", EnvRunID)
 	}
-	if EnvRound != "ENTIRE_INVESTIGATE_ROUND" {
-		t.Errorf("EnvRound: got %q, want ENTIRE_INVESTIGATE_ROUND", EnvRound)
-	}
-	if EnvTurn != "ENTIRE_INVESTIGATE_TURN" {
-		t.Errorf("EnvTurn: got %q, want ENTIRE_INVESTIGATE_TURN", EnvTurn)
-	}
 	if EnvTopic != "ENTIRE_INVESTIGATE_TOPIC" {
 		t.Errorf("EnvTopic: got %q, want ENTIRE_INVESTIGATE_TOPIC", EnvTopic)
-	}
-	if EnvPrompt != "ENTIRE_INVESTIGATE_PROMPT" {
-		t.Errorf("EnvPrompt: got %q, want ENTIRE_INVESTIGATE_PROMPT", EnvPrompt)
 	}
 	if EnvFindingsDoc != "ENTIRE_INVESTIGATE_FINDINGS_DOC" {
 		t.Errorf("EnvFindingsDoc: got %q, want ENTIRE_INVESTIGATE_FINDINGS_DOC", EnvFindingsDoc)
@@ -55,10 +46,7 @@ func TestIsInvestigateEnvEntry(t *testing.T) {
 		{EnvSession + "=1", true},
 		{EnvAgent + "=claude-code", true},
 		{EnvRunID + "=abcdef012345", true},
-		{EnvRound + "=2", true},
-		{EnvTurn + "=5", true},
 		{EnvTopic + "=topic", true},
-		{EnvPrompt + "=prompt", true},
 		{EnvFindingsDoc + "=/tmp/x", true},
 		{EnvStateDoc + "=/tmp/state.json", true},
 		{EnvStartingSHA + "=deadbeef", true},
@@ -89,10 +77,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 		EnvSession + "=stale",
 		EnvAgent + "=stale-agent",
 		EnvRunID + "=staleeeeeeee",
-		EnvRound + "=99",
-		EnvTurn + "=99",
 		EnvTopic + "=stale topic",
-		EnvPrompt + "=stale prompt",
 		EnvFindingsDoc + "=/tmp/stale-findings.md",
 		EnvStateDoc + "=/tmp/stale-state.json",
 		EnvStartingSHA + "=stalehash",
@@ -106,10 +91,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 	got := AppendInvestigateEnv(base, AppendOptions{
 		AgentName:   "claude-code",
 		RunID:       "abcdef012345",
-		Round:       1,
-		Turn:        2,
 		Topic:       "fresh topic",
-		Prompt:      "fresh prompt",
 		FindingsDoc: "/tmp/fresh-findings.md",
 		StateDoc:    "/tmp/fresh-state.json",
 		StartingSHA: "freshhash",
@@ -119,10 +101,7 @@ func TestAppendInvestigateEnv_StripsStaleInvestigateAndReview(t *testing.T) {
 		EnvSession:     "1",
 		EnvAgent:       "claude-code",
 		EnvRunID:       "abcdef012345",
-		EnvRound:       "1",
-		EnvTurn:        "2",
 		EnvTopic:       "fresh topic",
-		EnvPrompt:      "fresh prompt",
 		EnvFindingsDoc: "/tmp/fresh-findings.md",
 		EnvStateDoc:    "/tmp/fresh-state.json",
 		EnvStartingSHA: "freshhash",
@@ -187,10 +166,7 @@ func TestAppendInvestigateEnv_AppendsAllKeys(t *testing.T) {
 	got := AppendInvestigateEnv(nil, AppendOptions{
 		AgentName:   "codex",
 		RunID:       "0123456789ab",
-		Round:       3,
-		Turn:        7,
 		Topic:       "topic",
-		Prompt:      "prompt",
 		FindingsDoc: "/abs/findings.md",
 		StateDoc:    "/abs/state.json",
 		StartingSHA: "abc123",
@@ -199,10 +175,7 @@ func TestAppendInvestigateEnv_AppendsAllKeys(t *testing.T) {
 		EnvSession + "=1",
 		EnvAgent + "=codex",
 		EnvRunID + "=0123456789ab",
-		EnvRound + "=3",
-		EnvTurn + "=7",
 		EnvTopic + "=topic",
-		EnvPrompt + "=prompt",
 		EnvFindingsDoc + "=/abs/findings.md",
 		EnvStateDoc + "=/abs/state.json",
 		EnvStartingSHA + "=abc123",

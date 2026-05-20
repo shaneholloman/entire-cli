@@ -9,12 +9,10 @@
 // runs) holds by construction — one agent's env vars cannot bleed into
 // another agent's session. The lifecycle UserPromptSubmit hook reads these
 // env vars to tag the in-flight session as an investigate session (Kind =
-// "agent_investigate") and records the run/round/turn coordinates.
+// "agent_investigate") and records the run id + topic.
 package investigate
 
 import (
-	"strconv"
-
 	"github.com/entireio/cli/cmd/entire/cli/provenance"
 )
 
@@ -24,10 +22,7 @@ const (
 	EnvSession     = provenance.InvestigateSession
 	EnvAgent       = provenance.InvestigateAgent
 	EnvRunID       = provenance.InvestigateRunID
-	EnvRound       = provenance.InvestigateRound
-	EnvTurn        = provenance.InvestigateTurn
 	EnvTopic       = provenance.InvestigateTopic
-	EnvPrompt      = provenance.InvestigatePrompt
 	EnvFindingsDoc = provenance.InvestigateFindingsDoc
 	EnvStateDoc    = provenance.InvestigateStateDoc
 	EnvStartingSHA = provenance.InvestigateStartingSHA
@@ -38,10 +33,7 @@ const (
 type AppendOptions struct {
 	AgentName   string
 	RunID       string
-	Round       int
-	Turn        int
 	Topic       string
-	Prompt      string
 	FindingsDoc string
 	StateDoc    string
 	StartingSHA string
@@ -69,10 +61,7 @@ func AppendInvestigateEnv(base []string, opts AppendOptions) []string {
 		EnvSession+"=1",
 		EnvAgent+"="+opts.AgentName,
 		EnvRunID+"="+opts.RunID,
-		EnvRound+"="+strconv.Itoa(opts.Round),
-		EnvTurn+"="+strconv.Itoa(opts.Turn),
 		EnvTopic+"="+opts.Topic,
-		EnvPrompt+"="+opts.Prompt,
 		EnvFindingsDoc+"="+opts.FindingsDoc,
 		EnvStateDoc+"="+opts.StateDoc,
 		EnvStartingSHA+"="+opts.StartingSHA,
