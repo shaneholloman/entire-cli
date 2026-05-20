@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/entireio/auth-go/tokens"
+	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/spf13/cobra"
@@ -91,13 +93,80 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		return fmt.Errorf("complete login: %w", err)
 	}
 
+	if err := validateReceivedToken(token, client.BaseURL(), time.Now()); err != nil {
+		return fmt.Errorf("reject login token: %w", err)
+	}
+
 	store := auth.NewStore()
 
+	// Login deliberately uses the legacy SaveToken (string, string)
+	// surface — we only have an access-token string at this point;
+	// the deviceflow client doesn't return a TokenSet here.
 	if err := store.SaveToken(client.BaseURL(), token); err != nil {
 		return fmt.Errorf("save auth token: %w", err)
 	}
 
 	fmt.Fprintln(outW, "Login complete.")
+	return nil
+}
+
+// validateReceivedToken runs minimum-trust checks on the access token
+// the AS handed us before we persist it. The server is the authority
+// on signature/exp; this is defense in depth aimed at catching gross
+// misbehaviour by a compromised or misconfigured AS (e.g. handing back
+// a token from a different issuer than the one we asked, or one whose
+// claims are already-expired).
+//
+// Opaque (non-JWT) tokens are permitted — the AS may not issue JWTs at
+// all. Only when we can parse the token as a JWT do we cross-check the
+// claims. Unsigned (alg:none) JWTs are always rejected: see
+// tokens.ErrUnsignedJWT.
+func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
+	claims, err := tokens.ParseClaims(rawToken)
+	switch {
+	case errors.Is(err, tokens.ErrMalformedJWT):
+		// Opaque token — no claim-based checks available. Trust the
+		// server-side validation. (Most OAuth flows allow this; it's
+		// only a problem if our resource servers later expect JWTs.)
+		return nil
+	case errors.Is(err, tokens.ErrUnsignedJWT):
+		// alg:none is always a refusal — see tokens.ErrUnsignedJWT
+		// rationale.
+		return err //nolint:wrapcheck // sentinel surfaces verbatim for caller's errors.Is
+	case err != nil:
+		return fmt.Errorf("parse claims: %w", err)
+	}
+
+	// iss check: the token must claim to come from the issuer we sent
+	// the device-code request to. A mismatch means either the AS is
+	// misconfigured or someone's playing games.
+	if issErr := issMatches(claims.Issuer, issuerURL); issErr != nil {
+		return issErr
+	}
+
+	// exp sanity: a token that's already expired before we even store
+	// it is a smell. Don't reject if exp is unset (some servers omit).
+	if !claims.ExpiresAt.IsZero() && !now.Before(claims.ExpiresAt) {
+		return fmt.Errorf("token already expired (exp=%s, now=%s)",
+			claims.ExpiresAt.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+
+	return nil
+}
+
+// issMatches reports whether claimed equals expected after stripping path/
+// query/fragment via api.OriginOnly, so "https://issuer/" and "https://issuer"
+// match. Returns nil on match or when the iss claim is empty (some servers
+// omit it — the server still does the real check on every request).
+func issMatches(claimed, expected string) error {
+	if claimed == "" {
+		return nil
+	}
+	normClaimed := api.OriginOnly(claimed)
+	normExpected := api.OriginOnly(expected)
+	if normClaimed != normExpected {
+		return fmt.Errorf("iss mismatch: token claims %q, expected %q", normClaimed, normExpected)
+	}
 	return nil
 }
 
@@ -171,6 +240,9 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 		case "expired_token":
 			return "", errors.New("device authorization expired")
 		default:
+			if result.ErrorDescription != "" {
+				return "", fmt.Errorf("device authorization failed: %s: %s", result.Error, result.ErrorDescription)
+			}
 			return "", fmt.Errorf("device authorization failed: %s", result.Error)
 		}
 
