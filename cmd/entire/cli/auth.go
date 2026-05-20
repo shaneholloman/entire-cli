@@ -35,14 +35,34 @@ const (
 // command that sends a bearer token over the network (login, logout,
 // auth status/list/revoke) must call this so credentials don't leak over
 // plaintext HTTP without explicit opt-in.
+//
+// Both the auth and data API origins are checked: the bearer travels to the
+// auth host for login + auth-token management, and to the data host for
+// search/activity/dispatch/etc. Single-host deployments (ENTIRE_AUTH_BASE_URL
+// unset) skip the redundant second parse.
 func requireSecureBaseURL(insecureHTTPAuth bool) error {
 	if insecureHTTPAuth {
 		return nil
 	}
-	if err := api.RequireSecureURL(api.BaseURL()); err != nil {
+	dataURL, authURL := api.BaseURL(), api.AuthBaseURL()
+	if err := api.RequireSecureURL(dataURL); err != nil {
 		return fmt.Errorf("base URL check: %w", err)
 	}
+	if authURL == dataURL {
+		return nil
+	}
+	if err := api.RequireSecureURL(authURL); err != nil {
+		return fmt.Errorf("auth base URL check: %w", err)
+	}
 	return nil
+}
+
+// newAuthHostAPIClient builds an api.Client pointed at the auth host with the
+// provider-routed auth-tokens path wired in. Used by every command that hits
+// the auth-token management endpoints (status/list/revoke/logout).
+func newAuthHostAPIClient(token string) *api.Client {
+	return api.NewClientWithBaseURL(token, api.AuthBaseURL()).
+		WithAuthTokensPath(auth.CurrentProvider().AuthTokensPath)
 }
 
 // addInsecureHTTPAuthFlag attaches the hidden --insecure-http-auth flag used
@@ -84,7 +104,7 @@ func newAuthStatusCmd() *cobra.Command {
 				return err
 			}
 			return runAuthStatus(cmd.Context(), cmd.OutOrStdout(),
-				auth.NewStore(), defaultListTokens, api.BaseURL())
+				auth.NewStore(), defaultListTokens, api.AuthBaseURL())
 		},
 	}
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
@@ -92,7 +112,7 @@ func newAuthStatusCmd() *cobra.Command {
 }
 
 func defaultListTokens(ctx context.Context, token string) ([]api.Token, error) {
-	return api.NewClient(token).ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
+	return newAuthHostAPIClient(token).ListTokens(ctx) //nolint:wrapcheck // ListTokens already wraps with action context
 }
 
 func runAuthStatus(ctx context.Context, w io.Writer, store tokenStore, list authTokenLister, baseURL string) error {
@@ -135,7 +155,7 @@ func newAuthListCmd() *cobra.Command {
 				return err
 			}
 			return runAuthList(cmd.Context(), cmd.OutOrStdout(),
-				auth.NewStore(), defaultListTokens, api.BaseURL(), jsonOut)
+				auth.NewStore(), defaultListTokens, api.AuthBaseURL(), jsonOut)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Print tokens as JSON")
@@ -409,7 +429,7 @@ func newAuthRevokeCmd() *cobra.Command {
 			}
 			return runAuthRevoke(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
 				auth.NewStore(), defaultListTokens, defaultRevokeTokenByID, defaultRevokeCurrentToken,
-				api.BaseURL(), id, revokeCurrent)
+				api.AuthBaseURL(), id, revokeCurrent)
 		},
 	}
 	cmd.Flags().BoolVar(&revokeCurrent, "current", false, "Revoke the token used by this CLI and remove the local copy")
@@ -418,7 +438,7 @@ func newAuthRevokeCmd() *cobra.Command {
 }
 
 func defaultRevokeTokenByID(ctx context.Context, callerToken, id string) error {
-	return api.NewClient(callerToken).RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
+	return newAuthHostAPIClient(callerToken).RevokeToken(ctx, id) //nolint:wrapcheck // RevokeToken already wraps with action context
 }
 
 func runAuthRevoke(
