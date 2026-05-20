@@ -79,6 +79,49 @@ func TestDualCheckpointReader_ReadSessionPromptsFallsBackWhenV2PromptMissing(t *
 	require.Equal(t, "prompt only stored in v1", prompts)
 }
 
+func TestDualCheckpointReader_ReadSessionMetadataAndPromptsFallsBackWhenV2PromptMissing(t *testing.T) {
+	t.Parallel()
+
+	repo := initTestRepo(t)
+	v1Store := NewGitStore(repo)
+	v2Store := NewV2GitStore(repo)
+	ctx := context.Background()
+	cpID := id.MustCheckpointID("575757575757")
+
+	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-a",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v1-session-a"}` + "\n")),
+		Prompts:      []string{"wrong prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+	require.NoError(t, v1Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-b",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"text":"from-v1-session-b"}` + "\n")),
+		Prompts:      []string{"prompt only stored in v1"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+	require.NoError(t, v2Store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:      cpID,
+		SessionID:         "session-b",
+		Strategy:          "manual-commit",
+		CompactTranscript: []byte(`{"text":"compact-session-b"}` + "\n"),
+		AuthorName:        "Test",
+		AuthorEmail:       "test@test.com",
+	}))
+
+	reader := &DualCheckpointReader{v2: v2Store, v1: v1Store}
+	content, err := reader.ReadSessionMetadataAndPrompts(ctx, cpID, 0)
+	require.NoError(t, err)
+	require.Equal(t, "session-b", content.Metadata.SessionID)
+	require.Equal(t, "prompt only stored in v1", content.Prompts)
+}
+
 func TestCommittedReadModeForAvailability(t *testing.T) {
 	t.Parallel()
 
