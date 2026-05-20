@@ -53,6 +53,24 @@ func TestRequireSecureURL_RejectsHTTP(t *testing.T) {
 	}
 }
 
+func TestAuthBaseURL_FallsBackToBaseURL(t *testing.T) {
+	t.Setenv(BaseURLEnvVar, "https://example.test")
+	t.Setenv(AuthBaseURLEnvVar, "")
+
+	if got := AuthBaseURL(); got != "https://example.test" {
+		t.Fatalf("AuthBaseURL() = %q, want fallback to BaseURL", got)
+	}
+}
+
+func TestAuthBaseURL_OverrideTakesPrecedence(t *testing.T) {
+	t.Setenv(BaseURLEnvVar, "https://data.example.test")
+	t.Setenv(AuthBaseURLEnvVar, " https://auth.example.test/ ")
+
+	if got := AuthBaseURL(); got != "https://auth.example.test" {
+		t.Fatalf("AuthBaseURL() = %q, want trimmed/normalized override", got)
+	}
+}
+
 func TestResolveURL(t *testing.T) {
 	t.Setenv(BaseURLEnvVar, "http://localhost:8787/")
 

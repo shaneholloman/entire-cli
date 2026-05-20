@@ -17,6 +17,13 @@ const (
 
 	// BaseURLEnvVar overrides the Entire API origin for local development.
 	BaseURLEnvVar = "ENTIRE_API_BASE_URL"
+
+	// AuthBaseURLEnvVar overrides only the auth/login origin (device flow,
+	// auth-tokens management, keyring key). Falls back to BaseURLEnvVar when
+	// unset, which is the right behavior for single-host deployments. Split
+	// hosts (e.g. auth on us.console.partial.to, data on partial.to) set
+	// both.
+	AuthBaseURLEnvVar = "ENTIRE_AUTH_BASE_URL"
 )
 
 // BaseURL returns the effective Entire API base URL.
@@ -27,6 +34,18 @@ func BaseURL() string {
 	}
 
 	return DefaultBaseURL
+}
+
+// AuthBaseURL returns the origin used for the device-flow login, auth-token
+// management endpoints, and the keyring key under which the bearer token is
+// stored. ENTIRE_AUTH_BASE_URL takes precedence; otherwise it falls back to
+// BaseURL() so single-host deployments keep working unchanged.
+func AuthBaseURL() string {
+	if raw := strings.TrimSpace(os.Getenv(AuthBaseURLEnvVar)); raw != "" {
+		return normalizeBaseURL(raw)
+	}
+
+	return BaseURL()
 }
 
 // ResolveURL joins an API-relative path against the effective base URL.
@@ -71,4 +90,19 @@ func RequireSecureURL(baseURL string) error {
 
 func normalizeBaseURL(raw string) string {
 	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
+// OriginOnly returns the scheme+host of raw, stripping any path/query/fragment
+// and userinfo. Falls through verbatim when raw doesn't parse as an absolute
+// URL — callers that need strict validation should check the return value
+// against the input or use url.Parse themselves. Used both to feed origin-only
+// URLs into tokenmanager.TokenRequest.Resource (which validates them) and to
+// compare JWT iss claims against expected issuers.
+func OriginOnly(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return trimmed
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
 }
