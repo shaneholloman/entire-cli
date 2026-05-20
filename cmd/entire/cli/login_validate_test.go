@@ -31,6 +31,34 @@ func TestValidateReceivedToken_OpaqueTokenAccepted(t *testing.T) {
 	}
 }
 
+func TestValidateReceivedToken_DotBearingOpaqueTokenAccepted(t *testing.T) {
+	t.Parallel()
+
+	// 3-segment opaque token whose segments aren't valid base64url. Previously
+	// rejected because ParseClaims falls through ErrMalformedJWT and surfaces
+	// a generic decode error; should be accepted now as just-another-opaque-
+	// token so an AS issuing dot-bearing non-JWT bearers can still log in.
+	if err := validateReceivedToken("aaa.bbb.ccc", "https://example.test", time.Now()); err != nil {
+		t.Fatalf("validateReceivedToken(3-seg opaque) = %v, want nil", err)
+	}
+}
+
+func TestValidateReceivedToken_BadBase64PayloadAccepted(t *testing.T) {
+	t.Parallel()
+
+	// 3-segment token with a JWT-shaped header but a payload that isn't valid
+	// base64url. Same principle: any parse failure other than ErrUnsignedJWT
+	// is treated as opaque.
+	jwt := strings.Join([]string{
+		"eyJhbGciOiJSUzI1NiJ9", // {"alg":"RS256"}
+		"!!!not-base64!!!",
+		"sig",
+	}, ".")
+	if err := validateReceivedToken(jwt, "https://example.test", time.Now()); err != nil {
+		t.Fatalf("validateReceivedToken(bad base64 payload) = %v, want nil", err)
+	}
+}
+
 func TestValidateReceivedToken_RejectsUnsignedJWT(t *testing.T) {
 	t.Parallel()
 

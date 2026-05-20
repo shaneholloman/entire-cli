@@ -119,22 +119,18 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 //
 // Opaque (non-JWT) tokens are permitted — the AS may not issue JWTs at
 // all. Only when we can parse the token as a JWT do we cross-check the
-// claims. Unsigned (alg:none) JWTs are always rejected: see
-// tokens.ErrUnsignedJWT.
+// claims. Unsigned (alg:none) JWTs are always rejected via
+// tokens.ErrUnsignedJWT; every other parse failure (3-segment-but-not-
+// base64, payload-not-JSON, header-not-JSON, etc.) is treated as opaque
+// and accepted, so a server issuing dot-bearing non-JWT bearer tokens
+// can still log in.
 func validateReceivedToken(rawToken, issuerURL string, now time.Time) error {
 	claims, err := tokens.ParseClaims(rawToken)
-	switch {
-	case errors.Is(err, tokens.ErrMalformedJWT):
-		// Opaque token — no claim-based checks available. Trust the
-		// server-side validation. (Most OAuth flows allow this; it's
-		// only a problem if our resource servers later expect JWTs.)
-		return nil
-	case errors.Is(err, tokens.ErrUnsignedJWT):
-		// alg:none is always a refusal — see tokens.ErrUnsignedJWT
-		// rationale.
+	if errors.Is(err, tokens.ErrUnsignedJWT) {
 		return err //nolint:wrapcheck // sentinel surfaces verbatim for caller's errors.Is
-	case err != nil:
-		return fmt.Errorf("parse claims: %w", err)
+	}
+	if err != nil {
+		return nil //nolint:nilerr // any parse failure other than alg:none means the token isn't a JWT — opaque tokens are valid
 	}
 
 	// iss check: the token must claim to come from the issuer we sent
