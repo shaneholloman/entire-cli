@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -927,8 +926,7 @@ func TestWarnIfCheckpointsV2Disallowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Cannot use t.Parallel(): inspects global stderr + warn-once.
-			resetCheckpointsV2DisallowedOnce(t)
+			// Cannot use t.Parallel(): inspects global stderr.
 			s := &EntireSettings{StrategyOptions: tt.opts}
 			stderr := captureSettingsStderr(t, s.WarnIfCheckpointsV2Disallowed)
 
@@ -940,6 +938,26 @@ func TestWarnIfCheckpointsV2Disallowed(t *testing.T) {
 				t.Fatalf("warning text mismatch: got %q, want it to contain %q", stderr, tt.wantText)
 			}
 		})
+	}
+}
+
+func TestWarnIfCheckpointsV2Disallowed_RepeatsUntilV2SettingRemoved(t *testing.T) {
+	// Cannot use t.Parallel(): inspects global stderr.
+	const warning = "strategy_options.checkpoints_version 2 is no longer supported. Falling back to version 1"
+
+	s := &EntireSettings{StrategyOptions: map[string]any{"checkpoints_version": 2}}
+	stderr := captureSettingsStderr(t, func() {
+		s.WarnIfCheckpointsV2Disallowed()
+		s.WarnIfCheckpointsV2Disallowed()
+	})
+	if count := strings.Count(stderr, warning); count != 2 {
+		t.Fatalf("warning count = %d, want 2 (stderr: %q)", count, stderr)
+	}
+
+	s.StrategyOptions = map[string]any{}
+	stderr = captureSettingsStderr(t, s.WarnIfCheckpointsV2Disallowed)
+	if stderr != "" {
+		t.Fatalf("warning after removing v2 setting = %q, want empty", stderr)
 	}
 }
 
@@ -965,14 +983,6 @@ func captureSettingsStderr(t *testing.T, fn func()) string {
 	_ = r.Close()
 	os.Stderr = origStderr
 	return string(buf)
-}
-
-// resetCheckpointsV2DisallowedOnce zeroes the package-level warn-once for
-// disallowed checkpoints v2 settings. Tests using this helper must not run in
-// parallel.
-func resetCheckpointsV2DisallowedOnce(t *testing.T) {
-	t.Helper()
-	checkpointsV2DisallowedOnce = sync.Once{}
 }
 
 func TestIsPushV2RefsEnabled_DefaultsFalse(t *testing.T) {

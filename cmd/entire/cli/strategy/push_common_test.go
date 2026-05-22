@@ -144,8 +144,8 @@ func TestPushBranchIfNeeded_UnreachableTarget_ReturnsNil(t *testing.T) {
 	assert.NoError(t, err, "pushBranchIfNeeded should return nil when target is unreachable")
 }
 
-// TestPrePush_WarnsForDisallowedV2Settings verifies that push-time is where
-// users are told legacy v2 settings now fall back to v1.
+// TestPrePush_WarnsForDisallowedV2Settings verifies that push-time keeps
+// telling users legacy v2 settings fall back to v1 until they remove them.
 //
 // Not parallel: uses t.Chdir() and os.Stderr redirection.
 func TestPrePush_WarnsForDisallowedV2Settings(t *testing.T) {
@@ -162,6 +162,13 @@ func TestPrePush_WarnsForDisallowedV2Settings(t *testing.T) {
 	restore := captureStderr(t)
 	err := (&ManualCommitStrategy{}).PrePush(context.Background(), "origin")
 	output := restore()
+
+	require.NoError(t, err)
+	assert.Contains(t, output, "[entire] strategy_options.checkpoints_version 2 is no longer supported. Falling back to version 1")
+
+	restore = captureStderr(t)
+	err = (&ManualCommitStrategy{}).PrePush(context.Background(), "origin")
+	output = restore()
 
 	require.NoError(t, err)
 	assert.Contains(t, output, "[entire] strategy_options.checkpoints_version 2 is no longer supported. Falling back to version 1")

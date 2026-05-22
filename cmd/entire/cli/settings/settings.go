@@ -37,7 +37,6 @@ const (
 
 var (
 	checkpointsVersionWarningOnce sync.Once
-	checkpointsV2DisallowedOnce   sync.Once
 )
 
 type worktreeRootContextKey struct{}
@@ -1169,12 +1168,10 @@ func (s *EntireSettings) disallowedCheckpointsV2Value() (any, bool) {
 }
 
 func warnCheckpointsV2Disallowed(val any) {
-	checkpointsV2DisallowedOnce.Do(func() {
-		fmt.Fprintf(os.Stderr,
-			"[entire] strategy_options.checkpoints_version %v is no longer supported. Falling back to version 1\n",
-			val,
-		)
-	})
+	fmt.Fprintf(os.Stderr,
+		"[entire] strategy_options.checkpoints_version %v is no longer supported. Falling back to version 1\n",
+		val,
+	)
 }
 
 func parseCheckpointsVersion(val any) (int, bool) {
