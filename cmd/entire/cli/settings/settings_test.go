@@ -855,57 +855,6 @@ func TestCheckpointsVersion(t *testing.T) {
 	}
 }
 
-func TestCheckpointsWriteVersion(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		opts map[string]any
-		want int
-	}{
-		{"unset defaults to one", nil, 1},
-		{"empty options defaults to one", map[string]any{}, 1},
-		{"integer 2 disallowed for writes", map[string]any{"checkpoints_version": 2}, 1},
-		{"float 2 disallowed for writes", map[string]any{"checkpoints_version": float64(2)}, 1},
-		{"string 2 disallowed for writes", map[string]any{"checkpoints_version": "2"}, 1},
-		{"integer 1 remains one", map[string]any{"checkpoints_version": 1}, 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			s := &EntireSettings{StrategyOptions: tt.opts}
-			if got := s.CheckpointsWriteVersion(); got != tt.want {
-				t.Errorf("CheckpointsWriteVersion() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsCheckpointsV2WriteEnabled_AlwaysFalseAfterDisallow(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		opts map[string]any
-	}{
-		{"checkpoints_version 2", map[string]any{"checkpoints_version": 2}},
-		{"checkpoints_v2 true", map[string]any{"checkpoints_v2": true}},
-		{"both true", map[string]any{"checkpoints_v2": true, "checkpoints_version": 2}},
-		{"empty options", map[string]any{}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			s := &EntireSettings{StrategyOptions: tt.opts}
-			if s.IsCheckpointsV2WriteEnabled() {
-				t.Error("expected IsCheckpointsV2WriteEnabled to be false")
-			}
-		})
-	}
-}
-
 func TestWarnIfCheckpointsV2Disallowed(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -969,27 +969,6 @@ func CheckpointsVersion(ctx context.Context) int {
 	return version
 }
 
-// CheckpointsWriteVersion returns the checkpoint version used for new writes.
-// Checkpoints v2 settings are no longer supported for writes, so legacy v2
-// configuration falls back to v1.
-func CheckpointsWriteVersion(ctx context.Context) int {
-	s, err := Load(ctx)
-	if err != nil {
-		return 1
-	}
-	return s.CheckpointsWriteVersion()
-}
-
-// IsCheckpointsV2WriteEnabled returns whether new writes should create v2
-// checkpoint refs. Legacy settings are disallowed for writes, so this is false.
-func IsCheckpointsV2WriteEnabled(ctx context.Context) bool {
-	s, err := Load(ctx)
-	if err != nil {
-		return false
-	}
-	return s.IsCheckpointsV2WriteEnabled()
-}
-
 // WarnIfCheckpointsV2Disallowed emits the user-facing fallback warning when a
 // settings file still requests checkpoints v2. Call this from push-time flows
 // so users learn why v1 metadata is being pushed instead.
@@ -1083,8 +1062,7 @@ func (s *EntireSettings) GetCheckpointRemote() *CheckpointRemoteConfig {
 }
 
 // IsCheckpointsV2Enabled checks if checkpoints v2 is enabled for read paths.
-// Writes use IsCheckpointsV2WriteEnabled instead so existing v2 checkpoint
-// metadata remains readable while new writes fall back to v1.
+// Existing v2 checkpoint metadata remains readable while new writes use v1.
 func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 	if s.StrategyOptions == nil {
 		return false
@@ -1116,18 +1094,6 @@ func (s *EntireSettings) CheckpointsVersion() int {
 	if ok && version == 1 {
 		return 1
 	}
-	return 1
-}
-
-// IsCheckpointsV2WriteEnabled always returns false. Legacy checkpoints v2
-// settings are read-compatible but no longer enable new v2 writes.
-func (s *EntireSettings) IsCheckpointsV2WriteEnabled() bool {
-	return false
-}
-
-// CheckpointsWriteVersion returns the checkpoint version used for writes.
-// Writes always use v1 now, even when legacy settings request v2.
-func (s *EntireSettings) CheckpointsWriteVersion() int {
 	return 1
 }
 
