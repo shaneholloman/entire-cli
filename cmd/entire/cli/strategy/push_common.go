@@ -442,10 +442,18 @@ func getMergeBase(ctx context.Context, repoPath, hashA, hashB string) (plumbing.
 	cmd.Dir = repoPath
 	output, err := cmd.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return plumbing.ZeroHash, errNoMergeBase
+		}
 		return plumbing.ZeroHash, fmt.Errorf("git merge-base failed: %w", err)
 	}
 
-	return plumbing.NewHash(strings.TrimSpace(string(output))), nil
+	mergeBase := strings.TrimSpace(string(output))
+	if mergeBase == "" {
+		return plumbing.ZeroHash, errNoMergeBase
+	}
+	return plumbing.NewHash(mergeBase), nil
 }
 
 // collectCommitsSince returns non-merge commits reachable from tip but not from

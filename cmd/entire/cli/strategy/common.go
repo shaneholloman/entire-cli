@@ -50,6 +50,8 @@ const MaxCommitTraversalDepth = 1000
 // Each package needs its own package-scoped sentinel for git log iteration patterns.
 var errStop = errors.New("stop iteration")
 
+var errNoMergeBase = errors.New("no merge base")
+
 // IsEmptyRepository returns true if the repository has no commits yet.
 // After git-init, HEAD points to an unborn branch (e.g., refs/heads/main)
 // whose target does not yet exist. repo.Head() returns ErrReferenceNotFound
@@ -126,47 +128,77 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 	return nil
 }
 
-// SafelyAdvanceLocalRef updates localRefName to point at targetHash only when
-// the move is non-destructive:
-//
-//   - local missing → create at target
-//   - local == target → no-op
-//   - local at or ahead of target (target is an ancestor of local) → no-op
-//   - local strictly behind target (local is an ancestor of target) → fast-forward
-//   - diverged or unrelated history (neither ref is an ancestor of the other)
-//     → no-op, logged at debug level
-//
-// The diverged case is the dangerous one this guard exists for. The CLI
-// maintains orphan-style refs (entire/checkpoints/v1, the V2 main ref) where
-// unpushed local commits encode user work — a fetch that landed sibling
-// commits from another machine must not silently rewind that work. In the
-// diverged case readers fall through to the remote-tracking tree or to v1,
-// so resume keeps working while local-only commits stay reachable.
-//
-// The ancestry checks walk from the local ref (which has full history), so
-// callers that fetched with --depth=1 do not break the check.
+// SafelyAdvanceLocalRef updates localRefName to include targetHash without
+// dropping local-only commits. Missing and behind refs advance to targetHash;
+// already-current or locally-ahead refs are left unchanged; diverged refs replay
+// commits after the merge-base onto targetHash and move localRefName to the
+// replayed tip. If there is no merge-base, the full local chain is replayed.
 func SafelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash) error {
 	currentLocal, localErr := repo.Reference(localRefName, true)
-	if localErr == nil {
-		if currentLocal.Hash() == targetHash {
-			return nil
-		}
-		if IsAncestorOf(ctx, repo, targetHash, currentLocal.Hash()) {
-			return nil
-		}
-		if !IsAncestorOf(ctx, repo, currentLocal.Hash(), targetHash) {
-			logging.Debug(ctx, "skipping advance: local ref has diverged from target",
-				slog.String("ref", string(localRefName)),
-				slog.String("local", currentLocal.Hash().String()),
-				slog.String("target", targetHash.String()),
-			)
-			return nil
-		}
+	if localErr != nil {
+		return setRefHash(repo, localRefName, targetHash)
 	}
 
-	newRef := plumbing.NewHashReference(localRefName, targetHash)
+	localHash := currentLocal.Hash()
+	if localHash == targetHash {
+		return nil
+	}
+
+	repoPath, err := getRepoPath(repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repo path: %w", err)
+	}
+
+	mergeBase, err := getMergeBase(ctx, repoPath, localHash.String(), targetHash.String())
+	if errors.Is(err, errNoMergeBase) {
+		return replayDisconnectedLocalRef(ctx, repo, localRefName, localHash, targetHash)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to find merge base for %s: %w", localRefName, err)
+	}
+	if mergeBase == targetHash {
+		return nil
+	}
+	if mergeBase == localHash {
+		return setRefHash(repo, localRefName, targetHash)
+	}
+
+	return replayLocalRefFromBase(ctx, repo, repoPath, localRefName, localHash, targetHash, mergeBase)
+}
+
+func replayLocalRefFromBase(ctx context.Context, repo *git.Repository, repoPath string, localRefName plumbing.ReferenceName, localHash, targetHash, baseHash plumbing.Hash) error {
+	localCommits, err := collectCommitsSince(ctx, repo, repoPath, localHash, baseHash)
+	if err != nil {
+		return fmt.Errorf("failed to collect local replay commits for %s: %w", localRefName, err)
+	}
+	return replayLocalCommits(ctx, repo, localRefName, targetHash, localCommits)
+}
+
+func replayDisconnectedLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, localHash, targetHash plumbing.Hash) error {
+	localCommits, err := collectCommitChain(repo, localHash)
+	if err != nil {
+		return fmt.Errorf("failed to collect disconnected local commits for %s: %w", localRefName, err)
+	}
+	return replayLocalCommits(ctx, repo, localRefName, targetHash, localCommits)
+}
+
+func replayLocalCommits(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash, localCommits []*object.Commit) error {
+	if len(localCommits) == 0 {
+		return setRefHash(repo, localRefName, targetHash)
+	}
+
+	newTip, err := cherryPickOnto(ctx, repo, targetHash, localCommits)
+	if err != nil {
+		return fmt.Errorf("failed to replay local commits for %s: %w", localRefName, err)
+	}
+
+	return setRefHash(repo, localRefName, newTip)
+}
+
+func setRefHash(repo *git.Repository, refName plumbing.ReferenceName, hash plumbing.Hash) error {
+	newRef := plumbing.NewHashReference(refName, hash)
 	if err := repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to update local ref %s: %w", localRefName, err)
+		return fmt.Errorf("failed to update local ref %s: %w", refName, err)
 	}
 	return nil
 }
