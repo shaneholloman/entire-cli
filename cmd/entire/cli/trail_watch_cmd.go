@@ -56,7 +56,7 @@ connection (~50s) and on transient network errors.
 If <number> is omitted, the trail for the current branch is used.
 
 This command resolves the trail's id internally and streams
-GET /api/v1/review-events?trail_id=<id>&stream=1.
+GET /api/v1/trails/<id>/reviews/events with Accept: text/event-stream.
 
 Events emitted by the server:
   ready              initial frame, includes trail and cursor
@@ -188,10 +188,10 @@ func resolveTrailWatchTarget(ctx context.Context, client *api.Client, number int
 	if found == nil {
 		return "", "", fmt.Errorf("no trail found for branch %q (pass an explicit trail number)", branch)
 	}
-	if found.TrailID == "" {
+	if found.ID == "" {
 		return "", "", fmt.Errorf("trail for branch %q has no id yet", branch)
 	}
-	return found.TrailID, trailWatchDescription(host, owner, repo, found.Number, found.TrailID), nil
+	return found.ID, trailWatchDescription(host, owner, repo, found.Number, found.ID), nil
 }
 
 func resolveTrailWatchNumber(ctx context.Context, client *api.Client, number int) (trailID, description string, err error) {
@@ -206,10 +206,10 @@ func resolveTrailWatchNumber(ctx context.Context, client *api.Client, number int
 	if found == nil {
 		return "", "", fmt.Errorf("no trail #%d found in %s/%s/%s", number, host, owner, repo)
 	}
-	if found.TrailID == "" {
+	if found.ID == "" {
 		return "", "", fmt.Errorf("trail #%d has no id yet", number)
 	}
-	return found.TrailID, trailWatchDescription(host, owner, repo, found.Number, found.TrailID), nil
+	return found.ID, trailWatchDescription(host, owner, repo, found.Number, found.ID), nil
 }
 
 func trailWatchDescription(host, owner, repo string, number int, trailID string) string {
@@ -220,10 +220,7 @@ func trailWatchDescription(host, owner, repo string, number int, trailID string)
 }
 
 func reviewEventsPath(trailID string) string {
-	query := url.Values{}
-	query.Set("trail_id", trailID)
-	query.Set("stream", "1")
-	return "/api/v1/review-events?" + query.Encode()
+	return "/api/v1/trails/" + url.PathEscape(trailID) + "/reviews/events"
 }
 
 type streamCloseReason int
