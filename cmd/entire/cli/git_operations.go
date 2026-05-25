@@ -412,6 +412,18 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 	return fetchMetadataFromOrigin(ctx, true /* shallow */, false /* noFilter */)
 }
 
+func fullMetadataFetchArgs(ctx context.Context) []string {
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return nil
+	}
+	shallowHashes, err := repo.Storer.Shallow()
+	if err != nil || len(shallowHashes) == 0 {
+		return nil
+	}
+	return []string{"--unshallow"}
+}
+
 // fetchMetadataFromOrigin fetches the v1 metadata branch from origin into the
 // remote-tracking ref refs/remotes/origin/<branch>, then safely advances the
 // local branch to match. When shallow is true, --depth=1 is added so only
@@ -429,13 +441,18 @@ func fetchMetadataFromOrigin(ctx context.Context, shallow, noFilter bool) error 
 	}
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
+	extraArgs := []string(nil)
+	if !shallow {
+		extraArgs = fullMetadataFetchArgs(ctx)
+	}
 
 	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:   fetchTarget,
-		RefSpecs: []string{refSpec},
-		NoTags:   true,
-		Shallow:  shallow,
-		NoFilter: noFilter,
+		Remote:    fetchTarget,
+		RefSpecs:  []string{refSpec},
+		NoTags:    true,
+		Shallow:   shallow,
+		NoFilter:  noFilter,
+		ExtraArgs: extraArgs,
 	})
 	if fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -487,13 +504,18 @@ func fetchV2MainFromOrigin(ctx context.Context, shallow, noFilter bool) error {
 	}
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, strategy.V2MainFetchTmpRef)
+	extraArgs := []string(nil)
+	if !shallow {
+		extraArgs = fullMetadataFetchArgs(ctx)
+	}
 
 	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:   fetchTarget,
-		RefSpecs: []string{refSpec},
-		NoTags:   true,
-		Shallow:  shallow,
-		NoFilter: noFilter,
+		Remote:    fetchTarget,
+		RefSpecs:  []string{refSpec},
+		NoTags:    true,
+		Shallow:   shallow,
+		NoFilter:  noFilter,
+		ExtraArgs: extraArgs,
 	})
 	if fetchErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {

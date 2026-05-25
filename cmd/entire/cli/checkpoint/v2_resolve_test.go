@@ -126,11 +126,8 @@ func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T)
 		return repo, nil
 	}
 
-	// Treeless fails, local finds it (since we wrote to the repo), so full fetch may not be called.
-	// But the function should still succeed.
 	tree, _, err := GetV2MetadataTree(ctx, treelessFetchFn, fullFetchFn, openRepoFn)
 	require.NoError(t, err)
 	require.NotNil(t, tree)
-	// Local ref lookup succeeds before full fetch is needed
-	_ = fullFetchCalled
+	assert.True(t, fullFetchCalled, "full fetch should be tried before accepting a stale local ref")
 }
