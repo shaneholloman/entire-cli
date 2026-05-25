@@ -1682,6 +1682,9 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 	if err == nil {
 		return nil // Branch exists
 	}
+	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("failed to check sessions branch: %w", err)
+	}
 
 	// Create orphan branch with empty tree
 	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))

@@ -1280,6 +1280,34 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 	}
 }
 
+func TestSafelyAdvanceLocalRef_DoesNotAdvanceOnRefReadError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	initTestRepo(t, dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	refPath := filepath.Join(dir, ".git", "refs", "heads", "entire", "checkpoints", "v1")
+	packedRefsPath := filepath.Join(dir, ".git", "packed-refs")
+	require.NoError(t, os.WriteFile(packedRefsPath, []byte("malformed packed refs\n"), 0o644))
+
+	repo, err = git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	err = SafelyAdvanceLocalRef(context.Background(), repo, refName, head.Hash())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read local ref")
+
+	_, err = os.Stat(refPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+
 // buildCommittedTree creates a git tree with the sharded committed checkpoint layout
 // used by entire/checkpoints/v1. files is a map of path -> content relative to the tree root.
 // Example: {"a3/b2c4d5e6f7/0/prompt.txt": "Hello"} creates the nested directory structure.

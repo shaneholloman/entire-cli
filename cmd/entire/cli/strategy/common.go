@@ -136,6 +136,9 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 func SafelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefName plumbing.ReferenceName, targetHash plumbing.Hash) error {
 	currentLocal, localErr := repo.Reference(localRefName, true)
 	if localErr != nil {
+		if !errors.Is(localErr, plumbing.ErrReferenceNotFound) {
+			return fmt.Errorf("failed to read local ref %s: %w", localRefName, localErr)
+		}
 		return setRefHash(repo, localRefName, targetHash)
 	}
 

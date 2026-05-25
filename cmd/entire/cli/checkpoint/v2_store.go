@@ -83,6 +83,9 @@ func (s *V2GitStore) ensureRef(ctx context.Context, refName plumbing.ReferenceNa
 	if err == nil {
 		return nil // Already exists
 	}
+	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("failed to check ref %s: %w", refName, err)
+	}
 
 	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
 	if err != nil {
