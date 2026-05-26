@@ -54,8 +54,7 @@ func TestManualCommitStrategy_ListCheckpointsUsesLocalV2WhenSettingsDisabled(t *
 	require.NoError(t, err)
 
 	cpID := id.MustCheckpointID("dd11ee22ff33")
-	v2Store := checkpoint.NewV2GitStore(repo)
-	require.NoError(t, v2Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
+	writeV2CheckpointFixture(t, repo, checkpoint.WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-v2-local",
 		Strategy:     "manual-commit",
@@ -63,7 +62,7 @@ func TestManualCommitStrategy_ListCheckpointsUsesLocalV2WhenSettingsDisabled(t *
 		Prompts:      []string{"Use local v2 data"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@example.com",
-	}))
+	})
 
 	s := NewManualCommitStrategy()
 	checkpoints, err := s.listCheckpoints(context.Background())

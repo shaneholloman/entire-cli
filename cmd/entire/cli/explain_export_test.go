@@ -63,7 +63,6 @@ func setupExportRepo(t *testing.T) *git.Repository {
 
 func writeV2CheckpointForExport(t *testing.T, repo *git.Repository, cpID id.CheckpointID, opts checkpoint.WriteCommittedOptions) {
 	t.Helper()
-	store := checkpoint.NewV2GitStore(repo)
 	opts.CheckpointID = cpID
 	if opts.AuthorName == "" {
 		opts.AuthorName = exportTestAuthorName
@@ -74,7 +73,7 @@ func writeV2CheckpointForExport(t *testing.T, repo *git.Repository, cpID id.Chec
 	if opts.Strategy == "" {
 		opts.Strategy = "manual-commit"
 	}
-	require.NoError(t, store.WriteCommitted(context.Background(), opts))
+	writeV2CheckpointFixture(t, repo, opts)
 }
 
 func TestRunExplainExport_JSONSingleCheckpoint(t *testing.T) {
@@ -337,7 +336,7 @@ func TestExplainCmd_RawTranscriptMultiSessionDistinctContent(t *testing.T) {
 		SessionID:  "session-zero",
 		Transcript: redact.AlreadyRedacted(rawSession0),
 	})
-	// Second WriteCommitted with the same checkpoint ID appends session 1.
+	// Second fixture write with the same checkpoint ID appends session 1.
 	writeV2CheckpointForExport(t, repo, cpID, checkpoint.WriteCommittedOptions{
 		SessionID:  "session-one",
 		Transcript: redact.AlreadyRedacted(rawSession1),

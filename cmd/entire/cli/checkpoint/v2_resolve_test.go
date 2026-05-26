@@ -16,12 +16,11 @@ import (
 func TestGetV2MetadataTree_LocalRef(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
 	cpID := id.MustCheckpointID("a1a2a3a4a5a6")
 	ctx := context.Background()
 
-	// Write a checkpoint so the /main ref exists
-	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+	// Write a checkpoint fixture so the /main ref exists.
+	writeV2TestCheckpoint(t, repo, WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
@@ -29,7 +28,6 @@ func TestGetV2MetadataTree_LocalRef(t *testing.T) {
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
-	require.NoError(t, err)
 
 	openRepoFn := func(_ context.Context) (*git.Repository, error) {
 		return repo, nil
@@ -65,12 +63,11 @@ func TestGetV2MetadataTree_NoRef_ReturnsError(t *testing.T) {
 func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
 	cpID := id.MustCheckpointID("b1b2b3b4b5b6")
 	ctx := context.Background()
 
-	// Write checkpoint so the ref exists after "fetch"
-	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+	// Write checkpoint fixture so the ref exists after "fetch".
+	writeV2TestCheckpoint(t, repo, WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
@@ -78,7 +75,6 @@ func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
-	require.NoError(t, err)
 
 	fetchCalled := false
 	treelessFetchFn := func(_ context.Context) error {
@@ -99,11 +95,10 @@ func TestGetV2MetadataTree_FetchSucceeds(t *testing.T) {
 func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)
-	store := NewV2GitStore(repo)
 	cpID := id.MustCheckpointID("c1c2c3c4c5c6")
 	ctx := context.Background()
 
-	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+	writeV2TestCheckpoint(t, repo, WriteCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-1",
 		Strategy:     "manual-commit",
@@ -111,7 +106,6 @@ func TestGetV2MetadataTree_TreelessFetchFails_FallsBackToFullFetch(t *testing.T)
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
-	require.NoError(t, err)
 
 	treelessFetchFn := func(_ context.Context) error {
 		return errors.New("treeless fetch failed")
