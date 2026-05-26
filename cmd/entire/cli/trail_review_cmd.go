@@ -261,10 +261,15 @@ func runTrailReviewDashboard(cmd *cobra.Command, number int, opts trailReviewLis
 	if err != nil {
 		return err
 	}
-	if opts.JSON {
-		return encodeTrailReviewJSON(cmd.OutOrStdout(), target, comments, hasMore)
+	summaryComments, err := fetchAllTrailReviewComments(cmd.Context(), client, target.Trail.ID, trailReviewSummaryOptions())
+	if err != nil {
+		return err
 	}
-	printTrailReviewDashboard(cmd.OutOrStdout(), target, comments, hasMore, opts)
+	counts := countTrailReviewComments(summaryComments)
+	if opts.JSON {
+		return encodeTrailReviewJSON(cmd.OutOrStdout(), target, comments, hasMore, counts)
+	}
+	printTrailReviewDashboard(cmd.OutOrStdout(), target, comments, hasMore, opts, counts)
 	return nil
 }
 
@@ -278,7 +283,7 @@ func runTrailReviewComments(cmd *cobra.Command, number int, opts trailReviewList
 		return err
 	}
 	if opts.JSON {
-		return encodeTrailReviewJSON(cmd.OutOrStdout(), target, comments, hasMore)
+		return encodeTrailReviewJSON(cmd.OutOrStdout(), target, comments, hasMore, countTrailReviewComments(comments))
 	}
 	printTrailReviewComments(cmd.OutOrStdout(), comments, hasMore)
 	return nil
@@ -470,6 +475,34 @@ func fetchTrailReviewComments(ctx context.Context, client *api.Client, trailID s
 	return out.Comments, out.HasMore, nil
 }
 
+func fetchAllTrailReviewComments(ctx context.Context, client *api.Client, trailID string, opts trailReviewListOptions) ([]api.TrailReviewComment, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = defaultTrailReviewLimit
+	}
+	var all []api.TrailReviewComment
+	for {
+		comments, hasMore, err := fetchTrailReviewComments(ctx, client, trailID, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, comments...)
+		if !hasMore {
+			break
+		}
+		opts.Offset += opts.Limit
+	}
+	return all, nil
+}
+
+func trailReviewSummaryOptions() trailReviewListOptions {
+	return trailReviewListOptions{
+		Status:           trailReviewStatusAny,
+		Stale:            trailReviewStaleAny,
+		IncludeDismissed: true,
+		Limit:            defaultTrailReviewLimit,
+	}
+}
+
 func trailReviewCommentsPath(trailID string, opts trailReviewListOptions) string {
 	q := url.Values{}
 	if opts.Status != "" && opts.Status != trailReviewStatusAny {
@@ -557,26 +590,58 @@ func hydrateTrailReviewCommentWithState(ctx context.Context, client *api.Client,
 }
 
 func fetchTrailReviewState(ctx context.Context, client *api.Client, trailID, reviewID string) (api.TrailReviewStateResponse, error) {
-	resp, err := client.Get(ctx, trailReviewStatePath(trailID, reviewID))
-	if err != nil {
-		return api.TrailReviewStateResponse{}, fmt.Errorf("get review state: %w", err)
+	var merged api.TrailReviewStateResponse
+	cursor := ""
+	seenCursors := map[string]bool{}
+	for {
+		resp, err := client.Get(ctx, trailReviewStatePath(trailID, reviewID, cursor))
+		if err != nil {
+			return api.TrailReviewStateResponse{}, fmt.Errorf("get review state: %w", err)
+		}
+		var page api.TrailReviewStateResponse
+		decodeErr := func() error {
+			defer resp.Body.Close()
+			if err := checkTrailResponse(resp); err != nil {
+				return err
+			}
+			if err := api.DecodeJSON(resp, &page); err != nil {
+				return fmt.Errorf("decode review state: %w", err)
+			}
+			return nil
+		}()
+		if decodeErr != nil {
+			return api.TrailReviewStateResponse{}, decodeErr
+		}
+
+		if cursor == "" {
+			merged = page
+		} else {
+			merged.Comments = append(merged.Comments, page.Comments...)
+			merged.NextCursor = page.NextCursor
+			merged.EventCursor = page.EventCursor
+		}
+
+		if page.NextCursor == nil || strings.TrimSpace(*page.NextCursor) == "" {
+			merged.NextCursor = nil
+			break
+		}
+		cursor = strings.TrimSpace(*page.NextCursor)
+		if seenCursors[cursor] {
+			return api.TrailReviewStateResponse{}, fmt.Errorf("review state pagination repeated cursor %q", cursor)
+		}
+		seenCursors[cursor] = true
 	}
-	defer resp.Body.Close()
-	if err := checkTrailResponse(resp); err != nil {
-		return api.TrailReviewStateResponse{}, err
-	}
-	var out api.TrailReviewStateResponse
-	if err := api.DecodeJSON(resp, &out); err != nil {
-		return api.TrailReviewStateResponse{}, fmt.Errorf("decode review state: %w", err)
-	}
-	return out, nil
+	return merged, nil
 }
 
-func trailReviewStatePath(trailID, reviewID string) string {
+func trailReviewStatePath(trailID, reviewID, cursor string) string {
 	q := url.Values{}
 	q.Set("include_dismissed", "true")
 	q.Set("stale", trailReviewStaleAny)
 	q.Set("limit", strconv.Itoa(defaultTrailReviewLimit))
+	if strings.TrimSpace(cursor) != "" {
+		q.Set("cursor", strings.TrimSpace(cursor))
+	}
 	return "/api/v1/trails/" + url.PathEscape(trailID) + "/reviews/" + url.PathEscape(reviewID) + "?" + q.Encode()
 }
 
@@ -764,23 +829,23 @@ func submitTrailReview(ctx context.Context, client *api.Client, target trailRevi
 	return out, nil
 }
 
-func encodeTrailReviewJSON(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, hasMore bool) error {
+func encodeTrailReviewJSON(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, hasMore bool, counts trailReviewCommentCounts) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(map[string]any{
 		"trail":    target.Trail,
+		"counts":   counts,
 		"comments": comments,
 		"has_more": hasMore,
 	})
 }
 
-func printTrailReviewDashboard(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, hasMore bool, opts trailReviewListOptions) {
+func printTrailReviewDashboard(w io.Writer, target trailReviewTarget, comments []api.TrailReviewComment, hasMore bool, opts trailReviewListOptions, counts trailReviewCommentCounts) {
 	trail := target.Trail
 	fmt.Fprintf(w, "Trail #%d  %s\n", trail.Number, trail.Title)
 	fmt.Fprintf(w, "Status: %s   Branch: %s   Base: %s\n", trail.Status, trail.Branch, trail.Base)
 	fmt.Fprintf(w, "ID: %s\n\n", trail.ID)
 
-	counts := countTrailReviewComments(comments)
 	fmt.Fprintf(w, "Open findings: %d  high %d  medium %d  low %d\n", counts.Open, counts.OpenHigh, counts.OpenMedium, counts.OpenLow)
 	fmt.Fprintf(w, "Resolved: %d        Dismissed: %d     Stale: %d\n", counts.Resolved, counts.Dismissed, counts.Stale)
 	if hasMore {
@@ -789,7 +854,7 @@ func printTrailReviewDashboard(w io.Writer, target trailReviewTarget, comments [
 	fmt.Fprintln(w)
 
 	if len(comments) == 0 {
-		fmt.Fprintln(w, "No review findings found.")
+		fmt.Fprintln(w, "No review findings match the current filters.")
 		return
 	}
 

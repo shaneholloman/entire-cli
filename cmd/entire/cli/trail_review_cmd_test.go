@@ -61,7 +61,7 @@ func TestPrintTrailReviewDashboard(t *testing.T) {
 		Status: "in_review",
 		Branch: "feat/token-refresh",
 		Base:   "main",
-	}}, comments, false, defaultTrailReviewListOptions())
+	}}, comments, false, defaultTrailReviewListOptions(), countTrailReviewComments(comments))
 	text := out.String()
 	for _, want := range []string{
 		"Trail #42  Add token refresh",
@@ -71,6 +71,32 @@ func TestPrintTrailReviewDashboard(t *testing.T) {
 		"src/auth/session.ts:88",
 		"Missing expiry skew handling",
 		"Actions:",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dashboard missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintTrailReviewDashboard_UsesSeparateCountsWhenFilteredCommentsEmpty(t *testing.T) {
+	var out strings.Builder
+	counts := countTrailReviewComments([]api.TrailReviewComment{
+		{ID: "resolved-1", Status: trailReviewStatusResolved},
+		{ID: "dismissed-1", Status: trailReviewStatusDismissed, StaleOutcome: "stale"},
+	})
+	printTrailReviewDashboard(&out, trailReviewTarget{Trail: api.TrailResource{
+		ID:     "trl_1",
+		Number: 42,
+		Title:  "Add token refresh",
+		Status: "in_review",
+		Branch: "feat/token-refresh",
+		Base:   "main",
+	}}, nil, false, defaultTrailReviewListOptions(), counts)
+	text := out.String()
+	for _, want := range []string{
+		"Open findings: 0  high 0  medium 0  low 0",
+		"Resolved: 1        Dismissed: 1     Stale: 1",
+		"No review findings match the current filters.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("dashboard missing %q:\n%s", want, text)
@@ -118,6 +144,51 @@ func TestFetchTrailReviewCommentsAndPatchStatus(t *testing.T) {
 	}
 	if gotPatchBody.Status != trailReviewStatusResolved || gotPatchBody.StatusReason == nil || *gotPatchBody.StatusReason != "fixed" {
 		t.Fatalf("patch body = %#v", gotPatchBody)
+	}
+}
+
+func TestFetchTrailReviewStateFollowsCursor(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/trails/trl_1/reviews/rvw_1" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		requests++
+		switch r.URL.Query().Get("cursor") {
+		case "":
+			next := "cursor-2"
+			_ = json.NewEncoder(w).Encode(api.TrailReviewStateResponse{
+				Review:      api.TrailReview{ID: "rvw_1"},
+				CodeVersion: api.TrailReviewCodeVersion{ID: "cv_1"},
+				Comments:    []api.TrailReviewComment{{ID: "cmt_1"}},
+				NextCursor:  &next,
+			})
+		case "cursor-2":
+			_ = json.NewEncoder(w).Encode(api.TrailReviewStateResponse{
+				Review:      api.TrailReview{ID: "rvw_1"},
+				CodeVersion: api.TrailReviewCodeVersion{ID: "cv_1"},
+				Comments:    []api.TrailReviewComment{{ID: "cmt_2"}},
+			})
+		default:
+			t.Fatalf("unexpected cursor %q", r.URL.Query().Get("cursor"))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv(api.BaseURLEnvVar, srv.URL)
+	client := api.NewClient("tok")
+
+	state, err := fetchTrailReviewState(context.Background(), client, "trl_1", "rvw_1")
+	if err != nil {
+		t.Fatalf("fetchTrailReviewState: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+	if len(state.Comments) != 2 || state.Comments[0].ID != "cmt_1" || state.Comments[1].ID != "cmt_2" {
+		t.Fatalf("comments = %#v", state.Comments)
+	}
+	if state.NextCursor != nil {
+		t.Fatalf("NextCursor = %#v, want nil after final page", state.NextCursor)
 	}
 }
 
