@@ -221,7 +221,7 @@ func shouldFetchV2Metadata(ctx context.Context, lookup *explainCheckpointLookup)
 		return false
 	}
 	switch lookup.store.(type) {
-	case *checkpoint.V2GitStore, *checkpoint.DualCheckpointReader:
+	case *checkpoint.DualCheckpointReader:
 		return true
 	default:
 		return false

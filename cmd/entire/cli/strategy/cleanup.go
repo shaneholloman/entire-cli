@@ -38,7 +38,6 @@ const (
 type CleanupItem struct {
 	Type   CleanupType
 	ID     string // Branch name, session ID, or checkpoint ID
-	RefOID string // For ref-based items: the OID observed at listing time (compare-and-swap)
 	Reason string // Why this item is being cleaned
 }
 

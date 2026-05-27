@@ -24,7 +24,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
-	"github.com/entireio/cli/cmd/entire/cli/transcript/compact"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
@@ -288,13 +287,6 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		writeOpts.ReviewSkills = reviewSkills
 		writeOpts.ReviewPrompt = reviewPromptForAttach(meta, opts)
 		writeOpts.HasReview = true
-	}
-
-	if compacted := compactTranscriptForStartLine(logCtx, redactedTranscript.Bytes(), cpkg.CommittedMetadata{
-		CheckpointID: checkpointID,
-		Agent:        ag.Type(),
-	}, 0); compacted != nil {
-		writeOpts.CompactTranscript = compacted
 	}
 
 	if err := store.WriteCommitted(ctx, writeOpts); err != nil {
@@ -674,39 +666,4 @@ func promptAmendCommit(ctx context.Context, w io.Writer, headCommit *object.Comm
 
 	fmt.Fprintf(w, "Amended commit %s with Entire-Checkpoint: %s\n", shortHash, checkpointIDStr)
 	return nil
-}
-
-func compactTranscriptForStartLine(ctx context.Context, transcript []byte, m cpkg.CommittedMetadata, startLine int) []byte {
-	if len(transcript) == 0 {
-		return nil
-	}
-	if m.Agent == "" {
-		logging.Warn(ctx, "compact transcript skipped: no agent type in checkpoint metadata",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-		)
-		return nil
-	}
-
-	compacted, err := compact.Compact(redact.AlreadyRedacted(transcript), compact.MetadataFields{
-		Agent:      string(m.Agent),
-		CLIVersion: versioninfo.Version,
-		StartLine:  startLine,
-	})
-	if err != nil {
-		logging.Warn(ctx, "compact transcript generation failed",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.String("error", err.Error()),
-		)
-		return nil
-	}
-	if len(compacted) == 0 {
-		logging.Warn(ctx, "transcript.jsonl generation produced no output",
-			slog.String("checkpoint_id", string(m.CheckpointID)),
-			slog.String("agent", string(m.Agent)),
-			slog.Int("input_bytes", len(transcript)),
-		)
-		return nil
-	}
-	return compacted
 }
