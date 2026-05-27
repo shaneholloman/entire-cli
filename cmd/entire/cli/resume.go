@@ -456,7 +456,8 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		)
 	}
 
-	// Try treeless fetch from origin
+	// Tip-only fetch (--depth=1) is cheap and always runs so the local lookup
+	// below doesn't return stale data.
 	if fetchErr := FetchMetadataTreeOnly(ctx); fetchErr == nil {
 		freshRepo, repoErr := openRepository(ctx)
 		if repoErr == nil {
