@@ -183,7 +183,13 @@ func PushURL(ctx context.Context, pushRemoteName string) (string, bool, error) {
 		}
 		return "", true, fmt.Errorf("no push URL found: %w", err)
 	}
-	if strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != "" {
+	if strings.TrimSpace(os.Getenv(CheckpointTokenEnvVar)) != "" && isDerivableProtocol(pushInfo.Protocol) {
+		// Coerce a derivable (ssh/https) remote to HTTPS so the token applies,
+		// keeping the host so enterprise installations stay on their own host.
+		// A non-derivable protocol (e.g. entire://) carries a host that isn't a
+		// usable HTTPS host, so it's left untouched and falls through to the
+		// providerCheckpointURL fallback below.
+		//
 		// Keep the port only when the source was already HTTPS. SSH ports
 		// (e.g., :2222) don't map to HTTPS ports on the same host.
 		port := ""
@@ -280,6 +286,13 @@ func DeriveCheckpointURL(pushRemoteURL string, config *settings.CheckpointRemote
 // ExtractOwnerFromRemoteURL extracts the owner component from a git remote URL.
 func ExtractOwnerFromRemoteURL(rawURL string) string {
 	return gitremote.ExtractOwnerFromRemoteURL(rawURL)
+}
+
+// isDerivableProtocol reports whether deriveCheckpointURLFromInfo can map the
+// protocol to a checkpoint URL (i.e. it's a real git transport, not a remote
+// helper scheme like entire:// or a local file://).
+func isDerivableProtocol(protocol string) bool {
+	return protocol == ProtocolSSH || protocol == ProtocolHTTPS
 }
 
 func deriveCheckpointURLFromInfo(info *Info, config *settings.CheckpointRemoteConfig) (string, error) {

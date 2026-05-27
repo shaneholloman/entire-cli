@@ -335,6 +335,15 @@ func TestPushURL(t *testing.T) {
 			wantEnabled:  false,
 		},
 		{
+			name:         "token with entire:// origin routes to provider host not origin host",
+			originURL:    "entire://app.entire.io/acme/app",
+			pushRemote:   "origin",
+			settingsJSON: `{"enabled":true,"strategy_options":{"checkpoint_remote":{"provider":"github","repo":"acme/checkpoints"}}}`,
+			token:        "push-token",
+			wantURL:      "https://github.com/acme/checkpoints.git",
+			wantEnabled:  true,
+		},
+		{
 			name:         "missing push remote falls back to origin when checkpoint remote configured",
 			originURL:    "https://github.com/acme/app.git",
 			pushRemote:   "upstream",
