@@ -1,4 +1,4 @@
-//nolint:ireturn,wrapcheck // billy.Filesystem requires interface-returning passthrough methods; preserve osfs errors exactly.
+//nolint:wrapcheck // passthrough methods must preserve osfs errors exactly; wrapping would break go-git's os.IsNotExist fall-through.
 package gitrepo
 
 import (
