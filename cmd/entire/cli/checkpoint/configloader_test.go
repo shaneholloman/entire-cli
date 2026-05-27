@@ -1,15 +1,15 @@
 package checkpoint
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
+	"github.com/go-git/go-billy/v6/osfs"
 	git "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
-	"github.com/go-git/go-git/v6/x/plugin"
 	xconfig "github.com/go-git/go-git/v6/x/plugin/config"
 )
 
@@ -77,8 +77,8 @@ func TestOSSymlinkFS_ReadsGlobalConfigBehindSymlink(t *testing.T) {
 	// customer's report. This locks in the regression.
 	if _, err := xconfig.NewAuto().Load(config.GlobalScope); err == nil {
 		t.Fatal("default osfs loader unexpectedly succeeded on symlinked XDG config; regression no longer reproduces")
-	} else if !strings.Contains(err.Error(), "path escapes from parent") {
-		t.Fatalf("default loader error = %v, want it to contain %q", err, "path escapes from parent")
+	} else if !errors.Is(err, osfs.ErrPathEscapesParent) {
+		t.Fatalf("default loader error = %v, want errors.Is(..., osfs.ErrPathEscapesParent)", err)
 	}
 
 	// Symlink-following loader: must read through the symlink like git does.
@@ -133,14 +133,5 @@ func TestGetGitAuthorFromRepo_GlobalConfigBehindSymlink(t *testing.T) {
 // other tests stay isolated from the host environment.
 func useSymlinkConfigLoader(t *testing.T) {
 	t.Helper()
-	resetPluginEntry(configLoaderKey)
-	if err := registerSymlinkConfigLoader(); err != nil {
-		t.Fatalf("failed to register symlink config loader: %v", err)
-	}
-	t.Cleanup(func() {
-		resetPluginEntry(configLoaderKey)
-		if err := plugin.Register(plugin.ConfigLoader(), func() plugin.ConfigSource { return xconfig.NewEmpty() }); err != nil {
-			t.Fatalf("failed to restore NewEmpty config loader: %v", err)
-		}
-	})
+	registerConfigLoaderForTest(t, registerSymlinkConfigLoader)
 }
