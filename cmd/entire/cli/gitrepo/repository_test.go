@@ -50,6 +50,51 @@ func TestOpenPath_MultipleAlternates(t *testing.T) {
 	}
 }
 
+func TestHasObjectAlternates(t *testing.T) {
+	t.Parallel()
+
+	t.Run("main repository", func(t *testing.T) {
+		t.Parallel()
+
+		repoDir := t.TempDir()
+		_ = initRepoWithFile(t, repoDir, "root.txt", "root\n")
+
+		hasAlternates, err := hasObjectAlternates(repoDir)
+		require.NoError(t, err)
+		require.False(t, hasAlternates)
+
+		alternateDir := t.TempDir()
+		writeAlternates(t, repoDir, []string{filepath.Join(alternateDir, gitDir, "objects")})
+
+		hasAlternates, err = hasObjectAlternates(repoDir)
+		require.NoError(t, err)
+		require.True(t, hasAlternates)
+	})
+
+	t.Run("linked worktree common dir", func(t *testing.T) {
+		t.Parallel()
+
+		rootDir := t.TempDir()
+		worktreeDir := filepath.Join(rootDir, "worktree")
+		mainGitDir := filepath.Join(rootDir, "main.git")
+		worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "worktree")
+		alternateDir := filepath.Join(rootDir, "alternate.git", "objects")
+
+		require.NoError(t, os.MkdirAll(worktreeDir, 0o755))
+		require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, gitDir), []byte("gitdir: "+worktreeGitDir+"\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644))
+
+		infoDir := filepath.Join(mainGitDir, "objects", "info")
+		require.NoError(t, os.MkdirAll(infoDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(infoDir, "alternates"), []byte(alternateDir+"\n"), 0o644))
+
+		hasAlternates, err := hasObjectAlternates(worktreeDir)
+		require.NoError(t, err)
+		require.True(t, hasAlternates)
+	})
+}
+
 func initRepoWithFile(t *testing.T, repoDir, name, content string) string {
 	t.Helper()
 	repo, err := git.PlainInit(repoDir, false)

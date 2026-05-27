@@ -158,7 +158,11 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	if err != nil {
 		return err
 	}
-	defer repo.Close()
+	defer func() {
+		if closeErr := repo.Close(); closeErr != nil {
+			logging.Warn(logCtx, "failed to close repository", slog.String("error", closeErr.Error()))
+		}
+	}()
 
 	existingState, err := validateAttachPreconditions(ctx, repo, sessionID)
 	if err != nil {
@@ -226,7 +230,15 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// If HEAD references an existing checkpoint, make sure we have it locally
 	// before writing — otherwise we'd create a fresh session 0 under the same
 	// ID and overwrite the original on push.
-	repo, err = ensureCheckpointAvailable(ctx, logCtx, repo, checkpointID, isExistingCheckpoint)
+	refreshedRepo, err := ensureCheckpointAvailable(ctx, logCtx, repo, checkpointID, isExistingCheckpoint)
+	if refreshedRepo != nil && refreshedRepo != repo {
+		oldRepo := repo
+		repo = refreshedRepo
+		if closeErr := oldRepo.Close(); closeErr != nil {
+			logging.Warn(logCtx, "failed to close stale repository handle after checkpoint refresh",
+				slog.String("error", closeErr.Error()))
+		}
+	}
 	if err != nil {
 		return err
 	}

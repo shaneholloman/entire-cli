@@ -37,14 +37,49 @@ func OpenCurrent(ctx context.Context) (*git.Repository, error) {
 func OpenPath(repoRoot string) (*git.Repository, error) {
 	repo, err := openPathWithAlternates(repoRoot)
 	if err != nil {
-		// Intentional PlainOpen fallback: keep go-git's native support for unusual
-		// layouts that the custom alternate-aware opener cannot resolve yet.
+		if hasAlternates, altErr := hasObjectAlternates(repoRoot); altErr == nil && hasAlternates {
+			return nil, fmt.Errorf("failed to open repository with alternates support: %w", err)
+		}
+
+		// Intentional PlainOpen fallback for unusual layouts that do not use
+		// alternates. Repositories with alternates must not silently downgrade
+		// because PlainOpen cannot read absolute alternate object directories.
 		if fallbackRepo, fallbackErr := git.PlainOpen(repoRoot); fallbackErr == nil {
 			return fallbackRepo, nil
 		}
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
 	return repo, nil
+}
+
+func hasObjectAlternates(repoRoot string) (bool, error) {
+	repoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve repository root: %w", err)
+	}
+
+	dotGitPath, err := resolveDotGitPath(repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve .git path: %w", err)
+	}
+
+	commonGitPath, err := resolveCommonGitPath(dotGitPath)
+	if err != nil {
+		return false, fmt.Errorf("resolve common git path: %w", err)
+	}
+
+	candidates := []string{filepath.Join(dotGitPath, "objects", "info", "alternates")}
+	if commonGitPath != "" {
+		candidates = append(candidates, filepath.Join(commonGitPath, "objects", "info", "alternates"))
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("stat alternates file: %w", err)
+		}
+	}
+	return false, nil
 }
 
 func openPathWithAlternates(repoRoot string) (*git.Repository, error) {
