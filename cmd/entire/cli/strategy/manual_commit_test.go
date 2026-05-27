@@ -45,32 +45,6 @@ func TestShadowStrategy_ValidateRepository(t *testing.T) {
 	}
 }
 
-func TestManualCommitStrategy_ListCheckpointsIgnoresLocalV2(t *testing.T) {
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	t.Chdir(dir)
-
-	repo, err := git.PlainOpen(dir)
-	require.NoError(t, err)
-	defer repo.Close()
-
-	cpID := id.MustCheckpointID("dd11ee22ff33")
-	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-v2-local",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
-		Prompts:      []string{"Use local v2 data"},
-	})
-
-	s := NewManualCommitStrategy()
-	checkpoints, err := s.listCheckpoints(context.Background())
-	require.NoError(t, err)
-	for _, rewindPoint := range checkpoints {
-		require.NotEqual(t, cpID, rewindPoint.CheckpointID)
-	}
-}
-
 func TestShadowStrategy_ValidateRepository_NotGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

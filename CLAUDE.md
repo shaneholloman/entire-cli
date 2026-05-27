@@ -49,7 +49,7 @@ Cobra-native aliases (no hint): `sessions` → `session`, `cp`/`checkpoints` →
 Deprecated top-level alias (functional, prints cobra deprecation message):
 `reset` → `clean`.
 
-Hidden infrastructure commands: `hooks`, `migrate`, `trail`,
+Hidden infrastructure commands: `hooks`, `trail`,
 `curl-bash-post-install`, `__send_analytics`.
 
 The `hideAsAlias(cmd, canonical)` helper in `cmd/entire/cli/aliascmd.go`

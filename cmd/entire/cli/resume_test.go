@@ -601,41 +601,11 @@ func TestReadCheckpointInfoFromStoreUsesLatestSessionMetadata(t *testing.T) {
 	}
 }
 
-func TestResolveLatestCheckpointIgnoresLocalV2(t *testing.T) {
+func TestResolveLatestCheckpointUsesV1Checkpoint(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
 	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
-	cpID := id.MustCheckpointID("dd11ee22ff33")
-	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
-		CheckpointID: cpID,
-		SessionID:    "session-v2-local",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
-		Prompts:      []string{"Use local v2 data"},
-	})
-
-	store, err := checkpoint.NewCommittedReader(context.Background(), repo, checkpoint.CommittedReaderOptions{})
-	require.NoError(t, err)
-
-	latest, err := resolveLatestCheckpoint(context.Background(), repo, store, []id.CheckpointID{cpID})
-	require.Nil(t, latest)
-	require.ErrorContains(t, err, "no checkpoint metadata found")
-}
-
-func TestResolveLatestCheckpointUsesV1WhenLocalV2MissesCheckpoint(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	repo, _, _ := setupResumeTestRepo(t, tmpDir, false)
-
-	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
-		CheckpointID: id.MustCheckpointID("dd11ee22ff33"),
-		SessionID:    "session-v2-other",
-		Strategy:     "manual-commit",
-		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"from v2"}]}}` + "\n")),
-		Prompts:      []string{"Use local v2 data"},
-	})
 
 	targetID := createCheckpointOnMetadataBranchFull(
 		t,
@@ -758,7 +728,7 @@ func TestFindBranchCheckpoint_SquashMergeMultipleCheckpoints(t *testing.T) {
 	}
 }
 
-func TestResumeSingleSession_UsesV1WhenV2FullMissing(t *testing.T) {
+func TestResumeSingleSession_UsesV1Transcript(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 
@@ -791,13 +761,6 @@ func TestResumeSingleSession_UsesV1WhenV2FullMissing(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("failed to write v1 checkpoint: %v", err)
 	}
-
-	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
-		CheckpointID:      cpID,
-		SessionID:         sessionID,
-		Strategy:          "manual-commit",
-		CompactTranscript: []byte(`{"v":1,"type":"user"}` + "\n"),
-	})
 
 	ag := &recordingResumeAgent{sessionDir: filepath.Join(tmpDir, "sessions")}
 	var stdout, stderr bytes.Buffer

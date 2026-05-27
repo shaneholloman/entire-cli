@@ -134,9 +134,6 @@ func TestCleanLongDescription_DefaultIsGeneric(t *testing.T) {
 	writeCleanSettingsFile(t, repoRoot, `{"enabled": true, "strategy_options": {}}`)
 
 	description := cleanLongDescription()
-	if strings.Contains(description, "checkpoints v2") {
-		t.Fatalf("did not expect v2-specific help text by default, got: %s", description)
-	}
 	if strings.Contains(description, "entire/checkpoints/v1") {
 		t.Fatalf("did not expect stale v1 preservation text, got: %s", description)
 	}

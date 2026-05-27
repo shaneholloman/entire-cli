@@ -1000,9 +1000,9 @@ func (env *TestEnv) ReadFileFromBranch(branchName, filePath string) (string, boo
 	return content, true
 }
 
-// ReadFileFromRef reads a file's content from a specific ref's tree.
-// Unlike ReadFileFromBranch, this takes a full ref name (e.g., "refs/entire/checkpoints/v2/main")
-// and does not prepend "refs/heads/".
+// ReadFileFromRef reads a file's content from a specific ref's tree. Unlike
+// ReadFileFromBranch, this takes a full ref name and does not prepend
+// "refs/heads/".
 // Returns the content and true if found, empty string and false if not found.
 func (env *TestEnv) ReadFileFromRef(refName, filePath string) (string, bool) {
 	env.T.Helper()
