@@ -66,8 +66,8 @@ func (osSymlinkFS) OpenFile(name string, flag int, perm fs.FileMode) (billy.File
 	return f, nil
 }
 
-func (fs osSymlinkFS) Create(name string) (billy.File, error) {
-	return fs.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o666)
+func (o osSymlinkFS) Create(name string) (billy.File, error) {
+	return o.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o666)
 }
 
 func (osSymlinkFS) Rename(oldpath, newpath string) error {

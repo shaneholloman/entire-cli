@@ -54,8 +54,12 @@ func pointHomeAt(t *testing.T, home string) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	// t.Setenv registers restoration of the original value; unset it for the
+	// test so go-git falls back to XDG (an empty value disables global config).
 	t.Setenv("GIT_CONFIG_GLOBAL", "")
-	os.Unsetenv("GIT_CONFIG_GLOBAL")
+	if err := os.Unsetenv("GIT_CONFIG_GLOBAL"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestOSSymlinkFS_ReadsGlobalConfigBehindSymlink reproduces the customer's
