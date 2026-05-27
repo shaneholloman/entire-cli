@@ -44,14 +44,14 @@ func setupHeadFlagsRepo(t *testing.T) *git.Repository {
 	return repo
 }
 
-// writeHeadCheckpointWithFlags writes a v2 committed checkpoint and amends
+// writeHeadCheckpointWithFlags writes a committed checkpoint and amends
 // HEAD so it points at it via the Entire-Checkpoint trailer. The session
 // metadata is configured with the supplied flags so the resolved summary
 // surfaces them.
 func writeHeadCheckpointWithFlags(t *testing.T, repo *git.Repository, hasReview, hasInvestigation bool) id.CheckpointID {
 	t.Helper()
 	cpID := id.MustCheckpointID("aabbccdd1122")
-	store := checkpoint.NewV2GitStore(repo)
+	store := checkpoint.NewGitStore(repo)
 	require.NoError(t, store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
 		CheckpointID:     cpID,
 		SessionID:        "head-flags-session",

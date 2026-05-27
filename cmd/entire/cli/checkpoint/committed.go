@@ -20,6 +20,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/codex"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -1331,10 +1332,11 @@ func (s *GitStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]b
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
 // Returns ErrNoTranscript if the checkpoint exists but has no transcript.
 func LookupSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string, error) {
-	repo, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := gitrepo.OpenCurrent(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 	store := NewGitStore(repo)
 	return store.GetSessionLog(ctx, cpID)
 }
@@ -1648,10 +1650,6 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.Reda
 // plus the content-hash blob to the object store once, returning the resulting
 // hashes for reuse across multiple UpdateCommitted calls that share the same
 // transcript content.
-//
-// The returned blobs work for both v1 (full.jsonl) and v2 (raw_transcript)
-// paths since blob hashes are content-addressed (SHA-1 of chunk bytes). Only
-// the tree-entry filenames differ between v1 and v2.
 func PrecomputeTranscriptBlobs(ctx context.Context, repo *git.Repository, transcript redact.RedactedBytes, agentType types.AgentType) (*PrecomputedTranscriptBlobs, error) {
 	raw := transcript.Bytes()
 
@@ -1688,6 +1686,9 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
 		return nil // Branch exists
+	}
+	if !errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return fmt.Errorf("failed to check sessions branch: %w", err)
 	}
 
 	// Create orphan branch with empty tree
@@ -1904,8 +1905,9 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 // checking both the repository-local config and the global ~/.gitconfig.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 	// ConfigScoped merges local + global (local wins), matching git's own resolution.
-	// Requires a ConfigLoader plugin to be registered; cmd/entire/main.go blank-imports
-	// go-git/v6/x/plugin to register the default Auto loader.
+	// Uses the ConfigLoader plugin registered in configloader.go (a symlink-following
+	// Auto loader; importing go-git/v6/x/plugin registers go-git's default, which we
+	// override there so global config behind a symlinked ~/.config is still read).
 	if cfg, err := repo.ConfigScoped(config.GlobalScope); err == nil {
 		name = cfg.User.Name
 		email = cfg.User.Email
