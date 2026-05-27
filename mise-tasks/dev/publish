@@ -6,6 +6,4 @@ set -eu
 export GOBIN=${GOPATH:-$HOME/go}/bin
 echo "NOTE: we're overriding \$GOBIN: $GOBIN" 1>&2
 
-# No ldflags: versioninfo derives the commit (and any module version) from Go's
-# embedded build info, so a plain `go install` self-reports a real commit.
 go install ./cmd/entire
