@@ -160,7 +160,7 @@ func SafelyAdvanceLocalRef(ctx context.Context, repo *git.Repository, localRefNa
 			return fmt.Errorf("failed to check shallow history for %s: %w", localRefName, shallowErr)
 		}
 		if shallow {
-			return fmt.Errorf("no merge base for %s, and reachable shallow history prevents proving refs are disconnected", localRefName)
+			return fmt.Errorf("no merge base for %s, and reachable shallow history prevents proving refs are disconnected; run 'entire doctor' or 'git fetch --unshallow' and try again", localRefName)
 		}
 		return replayDisconnectedLocalRef(ctx, repo, localRefName, localHash, targetHash)
 	}

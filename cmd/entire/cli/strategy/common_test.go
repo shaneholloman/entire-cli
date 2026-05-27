@@ -1374,6 +1374,8 @@ func TestSafelyAdvanceLocalRef_DoesNotReplayDisconnectedChainWhenTargetIsShallow
 	err = SafelyAdvanceLocalRef(ctx, repo, localRefName, targetRef.Hash())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reachable shallow history")
+	assert.Contains(t, err.Error(), "entire doctor")
+	assert.Contains(t, err.Error(), "git fetch --unshallow")
 
 	localAfter, err := repo.Reference(localRefName, true)
 	require.NoError(t, err)
