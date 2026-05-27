@@ -441,9 +441,14 @@ func TestInvestigate_IssueLink_ResolvesViaFakeGh(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// --allow-untrusted-seed is required because this runs non-interactively
+	// (execx.NonInteractive, no TTY): a non-interactive --issue-link run is
+	// refused by default since the seed is attacker-influenced GitHub content
+	// fed to bypass-mode agents. This test consciously opts in.
 	cmd := execx.NonInteractive(ctx, getTestBinary(),
 		"investigate",
 		"--issue-link", "https://github.com/foo/bar/issues/1",
+		"--allow-untrusted-seed",
 		"--max-turns", "1",
 		"--agents", "claude-code")
 	cmd.Dir = env.RepoDir
