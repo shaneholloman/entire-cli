@@ -2,12 +2,9 @@ package checkpoint
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
-
-	git "github.com/go-git/go-git/v6"
 )
 
 // CommittedReader provides read access to committed checkpoint data.
@@ -23,32 +20,6 @@ type CommittedListReader interface {
 	ReadSessionMetadata(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*CommittedMetadata, error)
 	ReadSessionMetadataAndPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error)
 	ReadSessionPrompts(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (string, error)
-}
-
-// CommittedStore provides read/list access plus committed checkpoint metadata updates.
-// NewCommittedReader returns this abstraction so callers do not need to know which
-// backing checkpoint format was selected.
-type CommittedStore interface {
-	CommittedListReader
-	UpdateSummary(ctx context.Context, checkpointID id.CheckpointID, summary *Summary) error
-	GetCheckpointAuthor(ctx context.Context, checkpointID id.CheckpointID) (Author, error)
-}
-
-// CommittedReaderOptions configures NewCommittedReader.
-type CommittedReaderOptions struct {
-	BlobFetcher BlobFetchFunc
-}
-
-func NewCommittedReader(_ context.Context, repo *git.Repository, opts CommittedReaderOptions) (CommittedStore, error) { //nolint:ireturn // Factory returns the committed checkpoint store abstraction.
-	if repo == nil {
-		return nil, errors.New("git repository is required")
-	}
-
-	v1Store := NewGitStore(repo)
-	if opts.BlobFetcher != nil {
-		v1Store.SetBlobFetcher(opts.BlobFetcher)
-	}
-	return v1Store, nil
 }
 
 // ReadCommittedCheckpoint reads a committed checkpoint summary and normalizes

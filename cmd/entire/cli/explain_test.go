@@ -2033,8 +2033,7 @@ func TestRunExplainCheckpoint_GenerateV1ModeUsesSelectedStore(t *testing.T) {
 	))
 
 	ctx := context.Background()
-	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
-	require.NoError(t, err)
+	store := checkpoint.NewGitStore(repo)
 
 	originalGet := getSummaryAgent
 	originalCLI := isSummaryCLIAvailable
@@ -2299,8 +2298,7 @@ func TestListCommittedForExplain_ReturnsV1Only(t *testing.T) {
 		AuthorEmail:  "t@t.com",
 	}))
 
-	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
-	require.NoError(t, err)
+	store := checkpoint.NewGitStore(repo)
 
 	results, err := store.ListCommitted(ctx)
 	require.NoError(t, err)

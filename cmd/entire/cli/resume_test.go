@@ -24,7 +24,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/spf13/cobra"
-	"github.com/stretchr/testify/require"
 )
 
 type recordingResumeAgent struct {
@@ -615,8 +614,7 @@ func TestResolveLatestCheckpointUsesV1Checkpoint(t *testing.T) {
 		time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC),
 	)
 
-	store, err := checkpoint.NewCommittedReader(context.Background(), repo, checkpoint.CommittedReaderOptions{})
-	require.NoError(t, err)
+	store := checkpoint.NewGitStore(repo)
 
 	latest, err := resolveLatestCheckpoint(context.Background(), repo, store, []id.CheckpointID{targetID})
 	if err != nil {

@@ -189,12 +189,8 @@ func resumeFromCurrentBranch(ctx context.Context, w, errW io.Writer, branchName 
 
 	promoteRemoteTrackingMetadataBranch(ctx, repo)
 
-	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{
-		BlobFetcher: FetchBlobsByHash,
-	})
-	if err != nil {
-		return fmt.Errorf("prepare checkpoint store: %w", err)
-	}
+	store := checkpoint.NewGitStore(repo)
+	store.SetBlobFetcher(FetchBlobsByHash)
 
 	// Multiple checkpoints (squash merge): resolve latest by CreatedAt timestamp.
 	if len(result.checkpointIDs) > 1 {
@@ -945,12 +941,8 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 		logContent, _, err = checkpoint.LookupSessionLog(ctx, checkpointID)
 	} else {
 		defer repo.Close()
-		store, storeErr := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
-		if storeErr != nil {
-			err = storeErr
-		} else {
-			logContent, _, err = checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, checkpointID)
-		}
+		store := checkpoint.NewGitStore(repo)
+		logContent, _, err = checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, checkpointID)
 	}
 	if err != nil {
 		if errors.Is(err, checkpoint.ErrCheckpointNotFound) || errors.Is(err, checkpoint.ErrNoTranscript) {

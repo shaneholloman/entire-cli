@@ -12,27 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewCommittedReaderReturnsV1Store(t *testing.T) {
-	t.Parallel()
-
-	repoDir := t.TempDir()
-	testutil.InitRepo(t, repoDir)
-	repo, err := git.PlainOpen(repoDir)
-	require.NoError(t, err)
-
-	store, err := NewCommittedReader(context.Background(), repo, CommittedReaderOptions{})
-	require.NoError(t, err)
-	require.IsType(t, &GitStore{}, store)
-}
-
-func TestNewCommittedReaderRequiresRepository(t *testing.T) {
-	t.Parallel()
-
-	store, err := NewCommittedReader(context.Background(), nil, CommittedReaderOptions{})
-	require.Nil(t, store)
-	require.EqualError(t, err, "git repository is required")
-}
-
 func TestReadCommittedCheckpointNormalizesNilSummary(t *testing.T) {
 	t.Parallel()
 

@@ -58,11 +58,7 @@ func headHasReviewCheckpoint(ctx context.Context) (bool, string) {
 		return false, ""
 	}
 	defer repo.Close()
-	store, storeErr := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
-	if storeErr != nil {
-		logging.Debug(ctx, "head review check: checkpoint store unavailable", slog.String("error", storeErr.Error()))
-		return false, ""
-	}
+	store := checkpoint.NewGitStore(repo)
 	summary, err := checkpoint.ReadCommittedCheckpoint(ctx, store, cpID)
 	if err != nil {
 		logging.Debug(ctx, "head review check: resolve checkpoint summary",

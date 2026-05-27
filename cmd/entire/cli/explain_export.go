@@ -336,8 +336,8 @@ type checkpointSessionSummary struct {
 }
 
 // runExplainCheckpointJSON resolves a single checkpoint and emits a metadata-only
-// JSON envelope. Reads each session's metadata.json from /main; never reads any
-// transcript file.
+// JSON envelope. Reads each session's metadata through the committed checkpoint
+// reader; never reads any transcript file.
 func runExplainCheckpointJSON(ctx context.Context, w, errW io.Writer, opts explainExportOptions) error {
 	cpID, lookup, err := resolveExplainCheckpointID(ctx, errW, opts)
 	if err != nil {
