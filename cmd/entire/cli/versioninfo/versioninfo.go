@@ -24,8 +24,10 @@ func init() {
 
 // resolve fills Version/Commit from build info only when ldflags left them at
 // their defaults; an explicit ldflags stamp always wins. A module install
-// (`@<version>`) carries the version as info.Main.Version, while a local build
-// reports "(devel)" there but records the commit under the vcs.* settings.
+// (`@<version>`) carries the version as info.Main.Version; a local build
+// reports "(devel)" there but records the commit under vcs.revision. (Go
+// already marks a dirty tree with a "+dirty" suffix on the version, so we
+// don't track vcs.modified ourselves.)
 func resolve(version, commit string, info *debug.BuildInfo, ok bool) (string, string) {
 	if version != "dev" || !ok || info == nil {
 		return version, commit
@@ -34,25 +36,10 @@ func resolve(version, commit string, info *debug.BuildInfo, ok bool) (string, st
 	if v := info.Main.Version; v != "" && v != "(devel)" {
 		version = strings.TrimPrefix(v, "v") // match GoReleaser's {{.Version}}
 	}
-
-	var revision string
-	var dirty bool
 	for _, setting := range info.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			revision = setting.Value
-		case "vcs.modified":
-			dirty = setting.Value == "true"
+		if setting.Key == "vcs.revision" && setting.Value != "" {
+			commit = setting.Value
 		}
-	}
-	if revision != "" {
-		if len(revision) > 12 {
-			revision = revision[:12]
-		}
-		if dirty {
-			revision += "-dirty"
-		}
-		commit = revision
 	}
 
 	return version, commit
