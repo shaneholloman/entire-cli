@@ -47,9 +47,14 @@ func TestTerminateOnCancel_KillsProcessGroup(t *testing.T) {
 	// Group-kill closes the inherited pipe on cancellation, so CombinedOutput
 	// returns well under the 60s sleep. Without it, the backgrounded grandchild
 	// keeps the pipe open and this would block for the full minute.
+	//
+	// The deadline must stay strictly below killWaitDelay: that WaitDelay backstop
+	// would itself force the pipe closed once it elapses, so a deadline >=
+	// killWaitDelay would let this test pass even with group-kill removed, silently
+	// turning it into a no-op. Halving keeps it comfortably inside that window.
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(killWaitDelay / 2):
 		t.Fatal("CombinedOutput did not return after cancellation; the pipe-holding grandchild outlived the group-kill")
 	}
 }
