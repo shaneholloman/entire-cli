@@ -10,14 +10,16 @@ import (
 // Release and `mise build` binaries stamp these via ldflags
 // (-X ...versioninfo.Version=...). For binaries built without those ldflags --
 // notably `go install github.com/entireio/cli/cmd/entire@<version>` and plain
-// `go build`/`go install ./...` -- they are recovered from Go's embedded build
-// info instead, so the CLI still self-reports a real version and commit.
+// `go build`/`go install ./...` -- Load() recovers them from Go's embedded
+// build info instead, so the CLI still self-reports a real version and commit.
 var (
 	Version = "dev"
 	Commit  = "unknown"
 )
 
-func init() {
+// Load fills Version and Commit from the binary's build info when ldflags left
+// them at their defaults. Call once from main() before either is read.
+func Load() {
 	info, ok := debug.ReadBuildInfo()
 	Version, Commit = resolve(Version, Commit, info, ok)
 }
