@@ -43,6 +43,7 @@ func GetV2MetadataTree(ctx context.Context, treelessFetchFn, fullFetchFn FetchRe
 		}
 		tree, treeErr := getV2RefTree(freshRepo, refName)
 		if treeErr != nil {
+			_ = freshRepo.Close()
 			return nil, nil, false
 		}
 		return tree, freshRepo, true
@@ -56,6 +57,7 @@ func GetV2MetadataTree(ctx context.Context, treelessFetchFn, fullFetchFn FetchRe
 				if treeErr == nil {
 					return tree, freshRepo, nil
 				}
+				_ = freshRepo.Close()
 			}
 		}
 		if tree, repo, ok := tryFullFetch(); ok {
@@ -69,6 +71,7 @@ func GetV2MetadataTree(ctx context.Context, treelessFetchFn, fullFetchFn FetchRe
 		if err == nil {
 			return tree, localRepo, nil
 		}
+		_ = localRepo.Close()
 	}
 
 	if tree, repo, ok := tryFullFetch(); ok {

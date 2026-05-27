@@ -76,6 +76,7 @@ func WarnIfMetadataDisconnected() {
 				slog.String("error", err.Error()))
 			return
 		}
+		defer repo.Close()
 		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName))
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check failed",

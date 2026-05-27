@@ -19,6 +19,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -72,6 +73,7 @@ func EnsureSetup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 	if err := vercelconfig.InitSettings(ctx); err != nil {
 		return fmt.Errorf("failed to initialize vercel settings: %w", err)
 	}
@@ -116,6 +118,7 @@ func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.R
 	if err != nil {
 		return fmt.Errorf("failed to open repository for %s promote: %w", label, err)
 	}
+	defer repo.Close()
 	defer func() { _ = repo.Storer.RemoveReference(tmpRefName) }() //nolint:errcheck // cleanup is best-effort
 
 	tmpRef, err := repo.Reference(tmpRefName, true)
@@ -305,6 +308,7 @@ func ListCheckpoints(ctx context.Context) ([]CheckpointInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Warn (once per process) if metadata branches are disconnected
 	WarnIfMetadataDisconnected()
@@ -1018,14 +1022,7 @@ func GetRemoteMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 // It uses 'git rev-parse --show-toplevel' to find the repository root,
 // which works correctly even when called from a subdirectory or a linked worktree.
 func OpenRepository(ctx context.Context) (*git.Repository, error) {
-	repoRoot, err := paths.WorktreeRoot(ctx)
-	if err != nil {
-		// Fallback to current directory if git command fails
-		// (e.g., if git is not installed or we're not in a repo)
-		repoRoot = "."
-	}
-
-	repo, err := git.PlainOpen(repoRoot)
+	repo, err := gitrepo.OpenCurrent(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
@@ -1173,17 +1170,18 @@ func checkCanRewindWithWarning(ctx context.Context) (bool, string, error) {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
 		// Can't open repo - still allow rewind but without stats
-		return true, "", nil //nolint:nilerr // Rewind allowed even if repo can't be opened
+		return true, "", nil
 	}
+	defer repo.Close()
 
 	worktree, err := repo.Worktree()
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if worktree can't be accessed
+		return true, "", nil
 	}
 
 	status, err := worktree.Status()
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if status can't be retrieved
+		return true, "", nil
 	}
 
 	if status.IsClean() {
@@ -1193,17 +1191,17 @@ func checkCanRewindWithWarning(ctx context.Context) (bool, string, error) {
 	// Get HEAD commit tree for comparison - if we can't get it, just return without stats
 	head, err := repo.Head()
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even without HEAD (e.g., empty repo)
+		return true, "", nil
 	}
 
 	headCommit, err := repo.CommitObject(head.Hash())
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if commit lookup fails
+		return true, "", nil
 	}
 
 	headTree, err := headCommit.Tree()
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if tree lookup fails
+		return true, "", nil
 	}
 
 	type fileChange struct {
@@ -1217,7 +1215,7 @@ func checkCanRewindWithWarning(ctx context.Context) (bool, string, error) {
 	// Use repo root, not cwd - git status returns paths relative to repo root
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return true, "", nil //nolint:nilerr // Rewind allowed even if worktree root lookup fails
+		return true, "", nil
 	}
 
 	for file, st := range status {
@@ -1392,6 +1390,7 @@ func getTaskCheckpointFromTree(ctx context.Context, point RewindPoint) (*TaskChe
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	commitHash := plumbing.NewHash(point.ID)
 	commit, err := repo.CommitObject(commitHash)
@@ -1435,6 +1434,7 @@ func getTaskTranscriptFromTree(ctx context.Context, point RewindPoint) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	commitHash := plumbing.NewHash(point.ID)
 	commit, err := repo.CommitObject(commitHash)

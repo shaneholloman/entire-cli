@@ -64,6 +64,7 @@ func GetGitAuthor(ctx context.Context) (*GitAuthor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	name, email := strategy.GetGitAuthorFromRepo(repo)
 
@@ -108,6 +109,7 @@ func IsOnDefaultBranch(ctx context.Context) (bool, string, error) {
 	if err != nil {
 		return false, "", fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Get current branch
 	head, err := repo.Head()
@@ -181,6 +183,7 @@ func GetCurrentBranch(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	head, err := repo.Head()
 	if err != nil {
@@ -201,6 +204,7 @@ func GetMergeBase(ctx context.Context, branch1, branch2 string) (*plumbing.Hash,
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Resolve branch references
 	ref1, err := repo.Reference(plumbing.NewBranchReferenceName(branch1), true)
@@ -278,6 +282,7 @@ func BranchExistsOnRemote(ctx context.Context, branchName string) (bool, error) 
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Check for remote reference: refs/remotes/origin/<branchName>
 	_, err = repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
@@ -308,6 +313,7 @@ func BranchExistsLocally(ctx context.Context, branchName string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	_, err = repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
 	if err != nil {
@@ -379,6 +385,7 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Get the remote branch reference
 	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
@@ -452,6 +459,7 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/search"
@@ -130,10 +131,11 @@ func resolveRepoRoots(ctx context.Context, repoPaths []string) ([]string, error)
 }
 
 func enumerateRepoCandidates(ctx context.Context, repoRoot string, opts Options, since, until time.Time) ([]candidate, error) {
-	repo, err := git.PlainOpenWithOptions(repoRoot, &git.PlainOpenOptions{DetectDotGit: true})
+	repo, err := gitrepo.OpenPath(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("open repository %s: %w", repoRoot, err)
 	}
+	defer repo.Close()
 
 	repoFullName, err := resolveRepoFullName(ctx, repo)
 	if err != nil {

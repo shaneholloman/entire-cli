@@ -9,8 +9,8 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
+	"github.com/entireio/cli/cmd/entire/cli/gitrepo"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
-	"github.com/go-git/go-git/v6"
 )
 
 // requireSecureDispatchURL is the secure-base-URL guard used before the cloud
@@ -68,10 +68,12 @@ func runServer(ctx context.Context, opts Options) (*Dispatch, error) {
 		if err != nil {
 			return nil, fmt.Errorf("not in a git repository: %w", err)
 		}
-		repo, err := git.PlainOpenWithOptions(repoRoot, &git.PlainOpenOptions{DetectDotGit: true})
+		repo, err := gitrepo.OpenPath(repoRoot)
 		if err != nil {
 			return nil, fmt.Errorf("open repository: %w", err)
 		}
+		defer repo.Close()
+
 		repoFullName, err := resolveRepoFullName(ctx, repo)
 		if err != nil {
 			return nil, err

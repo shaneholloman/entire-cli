@@ -85,6 +85,7 @@ branch:<name>, repo:<owner/name>, and repo:* to search all accessible repos.`,
 				fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Run this command from within a git repository.")
 				return NewSilentError(err)
 			}
+			defer repo.Close()
 
 			remote, err := repo.Remote("origin")
 			if err != nil {

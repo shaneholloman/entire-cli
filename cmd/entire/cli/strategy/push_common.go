@@ -29,15 +29,16 @@ import (
 func pushBranchIfNeeded(ctx context.Context, target, branchName string) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		return nil
 	}
+	defer repo.Close()
 
 	// Check if branch exists locally
 	branchRef := plumbing.NewBranchReferenceName(branchName)
 	localRef, err := repo.Reference(branchRef, true)
 	if err != nil {
 		// No branch, nothing to push
-		return nil //nolint:nilerr // Expected when no sessions exist yet
+		return nil
 	}
 
 	// Only check remote tracking refs when target is a remote name (not a URL).
@@ -74,7 +75,7 @@ func displayPushTarget(target string) string {
 
 // doPushBranch pushes the given branch to the target with fetch+merge recovery.
 // The target can be a remote name or a URL.
-func doPushBranch(ctx context.Context, target, branchName string) error {
+func doPushBranch(ctx context.Context, target, branchName string) error { //nolint:unparam // callers treat push failures as non-fatal but keep an error-shaped boundary.
 	displayTarget := displayPushTarget(target)
 
 	fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", branchName, displayTarget)
@@ -345,6 +346,7 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	if err != nil {
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Reconcile disconnected metadata branches before rebasing.
 	// The fetch above updated the remote-tracking ref, so reconciliation

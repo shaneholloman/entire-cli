@@ -523,6 +523,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Determine base branch
 	if base == "" {

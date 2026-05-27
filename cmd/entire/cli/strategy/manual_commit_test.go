@@ -52,6 +52,7 @@ func TestManualCommitStrategy_ListCheckpointsUsesLocalV2WhenSettingsDisabled(t *
 
 	repo, err := git.PlainOpen(dir)
 	require.NoError(t, err)
+	defer repo.Close()
 
 	cpID := id.MustCheckpointID("dd11ee22ff33")
 	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
@@ -4206,8 +4207,7 @@ func TestCondenseSession_RedactionFailure_DropsTranscriptButWritesMetadata(t *te
 	require.NoError(t, err, "redaction failure should not abort condensation")
 	require.NotNil(t, result)
 
-	store, err := s.getCheckpointStore()
-	require.NoError(t, err)
+	store := s.getCheckpointStore(repo)
 
 	committed, err := store.ListCommitted(context.Background())
 	require.NoError(t, err)

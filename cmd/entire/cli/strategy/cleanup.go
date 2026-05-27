@@ -80,6 +80,7 @@ func ListShadowBranches(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	refs, err := repo.References()
 	if err != nil {
@@ -150,6 +151,7 @@ func ListOrphanedSessionStates(ctx context.Context) ([]CleanupItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Get all session states
 	store, err := session.NewStateStore(ctx)
@@ -248,6 +250,7 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open git repository: %w", err)
 	}
+	defer repo.Close()
 
 	// Get sessions branch
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
