@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/api"
+	"github.com/entireio/cli/cmd/entire/cli/auth"
 )
 
 const (
@@ -92,6 +93,87 @@ func TestRunAuthStatus_TokenInvalid(t *testing.T) {
 		t.Fatalf("output = %q, want re-auth hint", out.String())
 	}
 }
+
+// TestRunAuthStatus_STSRejectionRendersInvalidMessage pins fix #2: in
+// split-host setups, STS rejection happens before any HTTP call to the
+// data API, so the friendly "Token in keychain ... is no longer valid"
+// message has to fire on the auth-go sts package's wrapped string
+// (no typed sentinel) as well as the data-API 401 case above.
+func TestRunAuthStatus_STSRejectionRendersInvalidMessage(t *testing.T) {
+	t.Parallel()
+
+	store := newMockTokenStore()
+	store.tokens[testBaseURL] = testAuthTok
+
+	list := func(context.Context) ([]api.Token, error) {
+		// Exact format auth-go's sts package emits for an invalid_grant
+		// 4xx (see internal/oauthhttp's readAPIError). Without the
+		// detection in isKeychainTokenRejected this would fall through
+		// to the generic "validate token: ..." error path and the user
+		// would see a raw STS string instead of the re-login hint.
+		return nil, errors.New("token exchange: status 400: invalid_grant: subject_token expired")
+	}
+
+	var out bytes.Buffer
+	if err := runAuthStatus(context.Background(), &out, store, list, testBaseURL); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "no longer valid") {
+		t.Fatalf("output = %q, want invalid-token message", out.String())
+	}
+	if !strings.Contains(out.String(), "entire login") {
+		t.Fatalf("output = %q, want re-auth hint", out.String())
+	}
+}
+
+// TestRunAuthStatus_ExpiredCoreTokenRendersInvalidMessage pins the
+// other half of fix #2: the tokenmanager's preflight check returns
+// auth.ErrNotLoggedIn when a stored core JWT's exp claim is in the
+// past. The keyring read at the top of runAuthStatus still finds a
+// non-empty entry, so the "Not logged in" branch doesn't fire — the
+// helper has to route the wrapped sentinel to the same re-login hint.
+func TestRunAuthStatus_ExpiredCoreTokenRendersInvalidMessage(t *testing.T) {
+	t.Parallel()
+
+	store := newMockTokenStore()
+	store.tokens[testBaseURL] = testAuthTok
+
+	list := func(context.Context) ([]api.Token, error) {
+		return nil, errors.New("resolve API token: " + auth.ErrNotLoggedIn.Error())
+	}
+	// errors.New above is intentionally string-only to defeat the
+	// detection — confirm the substring fallback alone isn't what's
+	// catching this case. The real production path wraps with %w.
+	listWithChain := func(context.Context) ([]api.Token, error) {
+		return nil, &wrappedTestError{msg: "resolve API token", inner: auth.ErrNotLoggedIn}
+	}
+
+	// Sanity: string-only does NOT match (no sentinel chain).
+	var out1 bytes.Buffer
+	if err := runAuthStatus(context.Background(), &out1, store, list, testBaseURL); err == nil {
+		t.Fatal("string-only ErrNotLoggedIn should not match — keep the test honest")
+	}
+
+	// Real path: errors.Is sees the sentinel through the %w chain.
+	var out2 bytes.Buffer
+	if err := runAuthStatus(context.Background(), &out2, store, listWithChain, testBaseURL); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out2.String(), "no longer valid") {
+		t.Fatalf("output = %q, want invalid-token message", out2.String())
+	}
+}
+
+// wrappedTestError is a tiny stand-in for fmt.Errorf("...: %w", inner) — kept
+// local so the test reads as "this is what production hands runAuthStatus".
+type wrappedTestError struct {
+	msg   string
+	inner error
+}
+
+func (e *wrappedTestError) Error() string { return e.msg + ": " + e.inner.Error() }
+func (e *wrappedTestError) Unwrap() error { return e.inner }
 
 func TestRunAuthStatus_ServerError(t *testing.T) {
 	t.Parallel()
@@ -449,6 +531,43 @@ func TestAuthCmd_RegistersExpectedSubcommands(t *testing.T) {
 	}
 	if authCmd == nil {
 		t.Fatal("auth command not registered on root")
+	}
+}
+
+// --- isKeychainTokenRejected -----------------------------------------------
+
+func TestIsKeychainTokenRejected_AllShapes(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"data API 401":           {&api.HTTPError{StatusCode: http.StatusUnauthorized}, true},
+		"data API 500":           {&api.HTTPError{StatusCode: http.StatusInternalServerError}, false},
+		"ErrNotLoggedIn":         {auth.ErrNotLoggedIn, true},
+		"wrapped ErrNotLoggedIn": {errors.New("resolve API token: " + auth.ErrNotLoggedIn.Error()), false /* string-only, no chain — not detected */},
+		"sts 401":                {errors.New("token exchange: status 401: invalid_client"), true},
+		"sts 400 invalid_grant":  {errors.New("token exchange: status 400: invalid_grant: token expired"), true},
+		"sts 500":                {errors.New("token exchange: status 500: server_error"), false},
+		"network error":          {errors.New("dial tcp: i/o timeout"), false},
+	}
+
+	// Confirm wrapped chains do propagate (the "wrapped ErrNotLoggedIn"
+	// case above uses string substitution which intentionally doesn't
+	// preserve the sentinel; this case uses fmt.Errorf %w which does).
+	cases["fmt.Errorf %w ErrNotLoggedIn"] = struct {
+		err  error
+		want bool
+	}{errors.Join(errors.New("resolve API token"), auth.ErrNotLoggedIn), true}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := isKeychainTokenRejected(tc.err); got != tc.want {
+				t.Errorf("isKeychainTokenRejected(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

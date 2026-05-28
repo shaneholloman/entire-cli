@@ -98,6 +98,35 @@ func resolveDataAPIToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
+// isKeychainTokenRejected reports whether err indicates the stored
+// keyring token can't authenticate against the data API. Three failure
+// modes collapse into this single "the user must re-login" branch:
+//
+//   - data API returned 401 (single-host, or after a successful STS
+//     exchange whose result the data API then rejected),
+//   - tokenmanager's preflight rejected an expired core token JWT
+//     (surfacing as auth.ErrNotLoggedIn even though the keyring entry
+//     is still present),
+//   - the STS endpoint rejected the core token during exchange in a
+//     split-host setup. auth-go's sts package returns the response as
+//     "token exchange: status 4xx: <code>[: <desc>]" with no typed
+//     sentinel exposed, so detection has to be by prefix. The "status
+//     4" anchor catches the entire 4xx range — every 4xx from STS is
+//     a credential problem, none are retryable without user action.
+//
+// Other shapes (network errors, malformed STS response, manager
+// construction failures) deliberately don't match — the user sees the
+// real diagnostic instead of a misleading "re-login" hint.
+func isKeychainTokenRejected(err error) bool {
+	if api.IsHTTPErrorStatus(err, http.StatusUnauthorized) {
+		return true
+	}
+	if errors.Is(err, auth.ErrNotLoggedIn) {
+		return true
+	}
+	return strings.Contains(err.Error(), "token exchange: status 4")
+}
+
 // addInsecureHTTPAuthFlag attaches the hidden --insecure-http-auth flag used
 // by every authenticated command for local development.
 func addInsecureHTTPAuthFlag(cmd *cobra.Command, target *bool) {
@@ -165,7 +194,7 @@ func runAuthStatus(ctx context.Context, w io.Writer, store tokenStore, list auth
 
 	tokens, err := list(ctx)
 	if err != nil {
-		if api.IsHTTPErrorStatus(err, http.StatusUnauthorized) {
+		if isKeychainTokenRejected(err) {
 			fmt.Fprintf(w, "Token in keychain for %s is no longer valid.\n", baseURL)
 			fmt.Fprintln(w, "Run 'entire login' to re-authenticate.")
 			return nil
