@@ -94,3 +94,23 @@ func TestIsTerminalWriter_Pipe(t *testing.T) {
 		t.Error("IsTerminalWriter(pipe) = true; want false")
 	}
 }
+
+func TestTermLacksANSI(t *testing.T) {
+	cases := []struct {
+		term string
+		want bool
+	}{
+		{"cygwin", true},
+		{"xterm-256color", false},
+		{"dumb", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		t.Run(c.term, func(t *testing.T) {
+			t.Setenv("TERM", c.term)
+			if got := TermLacksANSI(); got != c.want {
+				t.Errorf("TermLacksANSI() with TERM=%q = %v; want %v", c.term, got, c.want)
+			}
+		})
+	}
+}

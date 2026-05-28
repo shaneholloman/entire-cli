@@ -68,6 +68,9 @@ func shouldUseColor(w io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
+	if interactive.TermLacksANSI() {
+		return false
+	}
 	return interactive.IsTerminalWriter(w)
 }
 

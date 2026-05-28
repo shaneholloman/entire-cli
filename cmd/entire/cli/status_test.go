@@ -961,6 +961,44 @@ func TestShouldUseColor_RegularFile(t *testing.T) {
 	}
 }
 
+// TERM=cygwin's legacy console renders the ESC byte as the CP437 glyph "←"
+// instead of starting an SGR sequence, so styled output appears as literal
+// text like "←[32m●←[m". Regression test for GH #1267.
+func TestShouldUseColor_TermCygwinDisables(t *testing.T) {
+	t.Setenv("TERM", "cygwin")
+
+	f, err := os.CreateTemp(t.TempDir(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if shouldUseColor(f) {
+		t.Error("shouldUseColor should be false when TERM=cygwin")
+	}
+}
+
+// formatSettingsStatusShort should not emit any ESC (0x1B) bytes when
+// TERM=cygwin. Regression test for GH #1267.
+func TestFormatSettingsStatusShort_TermCygwinNoEscapes(t *testing.T) {
+	t.Setenv("TERM", "cygwin")
+
+	f, err := os.CreateTemp(t.TempDir(), "tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	sty := newStatusStyles(f)
+	out := formatSettingsStatusShort(context.Background(), &EntireSettings{Enabled: true}, sty)
+	if bytes.ContainsRune([]byte(out), 0x1B) {
+		t.Errorf("output contains ESC (0x1B) under TERM=cygwin: %q", out)
+	}
+	if bytes.ContainsRune([]byte(out), '←') {
+		t.Errorf("output contains U+2190 LEFTWARDS ARROW under TERM=cygwin: %q", out)
+	}
+}
+
 func TestNewStatusStyles_NonTTY(t *testing.T) {
 	t.Parallel()
 

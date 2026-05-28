@@ -107,6 +107,23 @@ func TestRenderForWriter_NoColorEnvForcesRaw(t *testing.T) {
 	}
 }
 
+// TestRenderForWriter_TermCygwinForcesRaw verifies TERM=cygwin disables
+// rendering. Cygwin's legacy console renders ESC as "←" (CP437 U+2190) so
+// styled output is unreadable — fall back to raw markdown. Regression test
+// for GH #1267.
+func TestRenderForWriter_TermCygwinForcesRaw(t *testing.T) {
+	t.Setenv("TERM", "cygwin")
+
+	const md = "# Heading"
+	out, err := mdrender.RenderForWriter(&bytes.Buffer{}, md)
+	if err != nil {
+		t.Fatalf("RenderForWriter: %v", err)
+	}
+	if out != md {
+		t.Errorf("expected raw markdown when TERM=cygwin, got: %q", out)
+	}
+}
+
 // TestRender_EmptyInputDoesNotPanic verifies the renderer handles edge cases
 // (empty string, whitespace-only) without erroring.
 func TestRender_EmptyInputDoesNotPanic(t *testing.T) {
