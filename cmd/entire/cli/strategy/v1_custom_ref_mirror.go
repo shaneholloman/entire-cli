@@ -34,11 +34,7 @@ func mirrorMetadataToV1CustomRef(ctx context.Context, repo *git.Repository) {
 	}
 
 	v1CustomRef := plumbing.ReferenceName(paths.MetadataRefName)
-	if existing, err := repo.Reference(v1CustomRef, true); err == nil && existing.Hash() == v1Ref.Hash() {
-		return // already in sync
-	}
-
-	if err := repo.Storer.SetReference(plumbing.NewHashReference(v1CustomRef, v1Ref.Hash())); err != nil {
+	if err := SafelyAdvanceLocalRef(ctx, repo, v1CustomRef, v1Ref.Hash()); err != nil {
 		logging.Warn(ctx, "v1 custom-ref mirror failed",
 			slog.String("ref", paths.MetadataRefName),
 			slog.String("error", err.Error()))
