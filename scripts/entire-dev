@@ -31,12 +31,16 @@ case "$0" in
 	*) script_dir=. ;;
 esac
 root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-main="$root/cmd/entire/main.go"
+# Build/run the whole cmd/entire package, not just main.go: package main is
+# split across multiple files (e.g. the git-remote-entire dispatch in
+# remotehelper.go), and naming a single file would leave the others out and
+# fail to compile.
+pkg="$root/cmd/entire"
 
 # Run freshly compiled code when the tree builds. The build probe populates the
 # build cache, so the subsequent "go run" does not recompile from scratch.
-if command -v go >/dev/null 2>&1 && go build -o /dev/null "$main" >/dev/null 2>&1; then
-	exec go run "$main" "$@"
+if command -v go >/dev/null 2>&1 && go build -o /dev/null "$pkg" >/dev/null 2>&1; then
+	exec go run "$pkg" "$@"
 fi
 
 # The tree does not build (or Go is unavailable): fall back to the installed

@@ -16,6 +16,15 @@ import (
 )
 
 func main() {
+	// Dispatch on argv[0] before anything else: when launched as
+	// git-remote-entire (via the shipped symlink), behave as a git remote
+	// helper and never touch the cobra/plugin machinery — git parses our
+	// stdout as a strict pkt-line stream, so no banner or log may precede
+	// it. runRemoteHelper handles its own version load and exit code.
+	if invokedAsRemoteHelper(os.Args[0]) {
+		os.Exit(runRemoteHelper(os.Args))
+	}
+
 	// Resolve version/commit from build info before anything reads them.
 	versioninfo.Load()
 
