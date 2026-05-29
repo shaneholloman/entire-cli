@@ -990,6 +990,16 @@ func IsSetUpAndEnabled(ctx context.Context) bool {
 	return s.Enabled
 }
 
+// MirrorsToV1CustomRef reports whether the v1 custom-ref mirror is opted in.
+// Returns false if settings cannot be loaded.
+func MirrorsToV1CustomRef(ctx context.Context) bool {
+	s, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return s.MirrorsToV1CustomRef()
+}
+
 // IsFilteredFetchesEnabled checks if filtered fetches should be used.
 // When enabled, filtered fetches always resolve remote names to URLs first so
 // git does not persist promisor settings onto named remotes in local config.
@@ -1069,6 +1079,24 @@ func (s *EntireSettings) GetCheckpointRemote() *CheckpointRemoteConfig {
 		return nil
 	}
 	return &CheckpointRemoteConfig{Provider: provider, Repo: repo}
+}
+
+// MirrorsToV1CustomRef reports whether checkpoints_version opts into mirroring
+// committed metadata to the v1 custom ref (refs/entire/checkpoints/v1.1). v1
+// remains the source of truth; the v1 custom ref is a local-only mirror.
+// Returns false when unset or set to any other value.
+func (s *EntireSettings) MirrorsToV1CustomRef() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	return isV1CustomRefValue(s.StrategyOptions["checkpoints_version"])
+}
+
+// isV1CustomRefValue reports whether a checkpoints_version value selects the v1
+// custom ref. Only the JSON string "1.1" opts in; numeric values remain plain v1.
+func isV1CustomRefValue(val any) bool {
+	s, ok := val.(string)
+	return ok && s == "1.1"
 }
 
 // IsFilteredFetchesEnabled checks if fetches should use --filter=blob:none.

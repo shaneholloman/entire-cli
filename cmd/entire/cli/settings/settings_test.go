@@ -700,6 +700,44 @@ func TestMergeJSON_SummaryGeneration_SameProviderPreservesModel(t *testing.T) {
 	}
 }
 
+func TestMirrorsToV1CustomRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts map[string]any
+		want bool
+	}{
+		{"unset", nil, false},
+		{"empty options", map[string]any{}, false},
+		{"string 1.1 opts in", map[string]any{"checkpoints_version": "1.1"}, true},
+		{"float 1.1 does not opt in (string only)", map[string]any{"checkpoints_version": 1.1}, false},
+		{"integer 1 does not mirror", map[string]any{"checkpoints_version": 1}, false},
+		{"string 1 does not mirror", map[string]any{"checkpoints_version": "1"}, false},
+		{"unrelated string does not mirror", map[string]any{"checkpoints_version": "abc"}, false},
+		{"bool does not mirror", map[string]any{"checkpoints_version": true}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &EntireSettings{StrategyOptions: tt.opts}
+			if got := s.MirrorsToV1CustomRef(); got != tt.want {
+				t.Errorf("MirrorsToV1CustomRef() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestV1CustomRefValueIsStringOnly(t *testing.T) {
+	t.Parallel()
+	if !isV1CustomRefValue("1.1") {
+		t.Errorf(`isV1CustomRefValue("1.1") = false, want true`)
+	}
+	if isV1CustomRefValue(1.1) {
+		t.Errorf("isV1CustomRefValue(1.1 float) = true, want false")
+	}
+}
 func TestIsFilteredFetchesEnabled_DefaultsFalse(t *testing.T) {
 	t.Parallel()
 	s := &EntireSettings{Enabled: true}

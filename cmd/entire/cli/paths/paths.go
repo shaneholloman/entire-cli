@@ -38,6 +38,13 @@ const (
 // MetadataBranchName is the orphan branch used by manual-commit strategy to store metadata
 const MetadataBranchName = "entire/checkpoints/v1"
 
+// MetadataRefName is the v1 custom ref that committed metadata is mirrored to
+// when checkpoints_version is "1.1". It lives under refs/entire/ (not
+// refs/heads/) so it stays invisible to `git branch -a` and is not pulled by a
+// default `git clone`. v1 remains the source of truth; this ref is a local-only
+// mirror — nothing reads it and it is never pushed.
+const MetadataRefName = "refs/entire/checkpoints/v1.1"
+
 // TrailsBranchName is the orphan branch used to store trail metadata.
 // Trails are branch-centric work tracking abstractions that link to checkpoints by branch name.
 const TrailsBranchName = "entire/trails/v1"

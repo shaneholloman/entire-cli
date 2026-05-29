@@ -26,6 +26,7 @@ import (
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/copilotcli"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/pi"
 )
 
 // calculateTokenUsage is a test helper that looks up an agent by type and
@@ -317,6 +318,44 @@ func TestSessionStateBackfillTokenUsage_CopilotUsesZeroInputSessionAggregate(t *
 	require.Equal(t, 20, backfillUsage.CacheReadTokens)
 	require.Equal(t, 10, backfillUsage.CacheCreationTokens)
 	require.Equal(t, 3, backfillUsage.APICallCount)
+}
+
+func TestSessionStateBackfillModel_PiReadsModelFromTranscript(t *testing.T) {
+	t.Parallel()
+
+	// Pi records the model on message.model but never reports it through hooks,
+	// so the model is backfilled from the transcript at condensation time.
+	transcript := []byte(strings.Join([]string{
+		`{"type":"session","version":3,"id":"pi-uuid","cwd":"/tmp"}`,
+		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"Hi"}]}}`,
+		`{"type":"message","id":"m2","parentId":"m1","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}],"model":"gpt-5.5","provider":"openai-codex","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0}}}`,
+	}, "\n") + "\n")
+
+	ag, err := agent.GetByAgentType(agent.AgentTypePi)
+	require.NoError(t, err)
+
+	model := sessionStateBackfillModel(context.Background(), ag, transcript)
+	require.Equal(t, "gpt-5.5", model)
+}
+
+func TestSessionStateBackfillModel_EmptyTranscript(t *testing.T) {
+	t.Parallel()
+
+	ag, err := agent.GetByAgentType(agent.AgentTypePi)
+	require.NoError(t, err)
+
+	require.Empty(t, sessionStateBackfillModel(context.Background(), ag, nil))
+}
+
+func TestSessionStateBackfillModel_AgentWithoutSupport(t *testing.T) {
+	t.Parallel()
+
+	// Cursor doesn't implement ModelExtractor, so backfill is a no-op even with
+	// transcript data present.
+	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
+	require.NoError(t, err)
+
+	require.Empty(t, sessionStateBackfillModel(context.Background(), ag, []byte("{}\n")))
 }
 
 // droidMessage builds a Droid JSONL "message" line with the given id, role, and optional usage.
