@@ -10,12 +10,13 @@ import (
 	"github.com/entireio/cli/internal/coreapi"
 )
 
-// mirrorColumns is the human table/field view of a mirror. It leads with
-// the actionable bits — which repo, which cluster, and the clone URL —
-// rather than the wire model's internal ids. The clone URL is synthesised
-// from the mirror's coords (the form `git clone` accepts), since the list
-// API doesn't return it.
-var mirrorColumns = []string{"REPO", "CLUSTER", "CLONE URL", "PRIVATE"}
+// mirrorColumns is the human table/field view of a mirror: the scannable
+// repo name, the clone URL you'd copy, and whether the upstream is
+// private. The cluster is omitted — it's already embedded in the clone
+// URL — and the wire model's internal ids are dropped entirely. The clone
+// URL is synthesised from the mirror's coords (the form `git clone`
+// accepts), since the list API doesn't return it.
+var mirrorColumns = []string{"REPO", "CLONE URL", "PRIVATE"}
 
 func mirrorRow(m coreapi.Mirror) []string {
 	repo := m.Owner + "/" + m.Repo
@@ -24,7 +25,7 @@ func mirrorRow(m coreapi.Mirror) []string {
 	if m.IsPrivate.Or(false) {
 		private = "yes"
 	}
-	return []string{repo, m.ClusterHost, cloneURL, private}
+	return []string{repo, cloneURL, private}
 }
 
 // newRepoMirrorCmd is the `entire repo mirror` subtree: manage EntireDB
