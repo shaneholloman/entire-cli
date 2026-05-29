@@ -152,6 +152,16 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		state.TokenUsage = backfillUsage
 	}
 
+	// Backfill the model from the transcript for agents that don't report it via
+	// hooks (e.g., Pi records message.model but its hook events carry no model
+	// field). Only fills when the model is otherwise unknown — hook-reported
+	// models take precedence.
+	if state.ModelName == "" {
+		if model := sessionStateBackfillModel(ctx, ag, sessionData.Transcript); model != "" {
+			state.ModelName = model
+		}
+	}
+
 	// Skip gate: if there is no transcript AND no files touched, there is nothing
 	// meaningful to condense. Return early to avoid writing metadata-only stubs.
 	//
@@ -596,6 +606,24 @@ func sessionStateBackfillTokenUsage(ctx context.Context, ag agent.Agent, agentTy
 	}
 
 	return nil
+}
+
+// sessionStateBackfillModel extracts the LLM model from the transcript for
+// agents that don't report it through hooks (e.g., Pi). Returns "" when the
+// agent doesn't support model extraction, the transcript is empty, or no model
+// can be determined. Errors are debug-logged because callers treat "" as "no
+// model available".
+func sessionStateBackfillModel(ctx context.Context, ag agent.Agent, transcript []byte) string {
+	me, ok := agent.AsModelExtractor(ag)
+	if !ok {
+		return ""
+	}
+	model, err := me.ExtractModel(transcript)
+	if err != nil {
+		logging.Debug(ctx, "model backfill from transcript failed", slog.String("error", err.Error()))
+		return ""
+	}
+	return model
 }
 
 // attributionOpts provides pre-resolved git objects to avoid redundant reads.
