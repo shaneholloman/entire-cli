@@ -355,19 +355,9 @@ func TestTUIModel_InitializesDetailViewport(t *testing.T) {
 	}
 }
 
-// TestTUIModel_DelegatesMouseWheelToViewport pins that mouse-wheel events in
-// detail mode reach the viewport's MouseWheelMsg handler. The bug this guards
-// against: setting View.MouseMode = MouseModeCellMotion on entry to detail
-// mode caused the Program to receive mouse events, but the Update switch
-// only routed tea.KeyPressMsg — mouse events fell through unhandled and the
-// viewport never got a chance to scroll.
-// TestTUIModel_DelegatesScrollInputToViewport pins that scroll input in detail
-// mode reaches the viewport and advances YOffset rather than being swallowed by
-// the model's Update switch. It covers both dispatch arms:
-//   - mouse-wheel: regression against setting View.MouseMode = MouseModeCellMotion
-//     on entry to detail mode causing mouse events to fall through unhandled
-//     because the switch only routed tea.KeyPressMsg.
-//   - pager keys (PgDn): reach the viewport's internal keymap.
+// TestTUIModel_DelegatesScrollInputToViewport pins that scroll input (mouse
+// wheel and PgDn) in detail mode reaches the viewport and advances YOffset
+// instead of being swallowed by the model's Update switch.
 func TestTUIModel_DelegatesScrollInputToViewport(t *testing.T) {
 	t.Parallel()
 
@@ -383,18 +373,15 @@ func TestTUIModel_DelegatesScrollInputToViewport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			m := newTestModel([]string{"agent-a"}, func() {})
-			// Size the window so the viewport has a sensible height.
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
 			m = mustModel(t, updated)
-			// Populate enough content to scroll. AssistantText with long text
-			// wraps to many viewport lines.
+			// Fill the viewport with enough wrapped lines to scroll.
 			long := strings.Repeat("paragraph of text ", 20)
 			for range 5 {
 				updated, _ = m.Update(agentEventMsg{agent: "agent-a", ev: reviewtypes.AssistantText{Text: long}})
 				m = mustModel(t, updated)
 			}
-			// Enter detail mode (auto-tails to bottom), then jump to top so the
-			// scroll input has somewhere to advance into.
+			// Enter detail mode, then jump to top so the input can scroll down.
 			updated, _ = m.Update(testCtrlKey('o'))
 			m = mustModel(t, updated)
 			m.detail.GotoTop()

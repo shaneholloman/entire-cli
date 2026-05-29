@@ -81,9 +81,8 @@ func TestNewReviewCmd_NoHiddenFlags(t *testing.T) {
 	}
 }
 
-// TestReview_NotGitRepoReturnsSilentError verifies the not-a-git-repo guard
-// (which fires before any flag-specific logic) returns a SilentError and prints
-// "Not a git repository" exactly once, regardless of which review mode flag is used.
+// TestReview_NotGitRepoReturnsSilentError checks that review outside a git repo
+// returns a SilentError and prints the message once, for any mode flag.
 func TestReview_NotGitRepoReturnsSilentError(t *testing.T) {
 	tests := []struct {
 		name string
