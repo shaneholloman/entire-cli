@@ -6,24 +6,34 @@
 // committed artifact (core.gen.json) that ogen consumes; the upstream
 // file is never mutated, so a refresh is a clean `curl` overwrite.
 //
-// Two transforms, both matching where the server contract is headed so
-// this is normalisation rather than fudging:
+// TEMPORARY: every transform here compensates for a bug in the upstream
+// OpenAPI document. The goal is to delete this whole command once the spec
+// is fixed at the source (the control-plane service's spec generation) and
+// generate ogen straight from core.openapi.json. Each transform below
+// names the spec bug it works around so the fix can be matched upstream
+// and the transform retired.
 //
 //  1. Collapse JSON-Schema-2020-12 nullable shorthand — `"type": ["array",
 //     "null"]` — to the bare type. ogen models a schema's `type` as a
-//     scalar and rejects the union form. The server is moving to
-//     non-nullable arrays (an absent collection serialises as `[]`, never
-//     `null`); collapsing matches that intended wire contract.
+//     scalar and rejects the union form.
+//     Spec fix: emit non-nullable arrays (an absent collection serialises
+//     as `[]`, never `null`), i.e. `"type": "array"`. Then this transform
+//     finds nothing to change and can be removed.
 //
 //  2. Collapse each operation's responses to one "2XX" success + one
-//     "default" error. The 2XX range matches whatever 2xx the server
-//     actually returns (200/201/204) — the spec only enumerates 200, but
-//     creates answer 201 and deletes 204, which would otherwise route to
-//     the error decoder. Folding the 4xx/5xx into a single default (all
-//     reference the same ErrorModel, so no shape is lost) also flips ogen
-//     into "convenient errors": operations return `(*Success, error)` with
-//     any non-2xx as a typed `*ErrorModelStatusCode`, instead of a
-//     per-operation response sum type.
+//     "default" error. The spec only enumerates 200, but creates answer
+//     201 and deletes 204; those unenumerated codes route to the error
+//     decoder and fail to decode a successful response. The 2XX range
+//     matches whatever 2xx the server returns. Folding the 4xx/5xx into a
+//     single default (all reference the same ErrorModel, so no shape is
+//     lost) also flips ogen into "convenient errors": `(*Success, error)`
+//     with any non-2xx as a typed `*ErrorModelStatusCode`.
+//     Spec fix: declare each operation's real success code (201 for POST
+//     creates, 204 for DELETEs, 200 for reads). With the true code
+//     declared, this collapse becomes unnecessary — and dropping it also
+//     removes the *…StatusCode wrapper the 2XX range forces, so the
+//     generated methods return `(*T, error)` directly again and the
+//     command fetch closures no longer unwrap `.Response`.
 //
 // Run via `go generate ./internal/coreapi/...` (the first generate step in
 // gen.go), or by hand after refreshing the spec:
