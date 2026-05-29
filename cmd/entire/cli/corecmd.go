@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/internal/coreapi"
@@ -102,20 +101,6 @@ func (t tableStyles) style(s lipgloss.Style, text string) string {
 	return s.Render(text)
 }
 
-// decorate styles a cell and, when it's a URL, wraps it in an OSC 8
-// hyperlink so the terminal treats the whole string — scheme included — as
-// one clickable/selectable unit. Custom schemes like entire:// aren't
-// auto-detected by terminals' URL matchers, so without the explicit
-// hyperlink a click or double-click breaks at the "://". Gated by enabled
-// (TTY) so piped output stays a plain URL.
-func (t tableStyles) decorate(s lipgloss.Style, text string) string {
-	out := t.style(s, text)
-	if t.enabled && strings.Contains(text, "://") {
-		out = termenv.Hyperlink(text, out)
-	}
-	return out
-}
-
 // columnStyle picks the foreground for a data cell: the first column is the
 // primary identifier (white), the rest are secondary (gray).
 func (t tableStyles) columnStyle(col int) lipgloss.Style {
@@ -167,7 +152,7 @@ func printFields(w io.Writer, headers, values []string) error {
 		label := st.style(st.header, h+strings.Repeat(" ", labelWidth-lipgloss.Width(h)))
 		b.WriteString(label)
 		b.WriteString("  ")
-		b.WriteString(st.decorate(st.columnStyle(i), v))
+		b.WriteString(st.style(st.columnStyle(i), v))
 		b.WriteByte('\n')
 	}
 	if _, err := io.WriteString(w, b.String()); err != nil {
@@ -193,21 +178,18 @@ func columnWidths(headers []string, rows [][]string) []int {
 	return widths
 }
 
-// writeTableRow styles/hyperlinks each cell, then appends plain padding to
-// its column width — so alignment is computed from the plain cell text,
-// unperturbed by the ANSI/OSC escapes. The final column isn't padded,
-// avoiding trailing whitespace.
+// writeTableRow pads each cell to its column width on the plain text, then
+// styles it — so alignment is computed before any ANSI codes are added.
+// The final column isn't padded, avoiding trailing whitespace.
 func writeTableRow(b *strings.Builder, cells []string, widths []int, styleFor func(col int) lipgloss.Style, st tableStyles) {
 	for i, c := range cells {
 		last := i == len(cells)-1
-		// Style/hyperlink the visible text first, then append plain padding
-		// after it — so the link covers only the URL, and the pad width is
-		// computed from the plain cell, unperturbed by escape sequences.
-		b.WriteString(st.decorate(styleFor(i), c))
+		padded := c
+		if !last && i < len(widths) {
+			padded = c + strings.Repeat(" ", widths[i]-lipgloss.Width(c))
+		}
+		b.WriteString(st.style(styleFor(i), padded))
 		if !last {
-			if i < len(widths) {
-				b.WriteString(strings.Repeat(" ", widths[i]-lipgloss.Width(c)))
-			}
 			b.WriteString("  ")
 		}
 	}
