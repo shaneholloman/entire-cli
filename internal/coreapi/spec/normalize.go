@@ -11,7 +11,9 @@
 // is fixed at the source (the control-plane service's spec generation) and
 // generate ogen straight from core.openapi.json. Each transform below
 // names the spec bug it works around so the fix can be matched upstream
-// and the transform retired.
+// and the transform retired. The running checklist of upstream fixes
+// (these two plus the by-mirror id-naming gap) lives in
+// internal/coreapi/UPSTREAM.md.
 //
 //  1. Collapse JSON-Schema-2020-12 nullable shorthand — `"type": ["array",
 //     "null"]` — to the bare type. ogen models a schema's `type` as a

@@ -197,8 +197,8 @@ func newRepoMirrorRemoveCmd() *cobra.Command {
 				// Feeding repoId to DeleteMirror is therefore correct despite
 				// the field-name difference; verified live (by-mirror repoId
 				// == list mirrorId for the same repo). The client-contract
-				// ambiguity goes away upstream if the lookup response names
-				// the field mirrorId (or a delete-by-coords route is added).
+				// ambiguity is tracked for an upstream fix in
+				// internal/coreapi/UPSTREAM.md (#3).
 				resolved, err := c.LookupRepoByMirror(ctx, coreapi.LookupRepoByMirrorParams{
 					Provider:    "github",
 					Owner:       owner,
