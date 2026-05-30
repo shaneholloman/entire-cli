@@ -14,6 +14,11 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/internal/entireclient/clusterdiscovery"
+	"github.com/entireio/cli/internal/entireclient/contexts"
+	"github.com/entireio/cli/internal/entireclient/httpclient"
+	"github.com/entireio/cli/internal/entireclient/repocreds"
+	"github.com/entireio/cli/internal/remotehelper/debuglog"
 	"github.com/entireio/cli/internal/remotehelper/githelper"
 	"github.com/entireio/cli/internal/remotehelper/replicas"
 	"github.com/entireio/cli/internal/remotehelper/transport"
@@ -42,9 +47,11 @@ func invokedAsRemoteHelper(arg0 string) bool {
 // stray banner or log line corrupts the transfer. Diagnostics go to
 // stderr (and the ENTIRE_DEBUG-gated debuglog).
 //
-// Stage 1 wires authentication to the CLI's existing single-context
-// repo-scoped token exchange (auth.RepoScopedToken). Full multi-context
-// resolution (contexts.json + cluster discovery) lands in a later stage.
+// Authentication resolves the login context for the target cluster from
+// the shared contexts.json (honoring an explicit cluster binding, else
+// /.well-known discovery), then mints repo-scoped tokens by exchanging
+// that context's login JWT. A pre-contexts.json login is migrated in
+// read-time so existing users don't have to re-authenticate.
 func runRemoteHelper(args []string) int {
 	if len(args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: git-remote-entire <remote-name> <url>")
@@ -72,6 +79,8 @@ func runRemoteHelper(args []string) int {
 	ctx, stop := installRemoteHelperSignals()
 	defer stop()
 
+	skipTLS := os.Getenv("ENTIRE_TLS_SKIP_VERIFY") == "true"
+
 	nodeCfg := replicas.Resolve(parsedURL)
 	// The repo-scoped token's audience is <clusterBaseURL><repoSlug>. The
 	// audience pins to the cluster entry URL (not a replica node), matching
@@ -79,12 +88,38 @@ func runRemoteHelper(args []string) int {
 	clusterBaseURL := nodeCfg.EntryURL
 	repoSlug := parsedURL.Path
 
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: httpclient.NewTransport(skipTLS),
+	}
+
+	// Bridge any pre-contexts.json login so the resolver can find it.
+	if _, err := auth.MigrateLegacyLoginContext(); err != nil {
+		debuglog.Printf("legacy login migration: %v", err)
+	}
+
+	// Resolve which login context authenticates this cluster: an explicit
+	// cluster_contexts binding wins, otherwise the cluster's
+	// /.well-known/entire-cluster.json is matched against local contexts.
+	cfgDir := contexts.DefaultConfigDir()
+	clusterCtx, err := clusterdiscovery.ResolveContextForCluster(ctx, cfgDir, parsedURL.Host, httpClient, debuglog.Printf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
+		return 128
+	}
+
+	// Mint repo-scoped tokens by exchanging the context's login JWT at its
+	// core's /oauth/token, cached per (repo, action) for this invocation.
+	creds := repocreds.New(clusterCtx.CoreURL, clusterBaseURL, func(context.Context) (string, error) {
+		return auth.LoginTokenForContext(clusterCtx)
+	}, httpClient)
+
 	setAuth := func(req *http.Request) error {
 		action := gitActionFromRequest(req)
 		if action == "" {
 			return fmt.Errorf("cannot classify git op for %s %s; scoped-token exchange requires a recognised smart-HTTP endpoint", req.Method, req.URL.Path)
 		}
-		token, err := auth.RepoScopedToken(req.Context(), clusterBaseURL, repoSlug, action)
+		token, err := creds.Token(req.Context(), repoSlug, action)
 		if err != nil {
 			return fmt.Errorf("repo-scoped token exchange: %w", err)
 		}
@@ -100,7 +135,7 @@ func runRemoteHelper(args []string) int {
 	proxy := transport.New(transport.Config{
 		Nodes:        nodeCfg,
 		Path:         parsedURL.Path,
-		SkipTLS:      os.Getenv("ENTIRE_TLS_SKIP_VERIFY") == "true",
+		SkipTLS:      skipTLS,
 		SetAuth:      setAuth,
 		OnNodeFailed: onNodeFailed,
 	})

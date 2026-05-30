@@ -118,6 +118,15 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		return fmt.Errorf("save auth token: %w", err)
 	}
 
+	// Dual-write the shared contexts.json credential model so the git
+	// remote helper (and entiredb's CLIs) can authenticate against any
+	// entitled cluster from this login. Best-effort: the legacy entry
+	// above remains the control-plane source of truth, so a failure here
+	// must not fail the login — warn and continue.
+	if _, err := auth.RecordLoginContext(token); err != nil {
+		fmt.Fprintf(errW, "Warning: logged in, but could not record a shareable context (clone via entire:// may need a re-login): %v\n", err)
+	}
+
 	fmt.Fprintln(outW, "Login complete.")
 	return nil
 }
