@@ -184,17 +184,8 @@ func GetSession(ctx context.Context, sessionID string) (*Session, error) {
 }
 
 // getDescriptionForCheckpoint reads the description for a checkpoint from committed checkpoint storage.
-// It reads from the latest session subdirectory in the new storage format.
 func getDescriptionForCheckpoint(repo *git.Repository, checkpointID id.CheckpointID) string {
 	tree, err := GetMetadataBranchTree(repo)
-	if err == nil {
-		description, readErr := readDescriptionForCheckpointFromTree(tree, checkpointID)
-		if readErr == nil {
-			return description
-		}
-	}
-
-	tree, err = GetV2MetadataBranchTree(repo)
 	if err != nil {
 		return NoDescription
 	}

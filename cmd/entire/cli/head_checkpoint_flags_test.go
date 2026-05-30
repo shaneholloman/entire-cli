@@ -21,8 +21,7 @@ const (
 
 // setupHeadFlagsRepo creates a git repo with an initial commit, switches the
 // process CWD to it (cannot t.Parallel — t.Chdir conflicts), and returns the
-// opened *git.Repository. Settings have v2 enabled so the v2 store also
-// resolves the checkpoint summary.
+// opened *git.Repository.
 func setupHeadFlagsRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -31,13 +30,6 @@ func setupHeadFlagsRepo(t *testing.T) *git.Repository {
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
 	t.Chdir(tmpDir)
-
-	require.NoError(t, os.MkdirAll(".entire", 0o750))
-	require.NoError(t, os.WriteFile(
-		".entire/settings.json",
-		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
-		0o600,
-	))
 
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)

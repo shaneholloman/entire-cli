@@ -13,7 +13,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
-	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -238,39 +237,6 @@ func TestListSessionsWithDescription(t *testing.T) {
 	sess := sessions[0]
 	if sess.Description != expectedDesc {
 		t.Errorf("Session.Description = %q, want %q", sess.Description, expectedDesc)
-	}
-}
-
-func TestGetDescriptionForCheckpointFallsForwardToV2WhenV1MissesCheckpoint(t *testing.T) {
-	tmpDir := t.TempDir()
-	resolved, err := filepath.EvalSymlinks(tmpDir)
-	if err != nil {
-		t.Fatalf("filepath.EvalSymlinks() failed: %v", err)
-	}
-	tmpDir = resolved
-
-	initTestRepo(t, tmpDir)
-	t.Chdir(tmpDir)
-
-	repo, err := OpenRepository(context.Background())
-	if err != nil {
-		t.Fatalf("OpenRepository(context.Background()) failed: %v", err)
-	}
-
-	createTestMetadataBranchWithPrompt(t, repo, testSessionID, id.MustCheckpointID("111111111111"), "v1 prompt")
-
-	targetCheckpointID := id.MustCheckpointID("222222222222")
-	expectedDesc := "prompt from v2"
-	writeV2CheckpointFixture(t, repo, v2CheckpointFixtureOptions{
-		CheckpointID: targetCheckpointID,
-		SessionID:    "session-v2-description",
-		Strategy:     StrategyNameManualCommit,
-		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"test"}` + "\n")),
-		Prompts:      []string{expectedDesc},
-	})
-
-	if got := getDescriptionForCheckpoint(repo, targetCheckpointID); got != expectedDesc {
-		t.Errorf("getDescriptionForCheckpoint() = %q, want %q", got, expectedDesc)
 	}
 }
 

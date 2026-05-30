@@ -48,10 +48,8 @@ func (s *ManualCommitStrategy) listCheckpoints(ctx context.Context) ([]Checkpoin
 	}
 	defer repo.Close()
 
-	store, err := s.committedCheckpointStore(ctx, repo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get checkpoint store: %w", err)
-	}
+	WarnIfMetadataDisconnected()
+	store := s.getCheckpointStore(repo)
 
 	committed, err := store.ListCommitted(ctx)
 	if err != nil {
@@ -69,10 +67,8 @@ func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointI
 	}
 	defer repo.Close()
 
-	store, err := s.committedCheckpointStore(ctx, repo)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get checkpoint store: %w", err)
-	}
+	WarnIfMetadataDisconnected()
+	store := s.getCheckpointStore(repo)
 
 	summary, err := cpkg.ReadCommittedCheckpoint(ctx, store, checkpointID)
 	if err != nil {

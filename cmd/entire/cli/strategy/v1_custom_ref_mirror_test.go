@@ -61,6 +61,14 @@ func v1CustomRefHash(t *testing.T, repo *git.Repository) (plumbing.Hash, bool) {
 	return ref.Hash(), true
 }
 
+func localRefExists(t *testing.T, dir, refName string) bool {
+	t.Helper()
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+	_, err = repo.Reference(plumbing.ReferenceName(refName), true)
+	return err == nil
+}
+
 func v1MetadataBranchHash(t *testing.T, repo *git.Repository) plumbing.Hash {
 	t.Helper()
 	ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
@@ -267,8 +275,8 @@ func TestPrePush_DoesNotPushV1CustomRef(t *testing.T) {
 
 	require.NoError(t, (&ManualCommitStrategy{}).PrePush(ctx, "origin"))
 
-	assert.True(t, refExists(ctx, t, bareDir, "refs/heads/"+paths.MetadataBranchName),
+	assert.True(t, localRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should be pushed")
-	assert.False(t, refExists(ctx, t, bareDir, paths.MetadataRefName),
+	assert.False(t, localRefExists(t, bareDir, paths.MetadataRefName),
 		"v1 custom ref must never be pushed")
 }
