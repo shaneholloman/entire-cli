@@ -191,33 +191,6 @@ func (br *BenchRepo) WriteFile(b *testing.B, relPath, content string) {
 	writeFile(b, br.Dir, relPath, content)
 }
 
-// AddAndCommit stages the given files and creates a commit.
-// Returns the new HEAD hash.
-func (br *BenchRepo) AddAndCommit(b *testing.B, message string, files ...string) string {
-	b.Helper()
-	wt, err := br.Repo.Worktree()
-	if err != nil {
-		b.Fatalf("worktree: %v", err)
-	}
-	for _, f := range files {
-		if _, err := wt.Add(f); err != nil {
-			b.Fatalf("add %s: %v", f, err)
-		}
-	}
-	hash, err := wt.Commit(message, &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Bench User",
-			Email: "bench@example.com",
-			When:  time.Now(),
-		},
-	})
-	if err != nil {
-		b.Fatalf("commit: %v", err)
-	}
-	br.HeadHash = hash.String()
-	return hash.String()
-}
-
 // SessionOpts configures how CreateSessionState creates a session state file.
 type SessionOpts struct {
 	// SessionID is the session identifier. Auto-generated if empty.

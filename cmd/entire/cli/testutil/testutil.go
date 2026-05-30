@@ -3,7 +3,6 @@
 package testutil
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,39 +78,6 @@ func WriteFile(t *testing.T, repoDir, path, content string) {
 	if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write file %s: %v", path, err)
 	}
-}
-
-// ReadFile reads a file from the repo directory.
-func ReadFile(t *testing.T, repoDir, path string) string {
-	t.Helper()
-
-	fullPath := filepath.Join(repoDir, path)
-	//nolint:gosec // test code, path is from test setup
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		t.Fatalf("failed to read file %s: %v", path, err)
-	}
-	return string(data)
-}
-
-// TryReadFile reads a file from the repo directory, returning empty string if not found.
-func TryReadFile(t *testing.T, repoDir, path string) string {
-	t.Helper()
-
-	fullPath := filepath.Join(repoDir, path)
-	//nolint:gosec // test code, path is from test setup
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// FileExists checks if a file exists in the repo directory.
-func FileExists(repoDir, path string) bool {
-	fullPath := filepath.Join(repoDir, path)
-	_, err := os.Stat(fullPath)
-	return err == nil
 }
 
 // GitAdd stages files for commit.
@@ -241,77 +207,6 @@ func BranchExists(t *testing.T, repoDir, branchName string) bool {
 	})
 
 	return found
-}
-
-// GetCommitMessage returns the commit message for the given commit hash.
-func GetCommitMessage(t *testing.T, repoDir, hash string) string {
-	t.Helper()
-
-	repo, err := gitrepo.OpenPath(repoDir)
-	if err != nil {
-		t.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	commitHash := plumbing.NewHash(hash)
-	commit, err := repo.CommitObject(commitHash)
-	if err != nil {
-		t.Fatalf("failed to get commit %s: %v", hash, err)
-	}
-
-	return commit.Message
-}
-
-// GetLatestCheckpointIDFromHistory walks backwards from HEAD and returns
-// the checkpoint ID from the first commit with an Entire-Checkpoint trailer.
-// Returns an error if no checkpoint trailer is found in any commit.
-func GetLatestCheckpointIDFromHistory(t *testing.T, repoDir string) (string, error) {
-	t.Helper()
-
-	repo, err := gitrepo.OpenPath(repoDir)
-	if err != nil {
-		t.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	head, err := repo.Head()
-	if err != nil {
-		t.Fatalf("failed to get HEAD: %v", err)
-	}
-
-	commitIter, err := repo.Log(&git.LogOptions{From: head.Hash()})
-	if err != nil {
-		t.Fatalf("failed to iterate commits: %v", err)
-	}
-
-	var checkpointID string
-	//nolint:errcheck,gosec // ForEach callback returns error to stop iteration
-	commitIter.ForEach(func(c *object.Commit) error {
-		// Look for Entire-Checkpoint trailer
-		for line := range strings.SplitSeq(c.Message, "\n") {
-			line = strings.TrimSpace(line)
-			if value, found := strings.CutPrefix(line, "Entire-Checkpoint:"); found {
-				checkpointID = strings.TrimSpace(value)
-				return errors.New("stop iteration")
-			}
-		}
-		return nil
-	})
-
-	if checkpointID == "" {
-		return "", errors.New("no commit with Entire-Checkpoint trailer found in history")
-	}
-
-	return checkpointID, nil
-}
-
-// SafeIDPrefix returns first 12 chars of ID or the full ID if shorter.
-// Use this when logging checkpoint IDs to avoid index out of bounds panic.
-func SafeIDPrefix(id string) string {
-	if len(id) >= 12 {
-		return id[:12]
-	}
-	return id
 }
 
 // gitEmptyConfigPath returns the path to an empty file suitable for use as

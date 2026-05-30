@@ -120,17 +120,6 @@ func TokenForResource(ctx context.Context, resourceBaseURL string) (string, erro
 	return m.TokenForResource(ctx, resourceBaseURL) //nolint:wrapcheck // shim returns the lib error verbatim
 }
 
-// Token is the full-control entry point. Use TokenForResource for the
-// common case; this exists so callers can override the wire-level
-// Audience, RequestedTokenType, or Scope per call.
-func Token(ctx context.Context, req TokenRequest) (string, error) {
-	m, err := defaultManager()
-	if err != nil {
-		return "", err
-	}
-	return m.Token(ctx, req) //nolint:wrapcheck // shim returns the lib error verbatim
-}
-
 // isLoopbackHTTP reports whether u is an http:// URL pointing at a
 // loopback hostname (localhost, 127.0.0.1, ::1). Used to scope the
 // "auto-permit insecure HTTP" path on the tokenmanager so production

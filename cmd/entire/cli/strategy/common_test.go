@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -769,16 +768,6 @@ func TestIsOnDefaultBranch(t *testing.T) {
 			t.Errorf("branchName = %q, want empty string for detached HEAD", branchName)
 		}
 	})
-}
-
-// resetProtectedDirsForTest resets the cached protected dirs so tests that
-// manipulate the agent registry can get fresh results. Call this in any test
-// that registers/unregisters agents and then checks isProtectedPath behavior.
-//
-//nolint:unused // Intentionally kept as a test utility for future tests that mutate the agent registry.
-func resetProtectedDirsForTest() {
-	protectedDirsOnce = sync.Once{}
-	protectedDirsCache = nil
 }
 
 func TestGetGitAuthorFromRepo(t *testing.T) {

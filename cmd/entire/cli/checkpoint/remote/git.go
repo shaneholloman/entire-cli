@@ -279,12 +279,6 @@ func PushWithOptions(ctx context.Context, opts PushOptions) (PushResult, error) 
 	return PushResult{Output: string(output)}, nil
 }
 
-// LsRemote runs git ls-remote with token injection.
-// GIT_TERMINAL_PROMPT=0 is always set. Returns stdout only.
-func LsRemote(ctx context.Context, remote string, patterns ...string) ([]byte, error) {
-	return lsRemote(ctx, "", remote, patterns...)
-}
-
 // LsRemoteInDir is like LsRemote but runs in a specific directory.
 func LsRemoteInDir(ctx context.Context, dir, remote string, patterns ...string) ([]byte, error) {
 	return lsRemote(ctx, dir, remote, patterns...)
