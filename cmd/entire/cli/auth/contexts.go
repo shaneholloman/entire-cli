@@ -153,12 +153,21 @@ func MigrateLegacyLoginContext() (migrated bool, err error) {
 		// Opaque/unsigned legacy token — can't derive a context from it.
 		return false, nil //nolint:nilerr // absence of a JWT issuer is not an error here
 	}
+	handle := claims.Handle
+	if handle == "" {
+		handle = claims.Subject
+	}
 	f, err := contexts.Load(contexts.DefaultConfigDir())
 	if err != nil {
 		return false, fmt.Errorf("load contexts: %w", err)
 	}
-	if len(f.ContextsForIssuer(claims.Issuer)) > 0 {
-		return false, nil // already represented
+	// Skip only when this exact identity is already represented. Keying on
+	// issuer alone would skip a legacy bob@core just because alice@core (e.g.
+	// from another CLI) already exists, leaving Bob without a context.
+	for _, c := range f.Contexts {
+		if sameIssuer(c.CoreURL, claims.Issuer) && c.Handle == handle {
+			return false, nil
+		}
 	}
 	// activate=false: migrating an old login (e.g. on first `git clone`) must
 	// not silently switch the user's active context. RecordLoginContext still

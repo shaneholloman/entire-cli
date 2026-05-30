@@ -1,11 +1,58 @@
 package discovery
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestModifyCache_AtomicReadModifyWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	// First mutation persists.
+	if err := ModifyCache(dir, func(c ClusterCache) error {
+		c.SetRepoNodes("host", "/r1", []string{"n1"}, time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyCache r1: %v", err)
+	}
+	// Second mutation sees the first's write (read-modify-write under one
+	// lock) and adds to it rather than clobbering.
+	if err := ModifyCache(dir, func(c ClusterCache) error {
+		c.SetRepoNodes("host", "/r2", []string{"n2"}, time.Hour)
+		return nil
+	}); err != nil {
+		t.Fatalf("ModifyCache r2: %v", err)
+	}
+
+	cache, err := LoadCache(dir)
+	if err != nil {
+		t.Fatalf("LoadCache: %v", err)
+	}
+	if n, ok := cache.GetRepoNodes("host", "/r1"); !ok || len(n) != 1 || n[0] != "n1" {
+		t.Fatalf("r1 entry lost: %v ok=%v", n, ok)
+	}
+	if n, ok := cache.GetRepoNodes("host", "/r2"); !ok || len(n) != 1 || n[0] != "n2" {
+		t.Fatalf("r2 entry missing: %v ok=%v", n, ok)
+	}
+
+	// A fn error aborts the write — the mutation must not persist.
+	if err := ModifyCache(dir, func(c ClusterCache) error {
+		c.SetRepoNodes("host", "/r3", []string{"n3"}, time.Hour)
+		return errors.New("boom")
+	}); err == nil {
+		t.Fatal("expected ModifyCache to return the fn error")
+	}
+	cache, err = LoadCache(dir)
+	if err != nil {
+		t.Fatalf("LoadCache after abort: %v", err)
+	}
+	if _, ok := cache.GetRepoNodes("host", "/r3"); ok {
+		t.Fatal("aborted mutation must not have persisted")
+	}
+}
 
 func TestCacheRoundTrip(t *testing.T) {
 	dir := t.TempDir()

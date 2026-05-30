@@ -47,10 +47,69 @@ func DefaultCacheDir() string {
 }
 
 // LoadCache reads the node cache from disk. Returns an empty cache if the file
-// does not exist.
+// does not exist. This is an unlocked read — fine for read-only callers; use
+// ModifyCache for read-modify-write sequences.
 func LoadCache(cacheDir string) (ClusterCache, error) {
-	path := filepath.Join(cacheDir, cacheFileName)
+	return readCacheNoLock(filepath.Join(cacheDir, cacheFileName))
+}
 
+// SaveCache writes the cache to disk atomically under an exclusive flock.
+func SaveCache(cacheDir string, cache ClusterCache) error {
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	path := filepath.Join(cacheDir, cacheFileName)
+	unlock, err := lockCache(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return writeCacheNoLock(path, cache)
+}
+
+// ModifyCache atomically applies fn to the node cache under a single
+// exclusive flock — load, mutate, and write all happen with the lock held.
+// Use this for any read-modify-write sequence; LoadCache followed by
+// SaveCache releases the lock between them and races concurrent writers
+// (e.g. two parallel clone/fetch/push processes updating nodes.json), losing
+// each other's entries.
+func ModifyCache(cacheDir string, fn func(ClusterCache) error) error {
+	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	path := filepath.Join(cacheDir, cacheFileName)
+	unlock, err := lockCache(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	cache, err := readCacheNoLock(path)
+	if err != nil {
+		return err
+	}
+	if err := fn(cache); err != nil {
+		return err
+	}
+	return writeCacheNoLock(path, cache)
+}
+
+func lockCache(path string) (func(), error) {
+	fl := flock.New(path + ".lock")
+	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
+	defer cancel()
+
+	locked, err := fl.TryLockContext(ctx, lockRetry)
+	if err != nil {
+		return nil, fmt.Errorf("acquire cache lock: %w", err)
+	}
+	if !locked {
+		return nil, errors.New("timeout acquiring cache lock")
+	}
+	return func() { _ = fl.Unlock() }, nil //nolint:errcheck // unlock failure is non-fatal
+}
+
+func readCacheNoLock(path string) (ClusterCache, error) {
 	data, err := os.ReadFile(path) // #nosec G304
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -58,7 +117,6 @@ func LoadCache(cacheDir string) (ClusterCache, error) {
 		}
 		return nil, fmt.Errorf("read cache: %w", err)
 	}
-
 	var cache ClusterCache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		// Corrupted cache — start fresh.
@@ -67,32 +125,11 @@ func LoadCache(cacheDir string) (ClusterCache, error) {
 	return cache, nil
 }
 
-// SaveCache writes the cache to disk atomically.
-func SaveCache(cacheDir string, cache ClusterCache) error {
-	if err := os.MkdirAll(cacheDir, 0700); err != nil {
-		return fmt.Errorf("create cache dir: %w", err)
-	}
-
-	path := filepath.Join(cacheDir, cacheFileName)
-
-	fl := flock.New(path + ".lock")
-	ctx, cancel := context.WithTimeout(context.Background(), lockTimeout)
-	defer cancel()
-
-	locked, err := fl.TryLockContext(ctx, lockRetry)
-	if err != nil {
-		return fmt.Errorf("acquire cache lock: %w", err)
-	}
-	if !locked {
-		return errors.New("timeout acquiring cache lock")
-	}
-	defer fl.Unlock() //nolint:errcheck // unlock failure is non-fatal
-
+func writeCacheNoLock(path string, cache ClusterCache) error {
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal cache: %w", err)
 	}
-
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write cache tmp: %w", err)

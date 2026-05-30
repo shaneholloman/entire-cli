@@ -86,31 +86,32 @@ func LoadFresh(host, repoPath string) []string {
 }
 
 // Persist stores the given replica set in the on-disk cache. Best
-// effort: cache write failures are logged but never fatal.
+// effort: cache write failures are logged but never fatal. The
+// load-mutate-save runs under ModifyCache's single lock so concurrent
+// clone/fetch/push processes don't clobber each other's entries.
 func Persist(host, repoPath string, nodes []string) {
 	if host == "" || repoPath == "" || len(nodes) == 0 {
 		return
 	}
-	cache, err := discovery.LoadCache(discovery.DefaultCacheDir())
-	if err != nil || cache == nil {
-		cache = make(discovery.ClusterCache)
-	}
-	cache.SetRepoNodes(host, repoPath, nodes, discovery.DefaultTTL)
-	if err := discovery.SaveCache(discovery.DefaultCacheDir(), cache); err != nil {
+	if err := discovery.ModifyCache(discovery.DefaultCacheDir(), func(cache discovery.ClusterCache) error {
+		cache.SetRepoNodes(host, repoPath, nodes, discovery.DefaultTTL)
+		return nil
+	}); err != nil {
 		debuglog.Printf("cache save failed for %s: %v", repoPath, err)
 	}
 }
 
 // Invalidate removes the cached entry for (host, repoPath). Best
-// effort: missing/unreadable caches are ignored.
+// effort: failures are logged but never fatal. Runs under ModifyCache's
+// lock so it doesn't race a concurrent Persist.
 func Invalidate(host, repoPath string) {
 	if host == "" || repoPath == "" {
 		return
 	}
-	cache, err := discovery.LoadCache(discovery.DefaultCacheDir())
-	if err != nil || cache == nil {
-		return
+	if err := discovery.ModifyCache(discovery.DefaultCacheDir(), func(cache discovery.ClusterCache) error {
+		cache.InvalidateRepo(host, repoPath)
+		return nil
+	}); err != nil {
+		debuglog.Printf("cache invalidate failed for %s: %v", repoPath, err)
 	}
-	cache.InvalidateRepo(host, repoPath)
-	_ = discovery.SaveCache(discovery.DefaultCacheDir(), cache) //nolint:errcheck // best-effort invalidation
 }

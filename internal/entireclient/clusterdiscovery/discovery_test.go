@@ -131,5 +131,5 @@ func TestRenderLoginHint(t *testing.T) {
 	assert.Contains(t, hint, "no auth context for cluster rc.partial.to")
 	assert.Contains(t, hint, "\n  https://a.example\n", "missing indented URL line: %q", hint)
 	assert.Contains(t, hint, "\n  https://b.example\n", "missing indented URL line: %q", hint)
-	assert.Contains(t, hint, "entire-core auth login --base-url")
+	assert.Contains(t, hint, "entire login")
 }

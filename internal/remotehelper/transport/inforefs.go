@@ -216,7 +216,7 @@ func HTTPErrorMessage(statusCode int, serverMsg, baseURL string) error {
 		if serverMsg != "" {
 			return fmt.Errorf("authentication failed: %s", serverMsg)
 		}
-		return errors.New("authentication failed - please run 'entire-core auth login'")
+		return errors.New("authentication failed - please run 'entire login'")
 	case http.StatusNotFound:
 		if serverMsg != "" {
 			return errors.New(serverMsg)

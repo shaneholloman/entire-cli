@@ -357,6 +357,45 @@ func TestMigrateLegacyLoginContext_PreservesCurrentContext(t *testing.T) {
 	}
 }
 
+func TestMigrateLegacyLoginContext_DifferentHandleSameCore(t *testing.T) {
+	keyring.MockInit()
+	cfgDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", cfgDir)
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	const coreURL = "https://core.example.com"
+	exp := time.Now().Add(time.Hour).Unix()
+
+	// contexts.json already has alice@core (e.g. from another CLI).
+	if _, err := RecordLoginContext(makeJWT(t, fmt.Sprintf(`{"iss":%q,"handle":"alice","exp":%d}`, coreURL, exp)), true); err != nil {
+		t.Fatalf("seed alice: %v", err)
+	}
+
+	// The legacy keyring token is bob on the *same* core — migration must
+	// still run (issuer-only dedup would wrongly skip it).
+	bob := makeJWT(t, fmt.Sprintf(`{"iss":%q,"handle":"bob","exp":%d}`, coreURL, exp))
+	if err := NewStore().SaveToken(api.AuthBaseURL(), bob); err != nil {
+		t.Fatalf("seed legacy bob: %v", err)
+	}
+
+	migrated, err := MigrateLegacyLoginContext()
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if !migrated {
+		t.Fatal("expected bob to be migrated despite alice@core existing")
+	}
+
+	f, err := contexts.Load(cfgDir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := f.ContextsForIssuer(coreURL); len(got) != 2 {
+		t.Fatalf("contexts for issuer = %d, want 2 (alice + bob)", len(got))
+	}
+}
+
 func TestRecordLoginContext_RejectsTokenWithoutIssuer(t *testing.T) {
 	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
 	t.Cleanup(restore)

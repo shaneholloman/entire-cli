@@ -74,6 +74,31 @@ func TestResolveContextForClusterDiscoversAndAutoBinds(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "auto-bind should skip discovery on the second call")
 }
 
+// TestResolveContextForClusterPrefersCurrentAmongSameCoreMatches: when a
+// core has several accounts (alice@core, bob@core) and bob is the active
+// context, discovery must auto-bind to bob, not to whichever was saved
+// first — otherwise a clone silently authenticates as the wrong user.
+func TestResolveContextForClusterPrefersCurrentAmongSameCoreMatches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"core_urls":["https://eu.auth.entire.io"]}`)) //nolint:errcheck // test
+	}))
+	defer srv.Close()
+
+	configDir := t.TempDir()
+	require.NoError(t, contexts.Save(configDir, &contexts.File{
+		CurrentContext: "bob@eu",
+		Contexts: []*contexts.Context{
+			{Name: "alice@eu", CoreURL: "https://eu.auth.entire.io", Handle: "alice", KeychainService: "kc:alice"},
+			{Name: "bob@eu", CoreURL: "https://eu.auth.entire.io", Handle: "bob", KeychainService: "kc:bob"},
+		},
+	}))
+
+	c, err := ResolveContextForCluster(t.Context(), configDir, "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
+	require.NoError(t, err)
+	assert.Equal(t, "bob@eu", c.Name, "should prefer the active context among same-core matches")
+}
+
 // TestResolveContextForClusterNoMatchReturnsLoginHint: discovery
 // succeeds but the user has no context for any of the advertised core
 // URLs. Error message tells them which login URL to use — that's the
@@ -97,7 +122,7 @@ func TestResolveContextForClusterNoMatchReturnsLoginHint(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no auth context for cluster aws-eu-central-1.entire.io")
 	assert.Contains(t, err.Error(), "https://eu.auth.entire.io")
-	assert.Contains(t, err.Error(), "entire-core auth login --base-url")
+	assert.Contains(t, err.Error(), "entire login")
 }
 
 // TestResolveContextForClusterStaleBindingFallsThrough: a binding that

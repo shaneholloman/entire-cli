@@ -50,12 +50,26 @@ func ResolveContextForCluster(ctx context.Context, configDir, clusterHost string
 	if err != nil {
 		return nil, formatDiscoveryError(clusterHost, err)
 	}
+	current := f.Find(f.CurrentContext)
 	for _, coreURL := range body.CoreURLs {
 		matches := f.ContextsForIssuer(coreURL)
 		if len(matches) == 0 {
 			continue
 		}
+		// Prefer the active context when it's one of the eligible matches —
+		// otherwise a core with several accounts (alice@core, bob@core) would
+		// auto-bind whichever was saved first, silently authenticating as the
+		// wrong user. Fall back to the first match when the current context
+		// isn't eligible for this cluster.
 		c := matches[0]
+		if current != nil {
+			for _, m := range matches {
+				if m.Name == current.Name {
+					c = current
+					break
+				}
+			}
+		}
 		if bindErr := contexts.BindCluster(configDir, clusterHost, c.Name); bindErr != nil {
 			// Non-fatal: we still resolved a usable context. Next
 			// invocation will pay the discovery round-trip again.
