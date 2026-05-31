@@ -40,21 +40,35 @@ results in `*…StatusCode`, which the command fetch closures unwrap via
 the wrapper — generated methods return `(*T, error)` directly again and
 the closures drop the `.Response` unwrap.
 
-## 3. by-mirror lookup returns `repoId`, but delete takes `mirrorId`
+## 3. `mirror remove` rewires to delete-by-coords on next spec refresh
 
-**Symptom:** `GET /repos/by-mirror/{provider}/{owner}/{repo}` returns a
-field named `repoId`, while `DELETE /mirrors/{mirrorId}` takes a
-`mirrorId`. `entire repo mirror remove` must feed the lookup's `repoId`
-to delete. The two are the same ULID server-side (both the
-`mirror_repos` row id — verified live: by-mirror `repoId` == list
-`mirrorId` for the same repo), so it's correct, but the client contract
-reads mismatched and there's no delete-by-coords route to avoid the
-lookup.
-
-**Fix upstream (either):** name the by-mirror response field `mirrorId`,
-or add a delete-by-coords route so removal doesn't depend on the
+**Resolved upstream** — entiredb refactored the mirror surface (ENT-741,
+now on `main`; the failure-message follow-up ENT-743 / entiredb#1830 is
+merged). The old repoId-vs-mirrorId gap is gone: the by-mirror lookup
+(`GET /repos/by-mirror/{provider}/{owner}/{repo}`) is removed and delete
+is now `DELETE /mirrors?provider&owner&repo&clusterHost` — by upstream
+coords, no `{mirrorId}` path param. Removal no longer depends on any
 id-equality invariant.
 
-**Workaround:** `cmd/entire/cli/repo_mirror.go` (`newRepoMirrorRemoveCmd`)
-passes `repoId` to `DeleteMirror` with a comment explaining the
-invariant. No code change needed when fixed — just drop the comment.
+**Why this entry still exists:** our committed spec predates the
+refactor, so the generated client keeps the old `LookupRepoByMirror` +
+`DeleteMirror{MirrorID}` methods and `newRepoMirrorRemoveCmd` still does
+the two-call lookup→delete. Unlike #1/#2, the next spec refresh is **not
+a free drop** here — it's a required CLI change:
+
+- Drop the `LookupRepoByMirror` call (endpoint gone) and its
+  id-equality comment.
+- Call `DeleteMirror` once with `{Provider, Owner, Repo, ClusterHost}`
+  query coords (mirrors the create shape) instead of a `{mirrorId}` path.
+- Handle the new status contract — **404 is now a real, surfaced error,
+  no longer swallowed as idempotent success**:
+  - 404 — no mirror / not visible to caller / mirrored on another cluster
+  - 403 — mirror exists but caller lacks write+ on the upstream
+  - 503 — mirror authz service unavailable
+  - 401 — caller has no linked GitHub identity
+  - 204/200 — removed (concurrent-delete races resolve to 204 server-side,
+    so a 404 always means "not removed, here's why")
+
+Wire types that disappear on refresh: `LookupRepoByMirrorInput`,
+`MirrorRepoPath`, `LookupRepoByMirrorOutput`. `DeleteMirrorInput` changes
+from `{MirrorID path}` to the four query coords above.
