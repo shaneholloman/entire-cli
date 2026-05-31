@@ -15,8 +15,8 @@ import (
 
 func decodeAddOrgMemberResponse(resp *http.Response) (res *Membership, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -190,8 +190,8 @@ func decodeBatchLookupResponse(resp *http.Response) (res *BatchLookupOutputBody,
 
 func decodeCreateBindingResponse(resp *http.Response) (res *Binding, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -273,8 +273,8 @@ func decodeCreateBindingResponse(resp *http.Response) (res *Binding, _ error) {
 
 func decodeCreateMirrorResponse(resp *http.Response) (res *CreatedMirror, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -356,8 +356,8 @@ func decodeCreateMirrorResponse(resp *http.Response) (res *CreatedMirror, _ erro
 
 func decodeCreateOrgResponse(resp *http.Response) (res *Org, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -439,8 +439,8 @@ func decodeCreateOrgResponse(resp *http.Response) (res *Org, _ error) {
 
 func decodeCreateProjectResponse(resp *http.Response) (res *Project, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -531,8 +531,8 @@ func decodeCreateProjectResponse(resp *http.Response) (res *Project, _ error) {
 
 func decodeCreateRepoResponse(resp *http.Response) (res *Repo, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -623,8 +623,8 @@ func decodeCreateRepoResponse(resp *http.Response) (res *Repo, _ error) {
 
 func decodeCreateServiceAccountResponse(resp *http.Response) (res *ServiceAccount, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -1343,8 +1343,8 @@ func decodeGetServiceAccountResponse(resp *http.Response) (res *ServiceAccount, 
 
 func decodeGrantProjectAccessResponse(resp *http.Response) (res *GrantProjectAccessOutputBody, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -1426,8 +1426,8 @@ func decodeGrantProjectAccessResponse(resp *http.Response) (res *GrantProjectAcc
 
 func decodeGrantRepoAccessResponse(resp *http.Response) (res *GrantRepoAccessOutputBody, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")
@@ -1509,8 +1509,8 @@ func decodeGrantRepoAccessResponse(resp *http.Response) (res *GrantRepoAccessOut
 
 func decodeGrantServiceAccountAccessResponse(resp *http.Response) (res *GrantServiceAccountAccessOutputBody, _ error) {
 	switch resp.StatusCode {
-	case 200:
-		// Code 200.
+	case 201:
+		// Code 201.
 		ct, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 		if err != nil {
 			return res, errors.Wrap(err, "parse media type")

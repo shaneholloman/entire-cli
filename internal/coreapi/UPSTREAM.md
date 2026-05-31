@@ -9,26 +9,14 @@ a cleaner client. This file is the running checklist.
 When an item is fixed upstream, remove its workaround (cited by file) and
 delete the entry.
 
-## 1. Nullable arrays use JSON-Schema type-union shorthand
+## 1. Operations enumerate every error status with no shared `default`
 
-**Symptom:** slice fields are declared `"type": ["array", "null"]`
-(JSON Schema 2020-12). ogen models a schema's `type` as a scalar and
-rejects the union form, so generation fails outright.
-
-**Fix upstream:** emit non-nullable arrays — an absent collection
-serialises as `[]`, never `null` — i.e. `"type": "array"`.
-
-**Workaround:** `spec/normalize.go` (`collapseTypeUnions`) rewrites the
-union to the bare type before generation. Removable once the spec stops
-emitting the `null` member.
-
-## 2. Operations enumerate every error status with no shared `default`
-
-**Symptom:** each operation declares its real success code (good — 200
-for reads/creates, 204 for deletes) but then lists every error status
-separately (`400`, `401`, `403`, `422`, `500`, …) with no `default`
-response. ogen turns that into a per-operation sum-type result, forcing a
-type switch at every call site instead of the ergonomic `(*T, error)`.
+**Symptom:** each operation declares its real success code (good — 201
+for creates, 200 for reads, 204 for deletes) but then lists every error
+status separately (`400`, `401`, `403`, `422`, `500`, …) with no
+`default` response. ogen turns that into a per-operation sum-type result,
+forcing a type switch at every call site instead of the ergonomic
+`(*T, error)`.
 
 **Fix upstream:** emit a single `default` error response (every error
 already references the same `ErrorModel`, so a `default` is lossless).
@@ -42,8 +30,11 @@ ergonomics choice rather than a pure bug workaround; a shared `default`
 upstream retires it.
 
 <!-- Resolved upstream and removed:
-  #3 (by-mirror lookup vs mirrorId delete) — entiredb ENT-741 replaced the
-  two-call lookup→delete with a single delete-by-coords route
-  (`DELETE /mirrors?provider&owner&repo&clusterHost`); `mirror remove` now
-  calls it directly and surfaces the new 404/403/503 contract. -->
+  - Nullable arrays (`"type": ["array","null"]`) — entiredb now emits
+    non-nullable arrays (`"type": "array"`, absent ⇒ `[]`), so the
+    `collapseTypeUnions` transform is gone.
+  - by-mirror lookup vs mirrorId delete — entiredb ENT-741 replaced the
+    two-call lookup→delete with a single delete-by-coords route
+    (`DELETE /mirrors?provider&owner&repo&clusterHost`); `mirror remove`
+    now calls it directly and surfaces the new 404/403/503 contract. -->
 

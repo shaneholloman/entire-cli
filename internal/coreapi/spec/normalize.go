@@ -6,32 +6,24 @@
 // committed artifact (core.gen.json) that ogen consumes; the upstream
 // file is never mutated, so a refresh is a clean `curl` overwrite.
 //
-// Each transform below is documented with the reason it exists. Transform
-// (1) works around an upstream spec bug (nullable-array shorthand ogen
-// rejects) and retires when the spec is fixed; transform (2) is a
-// deliberate codegen-ergonomics fold, not a bug workaround. The running
-// checklist of upstream fixes lives in internal/coreapi/UPSTREAM.md.
+// This command applies one transform, documented below. It is a deliberate
+// codegen-ergonomics fold, not a bug workaround — the upstream spec is
+// otherwise accurate (it declares real success codes and non-nullable
+// arrays). The running checklist of upstream fixes lives in
+// internal/coreapi/UPSTREAM.md.
 //
-//  1. Collapse JSON-Schema-2020-12 nullable shorthand — `"type": ["array",
-//     "null"]` — to the bare type. ogen models a schema's `type` as a
-//     scalar and rejects the union form.
-//     Spec fix: emit non-nullable arrays (an absent collection serialises
-//     as `[]`, never `null`), i.e. `"type": "array"`. Then this transform
-//     finds nothing to change and can be removed.
-//
-//  2. Fold every operation's explicit error responses (4xx/5xx) into a
-//     single "default" error, leaving the real success response (200 for
-//     reads/creates, 204 for deletes) untouched. The spec declares
-//     accurate success codes but enumerates each error status separately
-//     with no "default"; ogen turns that into a per-operation sum type
-//     that forces a type switch at every call site. All error responses
-//     reference the same ErrorModel, so folding them into one "default" is
-//     lossless and flips ogen into "convenient errors": `(*T, error)` with
-//     any non-2xx as a typed `*ErrorModelStatusCode`. Keeping the literal
-//     success code (rather than the old "2XX" range) means ogen returns
-//     the success type directly — no `*…StatusCode` wrapper to unwrap.
-//     This is a deliberate ergonomics choice, not a bug workaround; it
-//     stays until/unless the spec grows a shared "default" response.
+// Fold every operation's explicit error responses (4xx/5xx) into a single
+// "default" error, leaving the real success response (201 for creates, 200
+// for reads, 204 for deletes) untouched. The spec declares accurate success
+// codes but enumerates each error status separately with no "default"; ogen
+// turns that into a per-operation sum type that forces a type switch at
+// every call site. All error responses reference the same ErrorModel, so
+// folding them into one "default" is lossless and flips ogen into
+// "convenient errors": `(*T, error)` with any non-2xx as a typed
+// `*ErrorModelStatusCode`. Keeping the literal success code (rather than a
+// "2XX" range) means ogen returns the success type directly — no
+// `*…StatusCode` wrapper to unwrap. This stays until/unless the spec grows
+// a shared "default" response.
 //
 // Run via `go generate ./internal/coreapi/...` (the first generate step in
 // gen.go), or by hand after refreshing the spec:
@@ -75,7 +67,6 @@ func run() error {
 		return fmt.Errorf("parse spec: %w", err)
 	}
 
-	collapsed := collapseTypeUnions(doc)
 	ops := foldErrorResponses(doc)
 
 	var buf bytes.Buffer
@@ -89,58 +80,8 @@ func run() error {
 		return fmt.Errorf("write spec: %w", err)
 	}
 
-	fmt.Printf("normalize: collapsed %d type-union(s), folded error responses on %d operation(s) → %s\n",
-		collapsed, ops, outPath)
+	fmt.Printf("normalize: folded error responses on %d operation(s) → %s\n", ops, outPath)
 	return nil
-}
-
-// collapseTypeUnions rewrites every schema object whose "type" is a JSON
-// array containing "null" (e.g. ["array","null"]) to the bare non-null
-// type ("array"). Returns the number of sites rewritten.
-func collapseTypeUnions(node any) int {
-	switch v := node.(type) {
-	case map[string]any:
-		count := 0
-		if t, ok := v["type"].([]any); ok {
-			if scalar, replaced := nonNullType(t); replaced {
-				v["type"] = scalar
-				count++
-			}
-		}
-		for _, child := range v {
-			count += collapseTypeUnions(child)
-		}
-		return count
-	case []any:
-		count := 0
-		for _, child := range v {
-			count += collapseTypeUnions(child)
-		}
-		return count
-	default:
-		return 0
-	}
-}
-
-// nonNullType returns the single non-"null" member of a JSON-Schema type
-// union and true when the union has exactly one non-null member (the only
-// shape huma emits). Unions with zero or multiple non-null members are
-// left untouched so a genuinely polymorphic type isn't silently flattened.
-func nonNullType(types []any) (string, bool) {
-	var nonNull []string
-	for _, t := range types {
-		s, ok := t.(string)
-		if !ok {
-			return "", false
-		}
-		if s != "null" {
-			nonNull = append(nonNull, s)
-		}
-	}
-	if len(nonNull) != 1 || len(types) == len(nonNull) {
-		return "", false
-	}
-	return nonNull[0], true
 }
 
 // httpMethods is the set of OpenAPI path-item keys that are operations.
@@ -153,9 +94,9 @@ var httpMethods = map[string]bool{
 // success entries plus a single "default" error, dropping the explicit
 // 4xx/5xx codes.
 //
-// The spec declares accurate success codes (200 for reads/creates, 204 for
-// deletes), so those are kept verbatim — keeping the literal code (not a
-// "2XX" range) means ogen returns the success type directly, with no
+// The spec declares accurate success codes (201 for creates, 200 for
+// reads, 204 for deletes), so those are kept verbatim — keeping the literal
+// code (not a "2XX" range) means ogen returns the success type directly, with no
 // `*…StatusCode` wrapper. Every explicit error status references the same
 // ErrorModel, so folding them all into one "default" is lossless and flips
 // ogen into "convenient errors": `(*T, error)` with any non-2xx as a typed
