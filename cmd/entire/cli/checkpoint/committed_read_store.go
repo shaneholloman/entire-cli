@@ -15,8 +15,7 @@ import (
 
 // NewCommittedReadStore returns a GitStore for reading committed checkpoints:
 // the local-only v1.1 custom ref when checkpoints_version 1.1 is enabled (no v1
-// fallback), else the v1 branch. Pure — callers run SyncCommittedReadRef first
-// to bring the v1.1 ref up to date.
+// fallback), else the v1 branch.
 func NewCommittedReadStore(ctx context.Context, repo *git.Repository) *GitStore {
 	if !settings.MirrorsToV1CustomRef(ctx) {
 		return NewGitStore(repo)
