@@ -105,3 +105,42 @@ func TestClusterArg(t *testing.T) {
 		t.Errorf("omitted cluster = %q, want default %q", got, defaultClusterHost)
 	}
 }
+
+func TestValidateClusterHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		host    string
+		wantErr bool
+	}{
+		{name: "default cluster", host: defaultClusterHost},
+		{name: "other region", host: "eu-west-1.entire.io"},
+		{name: "single label", host: "localhost"},
+		{name: "host with port", host: "localhost:8080"},
+		{name: "ipv4", host: "10.0.0.1"},
+		{name: "ipv4 with port", host: "10.0.0.1:8080"},
+		// The token-leak primitive: userinfo demotes the real cluster so the
+		// request (and basic-auth token) targets evil.com.
+		{name: "userinfo smuggle", host: "aws-us-east-2.entire.io@evil.com", wantErr: true},
+		{name: "path smuggle", host: "aws-us-east-2.entire.io/../evil", wantErr: true},
+		{name: "query smuggle", host: "aws-us-east-2.entire.io?x=1", wantErr: true},
+		{name: "fragment smuggle", host: "aws-us-east-2.entire.io#x", wantErr: true},
+		{name: "scheme prefix", host: "https://evil.com", wantErr: true},
+		{name: "empty", host: "", wantErr: true},
+		{name: "whitespace", host: "   ", wantErr: true},
+		{name: "leading hyphen label", host: "-bad.entire.io", wantErr: true},
+		{name: "space in host", host: "evil .com", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateClusterHost(tt.host)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateClusterHost(%q) = nil, want error", tt.host)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateClusterHost(%q) = %v, want nil", tt.host, err)
+			}
+		})
+	}
+}
