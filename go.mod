@@ -20,6 +20,7 @@ require (
 	github.com/go-git/go-git/v6 v6.0.0-alpha.4.0.20260521161150-3af8745c291b
 	github.com/go-git/x/plugin/objectsigner/auto v0.1.0
 	github.com/go-git/x/plugin/objectsigner/program v0.0.0-20260506121155-e7fc238fcab6
+	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-isatty v0.0.22
 	github.com/muesli/termenv v0.16.0
@@ -145,7 +146,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251222181119-0a764e51fe1b // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

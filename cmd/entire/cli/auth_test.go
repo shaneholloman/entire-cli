@@ -400,7 +400,7 @@ func TestRunAuthRevoke_ByIDCallsRevoker(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	err := runAuthRevoke(context.Background(), &out, &errOut, store,
-		list, revokeByID, revokeCurrent, testBaseURL, testTokenID, false)
+		list, revokeByID, revokeCurrent, func() error { return nil }, testBaseURL, testTokenID, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestRunAuthRevoke_ByIDSelfRevokeCleansLocal(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	err := runAuthRevoke(context.Background(), &out, &errOut, store,
-		list, revokeByID, revokeCurrent, testBaseURL, testTokenID, false)
+		list, revokeByID, revokeCurrent, func() error { return nil }, testBaseURL, testTokenID, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestRunAuthRevoke_CurrentDelegatesToLogout(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	err := runAuthRevoke(context.Background(), &out, &errOut, store,
-		list, revokeByID, revokeCurrent, testBaseURL, "", true)
+		list, revokeByID, revokeCurrent, func() error { return nil }, testBaseURL, "", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -502,6 +502,7 @@ func TestRunAuthRevoke_NotLoggedInErrors(t *testing.T) {
 		func(context.Context) ([]api.Token, error) { return nil, nil },
 		func(context.Context, string) error { return nil },
 		func(context.Context) error { return nil },
+		func() error { return nil },
 		testBaseURL, "some-id", false)
 	if err == nil {
 		t.Fatal("expected error when not logged in")

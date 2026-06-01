@@ -149,13 +149,12 @@ func (s *Store) DeleteTokens(profile string) error {
 	return s.backend.delete(s.service, profile)
 }
 
-// LookupCurrentToken retrieves the token for the current auth base URL.
-// Tokens are keyed by the auth issuer (api.AuthBaseURL()) since that's the
-// host that minted them; AuthBaseURL defaults to DefaultAuthBaseURL when
-// the env override is unset, so a fresh install reads the production
-// us.auth.entire.io entry.
+// LookupCurrentToken retrieves the active login token. It prefers the
+// current contexts.json context (so a login from this or entiredb's CLIs
+// authenticates control-plane commands), falling back to the legacy entry
+// keyed by the auth issuer (api.AuthBaseURL()) for pre-contexts logins.
 func LookupCurrentToken() (string, error) {
-	return NewStore().GetToken(api.AuthBaseURL())
+	return NewContextStore().GetToken(api.AuthBaseURL())
 }
 
 type keyringBackend struct{}

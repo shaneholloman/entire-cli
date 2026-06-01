@@ -86,10 +86,13 @@ func defaultManager() (*tokenmanager.Manager, error) {
 		provider := CurrentProvider()
 		issuer := api.AuthBaseURL()
 		m, err := tokenmanager.New(tokenmanager.Config{
-			Issuer:    issuer,
-			ClientID:  provider.ClientID,
-			STSPath:   provider.STSPath,
-			Store:     NewStore(),
+			Issuer:   issuer,
+			ClientID: provider.ClientID,
+			STSPath:  provider.STSPath,
+			// Context-preferring store: the manager reads the active
+			// contexts.json login (falling back to the legacy entry) so a
+			// single login authenticates every control-plane command.
+			Store:     NewContextStore(),
 			UserAgent: provider.ClientID,
 			Scope:     "cli",
 			// Auto-permit loopback http:// for local development. The

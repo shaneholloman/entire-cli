@@ -59,7 +59,7 @@ func TestRunLogout_RevokesServerSideThenDeletesLocally(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRunLogout_NoTokenSkipsRevoke(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestRunLogout_RevokeFailureWarnsButSucceeds(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRunLogout_RevokeUnauthorizedIsSilent(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestRunLogout_GetTokenErrorWarnsAndFallsThrough(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestRunLogout_ReturnsErrorOnDeleteFailure(t *testing.T) {
 	revoke := func(context.Context) error { return nil }
 
 	var out, errOut bytes.Buffer
-	err := runLogout(context.Background(), &out, &errOut, store, revoke, "https://entire.io")
+	err := runLogout(context.Background(), &out, &errOut, store, revoke, func() error { return nil }, "https://entire.io")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
