@@ -13,12 +13,10 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
 
-// NewCommittedReadStore returns a GitStore for reading committed checkpoints,
-// honoring checkpoints_version. With v1.1 enabled, reads bind to the local-only
-// v1.1 custom ref and never fall back to v1: it best-effort sync-then-reads,
-// advancing the ref to the v1 tip first so v1.1 carries v1's history. v1 stays
-// the source of truth via the write-time mirror. Only `entire explain` reads
-// through this today; other read paths, and all writes, use NewGitStore (v1).
+// NewCommittedReadStore returns a GitStore for reading committed checkpoints.
+// With checkpoints_version 1.1 it binds reads to the local-only v1.1 custom ref
+// (never falling back to v1) after best-effort syncing it to the v1 tip. Writes
+// still use NewGitStore (v1); only `entire explain` reads through this today.
 func NewCommittedReadStore(ctx context.Context, repo *git.Repository) *GitStore {
 	if !settings.MirrorsToV1CustomRef(ctx) {
 		return NewGitStore(repo)
@@ -28,10 +26,9 @@ func NewCommittedReadStore(ctx context.Context, repo *git.Repository) *GitStore 
 }
 
 // syncV1CustomRefForRead best-effort advances the v1.1 custom ref to the v1 tip
-// (the local v1 branch, or origin/entire/checkpoints/v1 on a fresh clone) so a
-// read sees v1's current history: seed when missing, advance when an ancestor,
-// no-op when equal, leave a diverged ref untouched. Failures are logged, not
-// returned; reads proceed against the ref regardless (there is no v1 fallback).
+// (local v1 branch, or origin's on a fresh clone): seed when missing, advance
+// when an ancestor, no-op when equal, leave a diverged ref as-is. Failures are
+// logged, not returned — reads proceed against the ref regardless.
 func syncV1CustomRefForRead(ctx context.Context, repo *git.Repository) {
 	v1Hash, ok := resolveV1Tip(repo)
 	if !ok {
