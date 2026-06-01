@@ -186,7 +186,10 @@ func (keyringBackend) get(service, key string) (string, error) {
 		if errors.Is(err, keyring.ErrNotFound) {
 			return "", nil
 		}
-		return v, err
+		if err != nil {
+			return "", fmt.Errorf("keyring.Get: %w", err)
+		}
+		return v, nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("get token from keyring: %w", err)
@@ -199,7 +202,7 @@ func (keyringBackend) delete(service, key string) error {
 	defer cancel()
 	_, err := callKeyringWithContext(ctx, "delete", func() (string, error) {
 		if err := keyring.Delete(service, key); err != nil && !errors.Is(err, keyring.ErrNotFound) {
-			return "", err
+			return "", fmt.Errorf("keyring.Delete: %w", err)
 		}
 		return "", nil
 	})
