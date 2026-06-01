@@ -62,6 +62,18 @@ func TestHostInCluster(t *testing.T) {
 		{"node1.eu.partial.to:8443", "eu.partial.to:443", true},
 		{"eu.partial.to:8443", "eu.partial.to", true},
 		{"evil.com:443", "eu.partial.to:443", false},
+		// Specificity floor: a bare public suffix as the cluster host must
+		// not wildcard-match all of its subdomains.
+		{"anything.io", "io", false},              // *.io is a public suffix — too broad
+		{"io", "io", true},                        // exact match is still fine (degenerate)
+		{"victim.co.uk", "co.uk", false},          // multi-label public suffix
+		{"acquired.entire.io", "entire.io", true}, // registrable domain — wildcard OK
+		{"entire.io", "entire.io", true},          // exact
+		{"a.b.entire.io", "entire.io", true},      // deeper subdomain
+		// IP clusters: exact match only, never wildcard — a host that
+		// merely ends with the IP string must not be treated as in-cluster.
+		{"evil.127.0.0.1", "127.0.0.1", false},
+		{"127.0.0.1", "127.0.0.1", true}, // exact still in-cluster
 	}
 	for _, tt := range tests {
 		got := HostInCluster(tt.host, tt.cluster)

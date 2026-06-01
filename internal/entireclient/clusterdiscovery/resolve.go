@@ -13,12 +13,20 @@ import (
 // Resolution order:
 //
 //  1. Explicit `cluster_contexts[clusterHost]` binding in contexts.json
-//     pointing at an existing context — used as-is.
+//     pointing at an existing context — used as-is. Bindings are only
+//     created by deliberate action (`entire-core context bind`, or a
+//     teammate's tooling); this CLI never writes one implicitly.
 //  2. Discovery via /.well-known/entire-cluster.json on the cluster
 //     itself, matched against existing local contexts by the
 //     advertised core_urls. The first advertised URL with a local
-//     context wins, and the cluster→context binding is written so the
-//     next call skips discovery.
+//     context wins. This match is used for the current invocation only
+//     — we deliberately do NOT persist a cluster→context binding.
+//     Persisting it would let a single drive-by clone of an
+//     attacker-controlled host (e.g. via a malicious submodule whose
+//     /.well-known names the victim's real core) establish a durable,
+//     silent channel that re-mints identity-bearing JWTs on every
+//     future fetch. Re-evaluating the live /.well-known each time keeps
+//     the trust decision fresh and revocable.
 //  3. No local context matches any advertised URL — return a
 //     fatal-ready error with the login hint listing the cluster's
 //     advertised issuers.
@@ -58,9 +66,11 @@ func ResolveContextForCluster(ctx context.Context, configDir, clusterHost string
 		}
 		// Prefer the active context when it's one of the eligible matches —
 		// otherwise a core with several accounts (alice@core, bob@core) would
-		// auto-bind whichever was saved first, silently authenticating as the
+		// resolve to whichever was saved first, silently authenticating as the
 		// wrong user. Fall back to the first match when the current context
-		// isn't eligible for this cluster.
+		// isn't eligible for this cluster. Because we re-resolve every
+		// invocation (no persisted binding), `entire auth use` takes effect
+		// immediately for unbound clusters.
 		c := matches[0]
 		if current != nil {
 			for _, m := range matches {
@@ -70,13 +80,7 @@ func ResolveContextForCluster(ctx context.Context, configDir, clusterHost string
 				}
 			}
 		}
-		if bindErr := contexts.BindCluster(configDir, clusterHost, c.Name); bindErr != nil {
-			// Non-fatal: we still resolved a usable context. Next
-			// invocation will pay the discovery round-trip again.
-			debugf("auto-bind %s -> %s failed: %v", clusterHost, c.Name, bindErr)
-		} else {
-			debugf("auto-bound %s -> %s after discovery match on %s", clusterHost, c.Name, coreURL)
-		}
+		debugf("resolved %s -> %s via discovery match on %s (ephemeral; binding not persisted)", clusterHost, c.Name, coreURL)
 		return c, nil
 	}
 	return nil, errors.New(RenderLoginHint(clusterHost, body.CoreURLs))

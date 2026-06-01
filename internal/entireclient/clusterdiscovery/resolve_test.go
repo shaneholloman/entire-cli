@@ -35,11 +35,13 @@ func TestResolveContextForClusterBindingShortCircuits(t *testing.T) {
 	assert.Equal(t, "us", c.Name)
 }
 
-// TestResolveContextForClusterDiscoversAndAutoBinds: no binding, no
-// fallback to current_context — instead we hit /.well-known, match
-// the first advertised core URL against a local context, and persist
-// the binding for next time.
-func TestResolveContextForClusterDiscoversAndAutoBinds(t *testing.T) {
+// TestResolveContextForClusterDiscoversEphemerally: no binding, no
+// fallback to current_context — instead we hit /.well-known, match the
+// first advertised core URL against a local context, and resolve it for
+// this invocation only. We deliberately do NOT persist a binding: a
+// drive-by clone of an attacker host must not establish a durable,
+// silent auth channel, so every call re-evaluates the live /.well-known.
+func TestResolveContextForClusterDiscoversEphemerally(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -65,18 +67,24 @@ func TestResolveContextForClusterDiscoversAndAutoBinds(t *testing.T) {
 	c, err := ResolveContextForCluster(t.Context(), configDir, "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "prod-eu", c.Name, "should pick the prod context, NOT current_context")
-
-	// Auto-bound: the second call doesn't hit /.well-known.
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls), "first call hits discovery once")
+
+	// No binding was persisted — the resolution is ephemeral.
+	f, err := contexts.Load(configDir)
+	require.NoError(t, err)
+	assert.Empty(t, f.ClusterContexts, "discovery must not persist a cluster binding")
+
+	// Second call re-discovers (no short-circuit), keeping the trust
+	// decision fresh and revocable.
 	c2, err := ResolveContextForCluster(t.Context(), configDir, "aws-eu-central-1.entire.io", hostPinningClient(t, srv), t.Logf)
 	require.NoError(t, err)
 	assert.Equal(t, "prod-eu", c2.Name)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "auto-bind should skip discovery on the second call")
+	assert.Equal(t, int32(2), atomic.LoadInt32(&calls), "ephemeral resolution re-hits discovery each call")
 }
 
 // TestResolveContextForClusterPrefersCurrentAmongSameCoreMatches: when a
 // core has several accounts (alice@core, bob@core) and bob is the active
-// context, discovery must auto-bind to bob, not to whichever was saved
+// context, discovery must resolve to bob, not to whichever was saved
 // first — otherwise a clone silently authenticates as the wrong user.
 func TestResolveContextForClusterPrefersCurrentAmongSameCoreMatches(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -128,7 +136,8 @@ func TestResolveContextForClusterNoMatchReturnsLoginHint(t *testing.T) {
 
 // TestResolveContextForClusterStaleBindingFallsThrough: a binding that
 // names a non-existent context is treated as if no binding exists —
-// we discover, match, and rebind to a real context.
+// we discover and match a real context for this invocation (without
+// rewriting the binding).
 func TestResolveContextForClusterStaleBindingFallsThrough(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

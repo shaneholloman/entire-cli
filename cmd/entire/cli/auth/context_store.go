@@ -116,6 +116,36 @@ func Contexts() ([]*contexts.Context, string, error) {
 	return f.Contexts, f.CurrentContext, nil
 }
 
+// ClusterBindings returns the cluster_host → context_name map from
+// contexts.json. Surfaced by `entire auth contexts` so users can audit
+// which cluster hosts auto-authenticate git operations with a stored
+// context — and spot any they don't recognise.
+func ClusterBindings() (map[string]string, error) {
+	f, err := contexts.Load(contexts.DefaultConfigDir())
+	if err != nil {
+		return nil, fmt.Errorf("load contexts: %w", err)
+	}
+	return f.ClusterContexts, nil
+}
+
+// UnbindCluster removes the cluster→context binding for host, reporting
+// whether one existed. Used by `entire auth unbind` to revoke a binding
+// without touching the underlying login context.
+func UnbindCluster(host string) (bool, error) {
+	var existed bool
+	if err := contexts.Modify(contexts.DefaultConfigDir(), func(f *contexts.File) (bool, error) {
+		if _, ok := f.ClusterContexts[host]; !ok {
+			return false, nil
+		}
+		delete(f.ClusterContexts, host)
+		existed = true
+		return true, nil
+	}); err != nil {
+		return false, fmt.Errorf("unbind cluster: %w", err)
+	}
+	return existed, nil
+}
+
 // ContextStore wraps the legacy keyring Store so token *reads* prefer the
 // active contexts.json context, falling back to the legacy
 // entire-cli/<authBaseURL> entry. Writes are inherited from Store
