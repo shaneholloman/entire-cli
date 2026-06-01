@@ -42,13 +42,26 @@ var (
 	gitHubHTTPSRe = regexp.MustCompile(`^https?://github\.com/` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
 	gitHubSSHRe   = regexp.MustCompile(`^git@github\.com:` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
 	gitHubBareRe  = regexp.MustCompile(`^(?:github\.com/)?` + gitHubOwnerPat + `/` + gitHubRepoPat + `(?:\.git)?$`)
+
+	// gitHubDotOnlyRe matches repo segments that are entirely dots
+	// (".", "..", ...). The tightened owner charset already excludes
+	// dots, but gitHubRepoPat allows ".", and a dot-only repo name would
+	// embed a literal ".." in both /gh/<owner>/<repo> and the
+	// token-exchange audience. Reject at the boundary.
+	gitHubDotOnlyRe = regexp.MustCompile(`^\.+$`)
 )
 
 func parseGitHubURL(rawURL string) (owner, repo string, err error) {
 	for _, re := range []*regexp.Regexp{gitHubHTTPSRe, gitHubSSHRe, gitHubBareRe} {
-		if m := re.FindStringSubmatch(rawURL); m != nil {
-			return strings.ToLower(m[1]), strings.ToLower(m[2]), nil
+		m := re.FindStringSubmatch(rawURL)
+		if m == nil {
+			continue
 		}
+		owner, repo = strings.ToLower(m[1]), strings.ToLower(m[2])
+		if gitHubDotOnlyRe.MatchString(repo) {
+			return "", "", fmt.Errorf("invalid GitHub URL: repo cannot be dot-only: %s", rawURL)
+		}
+		return owner, repo, nil
 	}
 	return "", "", fmt.Errorf("not a recognized GitHub URL: %s", rawURL)
 }

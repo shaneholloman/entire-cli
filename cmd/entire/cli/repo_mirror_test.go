@@ -41,6 +41,11 @@ func TestParseGitHubURL(t *testing.T) {
 		{name: "repo with encoded slash", url: "octocat/repo%2fevil", wantErr: true},
 		{name: "owner with dot-dot", url: "../repo", wantErr: true},
 		{name: "owner with underscore (not a GitHub login)", url: "oct_cat/repo", wantErr: true},
+		// Dot-only repo names pass the gitHubRepoPat charset (which allows
+		// dots) but would embed a literal "." or ".." in the audience and
+		// probe URL — reject at the boundary.
+		{name: "dot-only repo", url: "github.com/owner/..", wantErr: true},
+		{name: "single-dot repo", url: "github.com/owner/.", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
