@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/go-git/go-git/v6"
@@ -40,8 +41,15 @@ func syncV1CustomRefForRead(ctx context.Context, repo *git.Repository) {
 
 	customRefName := plumbing.ReferenceName(paths.MetadataRefName)
 	customRef, err := repo.Reference(customRefName, false)
-	if err != nil {
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		setCustomRef(ctx, repo, customRefName, v1Hash) // missing — seed at v1 tip
+		return
+	}
+	if err != nil {
+		// Unexpected read error — don't overwrite the ref; read it as-is.
+		logging.Warn(ctx, "v1.1 read sync skipped: custom ref unreadable",
+			slog.String("ref", paths.MetadataRefName),
+			slog.String("error", err.Error()))
 		return
 	}
 
