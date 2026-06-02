@@ -190,16 +190,7 @@ func TestLocalMode_ExplicitRepoResolvesMirrorOptInFromTargetRepo(t *testing.T) {
 
 	// cwd repo: mirror explicitly disabled.
 	testutil.InitRepo(t, cwdDir)
-	if err := os.MkdirAll(filepath.Join(cwdDir, ".entire"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(cwdDir, ".entire", "settings.json"),
-		[]byte(`{"enabled": true}`),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, cwdDir, ".entire/settings.json", `{"enabled": true}`)
 
 	testutil.InitRepo(t, targetDir)
 	testutil.WriteFile(t, targetDir, "a.txt", "x")
@@ -1017,12 +1008,7 @@ func writeV1CustomRefMirrorSettings(t *testing.T, repoDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(repoDir, ".entire"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, ".entire", "settings.json"), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testutil.WriteFile(t, repoDir, ".entire/settings.json", string(data))
 }
 
 func addOriginRemote(t *testing.T, repoDir string) {
