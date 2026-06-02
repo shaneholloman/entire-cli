@@ -605,6 +605,7 @@ func checkRemoteMetadata(
 
 	if committedReadRef != plumbing.NewBranchReferenceName(paths.MetadataBranchName) {
 		fmt.Fprintf(errW, "Checkpoint '%s' found in commit but metadata is not available in %s.\n", checkpointID, committedReadRef)
+		fmt.Fprintf(errW, "This ref is local-only. Try: entire explain %s\n", checkpointID)
 		return nil
 	}
 

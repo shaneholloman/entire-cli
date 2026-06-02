@@ -803,6 +803,9 @@ func TestResumeFromCurrentBranch_V11DoesNotSeedFromV1(t *testing.T) {
 	if strings.Contains(combined, "git fetch origin entire/checkpoints/v1") {
 		t.Fatalf("resume suggested v1 fetch in v1.1 mode:\n%s", combined)
 	}
+	if !strings.Contains(stderr.String(), "entire explain "+cpID.String()) {
+		t.Fatalf("resume did not suggest 'entire explain' to sync the v1.1 ref:\nstderr: %s", stderr.String())
+	}
 }
 
 func TestResumeFromCurrentBranch_V11SquashUsesLatestMetadataTimestamp(t *testing.T) {
