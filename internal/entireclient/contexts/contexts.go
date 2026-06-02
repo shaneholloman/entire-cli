@@ -5,10 +5,9 @@
 //
 //   - a list of named contexts, each pairing a core URL, principal handle,
 //     and OS-keychain slot where the access + refresh tokens live;
-//   - cluster_contexts, a map from entire-server cluster host to the
-//     context name that should authenticate ops against that cluster;
-//   - current_context, the fallback for clusters with no binding and the
-//     default for direct CLI commands not tied to a cluster.
+//   - current_context, the active login: the preferred identity for cluster
+//     operations and the default for direct CLI commands not tied to a
+//     cluster.
 //
 // File invariants: 0600, atomic temp+rename, exclusive flock under load.
 // Both CLIs share the same file so a login from either is visible to the
