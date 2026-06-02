@@ -693,7 +693,8 @@ func restoreSessionTranscriptFromStrategy(ctx context.Context, cpID id.Checkpoin
 	}
 	defer repo.Close()
 
-	store := checkpoint.NewGitStore(repo)
+	checkpoint.SyncCommittedReadRef(ctx, repo)
+	store := checkpoint.NewCommittedReadStore(ctx, repo)
 	content, returnedSessionID, err := checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, cpID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get session log: %w", err)
