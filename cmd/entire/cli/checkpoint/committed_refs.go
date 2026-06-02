@@ -19,7 +19,7 @@ import (
 type CommittedRefs struct {
 	Primary plumbing.ReferenceName // source of truth: written first, pushed/fetched
 	Read    plumbing.ReferenceName // committed reads resolve against this
-	Mirror  plumbing.ReferenceName // advanced to Primary after writes; empty = none (local-only, never pushed)
+	Mirror  plumbing.ReferenceName // advanced to Primary after v1 writes/fetches; empty = none (local-only, never pushed)
 }
 
 // HasMirror reports whether a mirror ref is configured.
