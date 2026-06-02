@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -138,16 +139,39 @@ func run(args []string) int {
 		OnNodeFailed: onNodeFailed,
 	})
 
-	mode := githelper.ModeConnect
-	if os.Getenv("ENTIRE_STATELESS") == "true" {
-		mode = githelper.ModeStateless
-	}
+	protocolVersion := resolveProtocolVersion()
+	debuglog.Printf("git protocol.version=%d (v2 advertises stateless-connect + push; v0/v1 advertises connect)", protocolVersion)
 
-	if err := githelper.Run(ctx, proxy, mode, os.Stdin, os.Stdout); err != nil {
+	if err := githelper.Run(ctx, proxy, protocolVersion, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		return 128
 	}
 	return 0
+}
+
+// resolveProtocolVersion reads the effective protocol.version from
+// the GIT_PROTOCOL environment variable. The value is a colon-
+// separated list of key=value pairs (e.g. "version=2"); we extract
+// the version key. Defaults to 2 — matching upstream Git's default
+// since 2.26 — when GIT_PROTOCOL is unset or malformed.
+func resolveProtocolVersion() int {
+	const defaultVersion = 2
+	raw := os.Getenv("GIT_PROTOCOL")
+	if raw == "" {
+		return defaultVersion
+	}
+	for kv := range strings.SplitSeq(raw, ":") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k != "version" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return defaultVersion
+		}
+		return n
+	}
+	return defaultVersion
 }
 
 // gitActionFromRequest classifies a smart-HTTP request as "pull" or "push"
