@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,6 +175,69 @@ func TestLocalMode_ExplicitRepoUsesTargetRepoCheckpointSettings(t *testing.T) {
 	}
 	if got.Repos[0].Sections[0].Bullets[0].Text != testLocalFallbackText {
 		t.Fatalf("unexpected bullet: %+v", got.Repos[0].Sections[0].Bullets[0])
+	}
+}
+
+// TestLocalMode_ExplicitRepoResolvesMirrorOptInFromTargetRepo guards against
+// resolving the committed-read topology from the process cwd instead of the
+// enumerated repo. The target repo opts into the v1.1 mirror and keeps its
+// checkpoint only on the custom ref; cwd is a separate repo with the mirror
+// off. If the opt-in were read from cwd, the checkpoint would be invisible.
+func TestLocalMode_ExplicitRepoResolvesMirrorOptInFromTargetRepo(t *testing.T) {
+	cwdDir := t.TempDir()
+	targetDir := t.TempDir()
+	stubGeneratedLocalDispatch(t)
+
+	// cwd repo: mirror explicitly disabled.
+	testutil.InitRepo(t, cwdDir)
+	if err := os.MkdirAll(filepath.Join(cwdDir, ".entire"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(cwdDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	testutil.InitRepo(t, targetDir)
+	testutil.WriteFile(t, targetDir, "a.txt", "x")
+	testutil.GitAdd(t, targetDir, "a.txt")
+	testutil.GitCommit(t, targetDir, "initial")
+	addOriginRemote(t, targetDir)
+
+	createdAt := time.Now().UTC()
+	seedCommittedCheckpoint(t, targetDir, seededCheckpoint{
+		id:           testCheckpointID,
+		branch:       "main",
+		createdAt:    createdAt,
+		filesTouched: []string{"a.txt"},
+		outcome:      testLocalFallbackText,
+	})
+	// Reachable only via the custom ref, and the target repo opts into the mirror.
+	moveCheckpointsToCustomRefOnly(t, targetDir)
+	writeV1CustomRefMirrorSettings(t, targetDir)
+
+	oldNow := nowUTC
+	nowUTC = func() time.Time { return createdAt.Add(2 * time.Hour) }
+	t.Cleanup(func() {
+		nowUTC = oldNow
+	})
+
+	t.Chdir(cwdDir)
+
+	got, err := Run(context.Background(), Options{
+		Mode:      ModeLocal,
+		RepoPaths: []string{targetDir},
+		Since:     "7d",
+		Branches:  []string{"main"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Repos) != 1 || got.Repos[0].Sections[0].Bullets[0].Text != testLocalFallbackText {
+		t.Fatalf("expected target repo's v1.1 custom-ref checkpoint, got %+v", got.Repos)
 	}
 }
 
@@ -932,6 +996,26 @@ func enableV1CustomRefMirror(t *testing.T) {
 	s := &settings.EntireSettings{Enabled: true}
 	s.EnableV1CustomRefMirror()
 	if err := settings.Save(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeV1CustomRefMirrorSettings opts repoDir into the v1 custom-ref mirror by
+// writing its .entire/settings.json directly (settings.Save resolves relative
+// to cwd, not an arbitrary repo). Uses the EnableV1CustomRefMirror setter so the
+// test does not hardcode the checkpoints_version encoding.
+func writeV1CustomRefMirrorSettings(t *testing.T, repoDir string) {
+	t.Helper()
+	s := &settings.EntireSettings{Enabled: true}
+	s.EnableV1CustomRefMirror()
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, ".entire"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".entire", "settings.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
