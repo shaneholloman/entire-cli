@@ -1081,10 +1081,6 @@ func (s *EntireSettings) GetCheckpointRemote() *CheckpointRemoteConfig {
 	return &CheckpointRemoteConfig{Provider: provider, Repo: repo}
 }
 
-// checkpointsVersionV1CustomRef is the checkpoints_version value that opts into
-// mirroring committed metadata to the v1 custom ref.
-const checkpointsVersionV1CustomRef = "1.1"
-
 // MirrorsToV1CustomRef reports whether checkpoints_version opts into mirroring
 // committed metadata to the v1 custom ref (refs/entire/checkpoints/v1.1). v1
 // remains the source of truth; the v1 custom ref is a local-only mirror.
@@ -1096,21 +1092,11 @@ func (s *EntireSettings) MirrorsToV1CustomRef() bool {
 	return isV1CustomRefValue(s.StrategyOptions["checkpoints_version"])
 }
 
-// EnableV1CustomRefMirror opts the settings into the v1 custom-ref mirror. The
-// inverse of MirrorsToV1CustomRef; lets callers enable the mirror without
-// knowing the underlying checkpoints_version encoding.
-func (s *EntireSettings) EnableV1CustomRefMirror() {
-	if s.StrategyOptions == nil {
-		s.StrategyOptions = map[string]any{}
-	}
-	s.StrategyOptions["checkpoints_version"] = checkpointsVersionV1CustomRef
-}
-
 // isV1CustomRefValue reports whether a checkpoints_version value selects the v1
 // custom ref. Only the JSON string "1.1" opts in; numeric values remain plain v1.
 func isV1CustomRefValue(val any) bool {
 	s, ok := val.(string)
-	return ok && s == checkpointsVersionV1CustomRef
+	return ok && s == "1.1"
 }
 
 // IsFilteredFetchesEnabled checks if fetches should use --filter=blob:none.

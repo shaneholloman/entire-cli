@@ -990,25 +990,30 @@ func moveCheckpointsToCustomRefOnly(t *testing.T, repoDir string) {
 	}
 }
 
+// mirrorEnabledSettings returns settings opted into the v1 custom-ref mirror.
+// "1.1" is the on-disk checkpoints_version encoding read by
+// settings.MirrorsToV1CustomRef.
+func mirrorEnabledSettings() *settings.EntireSettings {
+	return &settings.EntireSettings{
+		Enabled:         true,
+		StrategyOptions: map[string]any{"checkpoints_version": "1.1"},
+	}
+}
+
 // enableV1CustomRefMirror opts the current repo into the v1 custom-ref mirror.
 func enableV1CustomRefMirror(t *testing.T) {
 	t.Helper()
-	s := &settings.EntireSettings{Enabled: true}
-	s.EnableV1CustomRefMirror()
-	if err := settings.Save(context.Background(), s); err != nil {
+	if err := settings.Save(context.Background(), mirrorEnabledSettings()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // writeV1CustomRefMirrorSettings opts repoDir into the v1 custom-ref mirror by
 // writing its .entire/settings.json directly (settings.Save resolves relative
-// to cwd, not an arbitrary repo). Uses the EnableV1CustomRefMirror setter so the
-// test does not hardcode the checkpoints_version encoding.
+// to cwd, not an arbitrary repo).
 func writeV1CustomRefMirrorSettings(t *testing.T, repoDir string) {
 	t.Helper()
-	s := &settings.EntireSettings{Enabled: true}
-	s.EnableV1CustomRefMirror()
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := json.MarshalIndent(mirrorEnabledSettings(), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
