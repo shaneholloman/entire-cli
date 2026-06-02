@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/perf"
 
@@ -474,7 +474,8 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 }
 
 func mirrorSyncedMetadataBranch(ctx context.Context, repo *git.Repository, branchName string) {
-	if branchName != paths.MetadataBranchName {
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	if !refs.Primary.IsBranch() || branchName != refs.Primary.Short() {
 		return
 	}
 	MirrorCommittedMetadataRefBestEffort(ctx, repo)

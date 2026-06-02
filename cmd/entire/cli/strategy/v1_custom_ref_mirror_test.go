@@ -157,6 +157,27 @@ func TestMirrorCommittedMetadataRef_AdvancesExistingRef(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir().
+func TestMirrorCommittedMetadataRef_UsesProvidedRefs(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	primary := plumbing.NewBranchReferenceName("entire/checkpoints/custom")
+	mirror := plumbing.ReferenceName("refs/entire/checkpoints/custom-read")
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(primary, head.Hash())))
+
+	require.NoError(t, MirrorCommittedMetadataRef(t.Context(), repo, checkpoint.CommittedRefs{
+		Primary: primary,
+		Read:    mirror,
+		Mirror:  mirror,
+	}))
+
+	ref, err := repo.Reference(mirror, true)
+	require.NoError(t, err)
+	assert.Equal(t, head.Hash(), ref.Hash())
+}
+
+// Not parallel: uses t.Chdir().
 func TestMirrorCommittedMetadataRef_ReplacesLocallyAheadMirror(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, `"1.1"`)
 	v1Hash := setV1MetadataBranch(t, repo)
