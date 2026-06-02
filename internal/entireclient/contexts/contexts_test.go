@@ -22,7 +22,7 @@ func TestLoad_MissingFileReturnsEmpty(t *testing.T) {
 	if f == nil {
 		t.Fatal("Load returned nil File")
 	}
-	if f.CurrentContext != "" || len(f.Contexts) != 0 || len(f.ClusterContexts) != 0 {
+	if f.CurrentContext != "" || len(f.Contexts) != 0 {
 		t.Errorf("expected zero-valued File, got %+v", f)
 	}
 }
@@ -31,9 +31,6 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := &contexts.File{
 		CurrentContext: "eu-paul",
-		ClusterContexts: map[string]string{
-			"royalcanin.partial.to": "us-superadmin",
-		},
 		Contexts: []*contexts.Context{
 			{Name: "eu-paul", CoreURL: "https://eu.example", Handle: "paul", KeychainService: "entire-core:eu-paul"},
 			{Name: "us-superadmin", CoreURL: "https://us.example", Handle: "superadmin", KeychainService: "entire-core:us-superadmin"},
@@ -123,13 +120,9 @@ func TestUpsert_ReplacesByName(t *testing.T) {
 	}
 }
 
-func TestDelete_DropsContextAndBindings(t *testing.T) {
+func TestDelete_DropsContext(t *testing.T) {
 	f := &contexts.File{
 		CurrentContext: "stays",
-		ClusterContexts: map[string]string{
-			"a.example": "doomed",
-			"b.example": "stays",
-		},
 		Contexts: []*contexts.Context{
 			{Name: "stays"},
 			{Name: "doomed"},
@@ -139,11 +132,8 @@ func TestDelete_DropsContextAndBindings(t *testing.T) {
 	if f.Find("doomed") != nil {
 		t.Error("Delete left context behind")
 	}
-	if _, exists := f.ClusterContexts["a.example"]; exists {
-		t.Error("Delete left dangling cluster binding")
-	}
-	if f.ClusterContexts["b.example"] != "stays" {
-		t.Error("Delete clobbered unrelated cluster binding")
+	if f.Find("stays") == nil {
+		t.Error("Delete dropped an unrelated context")
 	}
 	if f.CurrentContext != "stays" {
 		t.Errorf("CurrentContext = %q, want %q (untouched)", f.CurrentContext, "stays")

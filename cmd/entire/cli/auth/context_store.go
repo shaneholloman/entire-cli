@@ -61,15 +61,14 @@ func RemoveCurrentContext() error {
 	return nil
 }
 
-// RemoveAllContexts deletes every stored context, its keyring token, and all
-// cluster bindings — a full local logout. Returns the number of contexts
-// removed. Best-effort on the keyring deletes; the contexts.json clear is
-// what makes the CLI fully logged out (no surviving binding can authenticate
-// a clone afterward).
+// RemoveAllContexts deletes every stored context and its keyring token — a
+// full local logout. Returns the number of contexts removed. Best-effort on
+// the keyring deletes; the contexts.json clear is what makes the CLI fully
+// logged out.
 func RemoveAllContexts() (int, error) {
 	var removed int
 	if err := contexts.Modify(contexts.DefaultConfigDir(), func(f *contexts.File) (bool, error) {
-		if len(f.Contexts) == 0 && f.CurrentContext == "" && len(f.ClusterContexts) == 0 {
+		if len(f.Contexts) == 0 && f.CurrentContext == "" {
 			return false, nil
 		}
 		for _, c := range f.Contexts {
@@ -80,7 +79,6 @@ func RemoveAllContexts() (int, error) {
 		}
 		f.Contexts = nil
 		f.CurrentContext = ""
-		f.ClusterContexts = nil
 		return true, nil
 	}); err != nil {
 		return 0, fmt.Errorf("remove all contexts: %w", err)

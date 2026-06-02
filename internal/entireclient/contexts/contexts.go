@@ -49,16 +49,15 @@ type File struct {
 	// CurrentContext is the active login; the default identity for cluster
 	// operations and direct CLI commands. Empty until the first login.
 	CurrentContext string `json:"current_context,omitempty"`
-	// ClusterContexts is a legacy cluster host → context name binding map.
-	// No longer read or written: the cluster's cores are cached separately
-	// (discovery.ClusterCoresCache) and the account is chosen fresh per
-	// operation. The field is retained only so an existing contexts.json
-	// round-trips without losing data; Delete still prunes entries and a
-	// full logout clears it. Safe to drop once no deployed tool writes it.
-	ClusterContexts map[string]string `json:"cluster_contexts,omitempty"`
 	// Contexts is the list of stored credentials. Order is preserved on
 	// disk so list output stays stable across saves.
 	Contexts []*Context `json:"contexts,omitempty"`
+
+	// NOTE: a legacy "cluster_contexts" map used to live here, binding a
+	// cluster host to one context name. It's gone — cluster cores are cached
+	// in discovery.ClusterCoresCache and the account is chosen fresh per
+	// operation. json.Unmarshal ignores the obsolete key, so an old file
+	// loads cleanly; the key drops out on the next write.
 }
 
 // FilePath returns $configDir/contexts.json after ensuring the directory
@@ -173,9 +172,8 @@ func (f *File) Upsert(c *Context) {
 	}
 }
 
-// Delete drops the context with the given name, plus any cluster
-// bindings that pointed at it. If the deleted context was current, the
-// current pointer advances to whatever remains (or empty).
+// Delete drops the context with the given name. If the deleted context
+// was current, the current pointer advances to whatever remains (or empty).
 func (f *File) Delete(name string) {
 	if f == nil || name == "" {
 		return
@@ -183,11 +181,6 @@ func (f *File) Delete(name string) {
 	idx := slices.IndexFunc(f.Contexts, func(c *Context) bool { return c.Name == name })
 	if idx >= 0 {
 		f.Contexts = slices.Delete(f.Contexts, idx, idx+1)
-	}
-	for host, target := range f.ClusterContexts {
-		if target == name {
-			delete(f.ClusterContexts, host)
-		}
 	}
 	if f.CurrentContext == name {
 		f.CurrentContext = ""
@@ -201,7 +194,7 @@ func (f *File) Delete(name string) {
 // exclusive flock — load, mutate, write all happen with the lock held.
 // Use this for any read-modify-write sequence; calling Load and Save
 // separately releases the lock between them and races concurrent
-// writers (e.g. a parallel git push triggering BindCluster).
+// writers (e.g. a parallel login recording a context).
 //
 // fn returns (changed, err). When changed is false the file isn't
 // rewritten — useful for idempotent operations that often have
