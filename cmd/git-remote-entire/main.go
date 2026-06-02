@@ -22,11 +22,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -151,25 +151,30 @@ func run(args []string) int {
 
 // resolveProtocolVersion reads the effective protocol.version from
 // the GIT_PROTOCOL environment variable. The value is a colon-
-// separated list of key=value pairs (e.g. "version=2"); we extract
-// the version key. Defaults to 2 — matching upstream Git's default
-// since 2.26 — when GIT_PROTOCOL is unset or malformed.
+// separated list of key=value pairs (e.g. "version=2"). We accept
+// 0, 1, or 2; any other value emits a stderr warning and falls
+// back to 2 — upstream Git's default since 2.26.
 func resolveProtocolVersion() int {
+	return parseProtocolVersion(os.Getenv("GIT_PROTOCOL"), os.Stderr)
+}
+
+func parseProtocolVersion(raw string, warn io.Writer) int {
 	const defaultVersion = 2
-	raw := os.Getenv("GIT_PROTOCOL")
-	if raw == "" {
-		return defaultVersion
-	}
 	for kv := range strings.SplitSeq(raw, ":") {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || k != "version" {
 			continue
 		}
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return defaultVersion
+		switch v {
+		case "0":
+			return 0
+		case "1":
+			return 1
+		case "2":
+			return 2
 		}
-		return n
+		fmt.Fprintf(warn, "git-remote-entire: ignoring unrecognised protocol.version=%q; defaulting to %d\n", v, defaultVersion)
+		return defaultVersion
 	}
 	return defaultVersion
 }
