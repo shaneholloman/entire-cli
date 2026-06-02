@@ -832,16 +832,14 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 		return nil
 	}
 
-	var logContent []byte
 	repo, repoErr := openRepository(ctx)
 	if repoErr != nil {
-		logContent, _, err = checkpoint.LookupSessionLog(ctx, checkpointID)
-	} else {
-		defer repo.Close()
-		store := checkpoint.NewCommittedReadStore(ctx, repo)
-		store.SetBlobFetcher(FetchBlobsByHash)
-		logContent, _, err = checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, checkpointID)
+		return fmt.Errorf("failed to open repository: %w", repoErr)
 	}
+	defer repo.Close()
+	store := checkpoint.NewCommittedReadStore(ctx, repo)
+	store.SetBlobFetcher(FetchBlobsByHash)
+	logContent, _, err := checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, checkpointID)
 	if err != nil {
 		if errors.Is(err, checkpoint.ErrCheckpointNotFound) || errors.Is(err, checkpoint.ErrNoTranscript) {
 			logging.Debug(ctx, "resume session completed (no metadata)",
