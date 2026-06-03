@@ -96,7 +96,7 @@ func TestLogin_SavesTokenAfterApproval(t *testing.T) {
 		t.Fatalf("output missing wait message:\n%s", output)
 	}
 
-	if !strings.Contains(output, "login complete.") {
+	if !strings.Contains(output, "Login complete.") {
 		t.Fatalf("output missing login complete message (token save likely failed):\n%s", output)
 	}
 
@@ -142,7 +142,7 @@ func TestLogin_ExpiredFlow(t *testing.T) {
 		t.Fatalf("expected expired message, got:\n%s", output)
 	}
 
-	if strings.Contains(output, "login complete.") {
+	if strings.Contains(output, "Login complete.") {
 		t.Fatal("output should NOT contain login complete for expired flow")
 	}
 }
@@ -181,7 +181,7 @@ func TestLogin_DeniedFlow(t *testing.T) {
 		t.Fatalf("expected denied message, got:\n%s", output)
 	}
 
-	if strings.Contains(output, "login complete.") {
+	if strings.Contains(output, "Login complete.") {
 		t.Fatal("output should NOT contain login complete for denied flow")
 	}
 }
