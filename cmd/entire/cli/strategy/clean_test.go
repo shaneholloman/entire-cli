@@ -2,13 +2,21 @@ package strategy
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -464,4 +472,61 @@ func TestListOrphanedSessionStates_ShadowBranchMatching(t *testing.T) {
 				checkpoint.ShadowBranchNameForCommit(fullHash, worktreeID), item.Reason)
 		}
 	}
+}
+
+// In v1.1 mode, a session whose checkpoint lives only on v1 must be flagged
+// orphaned because the topology read goes to the (unset) mirror.
+func TestListOrphanedSessionStates_V11ReadsViaTopology(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "f.txt", "init")
+	testutil.GitAdd(t, dir, "f.txt")
+	testutil.GitCommit(t, dir, "init")
+
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	const sessionID = "test-session-v11-orphan"
+	cpID := id.MustCheckpointID("b2c3d4e5f6a1")
+	require.NoError(t, checkpoint.NewGitStore(repo).WriteCommitted(t.Context(), checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    sessionID,
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte("transcript\n")),
+		Prompts:      []string{"prompt"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+
+	// BaseCommit is arbitrary; no shadow branch is created, so any value routes
+	// through the same orphan path. StartedAt clears the grace window.
+	state := &SessionState{
+		SessionID:  sessionID,
+		BaseCommit: "0000000000000000000000000000000000000000",
+		StartedAt:  time.Now().Add(-(sessionGracePeriod + time.Minute)),
+		StepCount:  1,
+	}
+	require.NoError(t, SaveSessionState(t.Context(), state))
+
+	settingsDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, paths.SettingsFileName),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_version": "1.1"}}`),
+		0o644,
+	))
+
+	orphans, err := ListOrphanedSessionStates(t.Context())
+	require.NoError(t, err)
+
+	var flagged bool
+	for _, item := range orphans {
+		if item.ID == sessionID {
+			flagged = true
+			break
+		}
+	}
+	assert.True(t, flagged, "session must be flagged orphaned: mirror is unset, so topology read returns no checkpoints")
 }

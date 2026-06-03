@@ -169,7 +169,7 @@ func ListOrphanedSessionStates(ctx context.Context) ([]CleanupItem, error) {
 	}
 
 	// Get all checkpoints to find which sessions have checkpoints
-	cpStore := checkpoint.NewGitStore(repo)
+	cpStore := checkpoint.NewCommittedReadStore(ctx, repo)
 
 	sessionsWithCheckpoints := make(map[string]bool)
 	checkpoints, listErr := cpStore.ListCommitted(ctx)
