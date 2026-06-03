@@ -115,25 +115,15 @@ func RepoScopedToken(ctx context.Context, clusterBaseURL, repoSlug, action strin
 		Extra: url.Values{"client_id": {provider.ClientID}},
 	})
 	if err != nil {
-		if isInvalidTarget(err) {
-			// Preserve the verbatim STS text (second %w) so a caller that
-			// doesn't recognise the sentinel still sees the original code +
-			// description.
+		// A typed invalid_target means the cluster has no servable mirror at
+		// this audience (commonly a suspended placement). Surface the
+		// sentinel for callers that branch on it, preserving the verbatim STS
+		// text (second %w) for those that don't.
+		var xe *sts.ExchangeError
+		if errors.As(err, &xe) && xe.Code == "invalid_target" {
 			return "", fmt.Errorf("repo-scoped token exchange: %w: %w", ErrRepoTargetUnknown, err)
 		}
 		return "", fmt.Errorf("repo-scoped token exchange: %w", err)
 	}
 	return set.AccessToken, nil
-}
-
-// isInvalidTarget reports whether err is an STS token-exchange failure
-// carrying the RFC 8693 `invalid_target` error code. auth-go's sts package
-// renders the OAuth error into the message as
-// "token exchange: status <n>: invalid_target[: <desc>]" (sts.readAPIError)
-// without a typed code we could errors.As on, so we match the code token in
-// the rendered string. The code alphabet is constrained to [a-z_] and the
-// server's descriptions don't contain the token, so the substring match
-// won't false-positive on a description.
-func isInvalidTarget(err error) bool {
-	return strings.Contains(err.Error(), "invalid_target")
 }
