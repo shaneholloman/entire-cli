@@ -165,6 +165,28 @@ func TestRenderExperimentalCommands_ColumnWidthAdjustsToLongest(t *testing.T) {
 	}
 }
 
+func TestRenderExperimentalCommands_MultiByteInvocationAligns(t *testing.T) {
+	t.Parallel()
+
+	// "entire ▶▶" is 9 runes but 13 bytes (each ▶ is 3 bytes). The longest
+	// invocation below is 12 runes, so the column width is 12. With byte-based
+	// padding, len("entire ▶▶") == 13 >= 12 would skip padding and misalign the
+	// row; rune-based padding correctly adds 3 spaces.
+	commands := []experimentalCommandInfo{
+		{Name: "long", Invocation: "entire aaaaa", Summary: "first"},
+		{Name: "multibyte", Invocation: "entire ▶▶", Summary: "second"},
+	}
+
+	if got := len("entire ▶▶"); got < 12 {
+		t.Fatalf("test precondition broken: byte length %d should exceed column width 12", got)
+	}
+
+	cols := summaryColumns(t, commands)
+	if cols[0] != cols[1] {
+		t.Fatalf("multi-byte invocation summary misaligned: %v", cols)
+	}
+}
+
 func TestLabsRegistryCommandsExistAtCanonicalPaths(t *testing.T) {
 	t.Parallel()
 
