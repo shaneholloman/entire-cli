@@ -67,16 +67,17 @@ func run(args []string) int {
 		return 128
 	}
 
-	// Build info drives the identifiers the helper advertises upstream:
-	// githelper.Agent rides in the git protocol pkt-line agent= capability
-	// (commit-stamped, since that's what git's existing tooling expects);
-	// httpUserAgent rides in the HTTP User-Agent header on every outbound
-	// request so the server can attribute traffic in access logs
-	// (version-stamped, to match the conventional binary/version form
-	// used by the rest of the entire HTTP clients).
+	// Build info drives the identifier the helper advertises upstream.
+	// One string covers both surfaces:
+	//   - githelper.Agent rides in the git protocol pkt-line agent=
+	//     capability appended to upload-pack / receive-pack / v2 requests.
+	//   - httpUserAgent rides in the HTTP User-Agent header on every
+	//     outbound request so server access logs can attribute traffic.
+	// Using the same value keeps the two log surfaces correlatable.
 	versioninfo.Load()
-	githelper.Agent = remotehelper.BinaryName + "/" + versioninfo.Commit
-	httpUserAgent := remotehelper.BinaryName + "/" + versioninfo.Version
+	helperAgent := remotehelper.BinaryName + "/" + versioninfo.Version
+	githelper.Agent = helperAgent
+	httpUserAgent := helperAgent
 
 	rawURL := args[2]
 	parsedURL, err := url.Parse(rawURL)
