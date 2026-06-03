@@ -2038,3 +2038,30 @@ func TestPromptWindowExecModeCumulativeTurnCount(t *testing.T) {
 		t.Fatalf("exec checkpoint B = %d, want 2", got)
 	}
 }
+
+// TestPromptWindowStaleHookDoesNotResetEarly guards against a repeated/stale hook
+// (same cumulative TurnCount, so the count doesn't actually advance) clearing the
+// deferred reset early. If it did, a later back-to-back checkpoint would report 1
+// instead of matching the prior checkpoint's count.
+func TestPromptWindowStaleHookDoesNotResetEarly(t *testing.T) {
+	exec := func(s *strategy.SessionState, cumulative int) {
+		persistEventMetadataToState(&agent.Event{Type: agent.TurnEnd, TurnCount: cumulative}, s)
+	}
+
+	s := &strategy.SessionState{}
+	exec(s, 1)
+	exec(s, 2)
+	exec(s, 3)
+	if got := writeCheckpoint(s); got != 3 {
+		t.Fatalf("checkpoint A = %d, want 3", got)
+	}
+
+	// Stale hook: same cumulative count, no real advance — must not re-anchor.
+	exec(s, 3)
+	if !s.PromptWindowResetPending {
+		t.Fatalf("stale hook should not clear ResetPending")
+	}
+	if got := writeCheckpoint(s); got != 3 {
+		t.Fatalf("back-to-back checkpoint B after stale hook = %d, want 3", got)
+	}
+}

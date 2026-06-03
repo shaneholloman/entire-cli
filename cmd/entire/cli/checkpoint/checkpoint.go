@@ -227,7 +227,9 @@ type WriteCommittedOptions struct {
 	// FilesTouched are files modified during the session
 	FilesTouched []string
 
-	// CheckpointsCount is the number of checkpoints in this session
+	// CheckpointsCount is the displayed "steps" count for this session: the number
+	// of user prompts attributed to this checkpoint (floored at 1). Despite the
+	// historical name/JSON tag, it is no longer a count of checkpoints.
 	CheckpointsCount int
 
 	// SaveStepCount is the number of SaveStep-recorded steps (shadow-branch

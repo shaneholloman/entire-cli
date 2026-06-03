@@ -105,8 +105,9 @@ var redactSessionJSONLBytes = redact.JSONLBytes
 // checkpoint being written: the turns counted since the current window's base.
 // The base is re-anchored (deferred) the next time a turn is counted after a
 // checkpoint write, so back-to-back checkpoints with no prompt between them share
-// a count. Floored at 1 so we never record 0 (covers attach, a fast-path
-// checkpoint before any turn, and exec-mode gaps where turns weren't counted).
+// a count. Floored at 1 so we never record 0 (covers a fast-path checkpoint
+// before any turn, and exec-mode gaps where turns weren't counted). Attach has
+// its own count (see attachStepCount); it does not go through this path.
 func checkpointStepCount(s *SessionState) int {
 	if w := s.SessionTurnCount - s.PromptWindowBase; w >= 1 {
 		return w
