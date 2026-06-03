@@ -20,7 +20,9 @@ import (
 	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -463,6 +465,77 @@ func TestShadowStrategy_GetRewindPoints_NoShadowBranch(t *testing.T) {
 	if len(points) != 0 {
 		t.Errorf("GetRewindPoints() returned %d points, want 0", len(points))
 	}
+}
+
+// In v1.1 mode the picker must read prompt text from the topology mirror,
+// not v1.
+func TestShadowStrategy_GetRewindPoints_V11ReadsPromptFromMirror(t *testing.T) {
+	dir := t.TempDir()
+	testutil.InitRepo(t, dir)
+	testutil.WriteFile(t, dir, "f.txt", "init")
+	testutil.GitAdd(t, dir, "f.txt")
+	testutil.GitCommit(t, dir, "init")
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	baseRef, err := repo.Head()
+	require.NoError(t, err)
+	baseHash := baseRef.Hash()
+
+	cpID := id.MustCheckpointID("a1b2c3d4e5f6")
+	const wantPrompt = "only-on-mirror"
+
+	// Build the checkpoint commit by hand: WriteCommitted lands prompt.txt
+	// under <sharded>/0/, but ReadSessionPromptFromTree reads <sharded>/prompt.txt.
+	promptBlob, promptErr := checkpoint.CreateBlobFromContent(repo, []byte(wantPrompt))
+	require.NoError(t, promptErr)
+	summaryJSON := `{"checkpoint_id":"` + cpID.String() + `","sessions":[]}`
+	summaryBlob, summaryErr := checkpoint.CreateBlobFromContent(repo, []byte(summaryJSON))
+	require.NoError(t, summaryErr)
+	shardedPath := cpID.Path() // "a1/b2c3d4e5f6"
+	treeEntries := map[string]object.TreeEntry{
+		shardedPath + "/prompt.txt": {
+			Name: shardedPath + "/prompt.txt",
+			Mode: filemode.Regular,
+			Hash: promptBlob,
+		},
+		shardedPath + "/metadata.json": {
+			Name: shardedPath + "/metadata.json",
+			Mode: filemode.Regular,
+			Hash: summaryBlob,
+		},
+	}
+	treeHash, treeErr := checkpoint.BuildTreeFromEntries(t.Context(), repo, treeEntries)
+	require.NoError(t, treeErr)
+	commitHash, commitErr := checkpoint.CreateCommit(t.Context(), repo, treeHash, plumbing.ZeroHash, "checkpoint commit", "Test", "test@test.com")
+	require.NoError(t, commitErr)
+
+	// Mirror carries the checkpoint; v1 points at the initial commit (no metadata).
+	v1Ref := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	mirrorRef := plumbing.ReferenceName(paths.MetadataRefName)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(mirrorRef, commitHash)))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(v1Ref, baseHash)))
+
+	// HEAD trailer drives the picker's log walk.
+	testutil.WriteFile(t, dir, "g.txt", "feat")
+	testutil.GitAdd(t, dir, "g.txt")
+	testutil.GitCommit(t, dir, "feat\n\nEntire-Checkpoint: "+cpID.String())
+
+	t.Chdir(dir)
+	settingsDir := filepath.Join(dir, ".entire")
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, paths.SettingsFileName),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_version": "1.1"}}`),
+		0o644,
+	))
+
+	strat := NewManualCommitStrategy()
+	points, err := strat.GetRewindPoints(t.Context(), 10)
+	require.NoError(t, err)
+	require.Len(t, points, 1)
+	assert.Equal(t, wantPrompt, points[0].SessionPrompt, "prompt must come from the mirror, not v1")
 }
 
 func TestShadowStrategy_GetSessionInfo_NoShadowBranch(t *testing.T) {

@@ -161,7 +161,8 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 	}
 
 	// Get metadata branch tree for reading session prompts (best-effort, ignore errors)
-	metadataTree, _ := GetMetadataRefTree(repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName)) //nolint:errcheck // Best-effort for session prompts
+	readRef := cpkg.ResolveCommittedRefs(ctx).Read
+	metadataTree, _ := GetMetadataRefTree(repo, readRef) //nolint:errcheck // Best-effort for session prompts
 
 	head, err := repo.Head()
 	if err != nil {
