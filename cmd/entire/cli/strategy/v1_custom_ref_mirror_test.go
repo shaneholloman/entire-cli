@@ -306,9 +306,22 @@ func TestMirrorCommittedMetadataRef_V1MissingErrors(t *testing.T) {
 	err := MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), paths.MetadataBranchName)
+	require.ErrorIs(t, err, ErrPrimaryMetadataMissing, "primary-missing must use the sentinel so callers can disambiguate from SetReference NotFound")
 
 	_, ok := v1CustomRefHash(t, repo)
 	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
+}
+
+// Not parallel: uses t.Chdir().
+func TestMirrorCommittedMetadataRef_SetReferenceNotFoundIsNotPrimaryMissing(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	setV1MetadataBranch(t, repo)
+	repo.Storer = setReferenceErrorStorer{Storer: repo.Storer, err: plumbing.ErrReferenceNotFound}
+
+	err := MirrorCommittedMetadataRef(t.Context(), repo, v1CustomRefsForTest())
+	require.Error(t, err)
+	require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "SetReference NotFound should still unwrap to plumbing.ErrReferenceNotFound")
+	require.NotErrorIs(t, err, ErrPrimaryMetadataMissing, "SetReference NotFound must not be mistaken for a missing primary")
 }
 
 // Not parallel: uses t.Chdir().

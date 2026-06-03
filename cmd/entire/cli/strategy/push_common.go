@@ -475,7 +475,15 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 
 func mirrorSyncedMetadataBranch(ctx context.Context, repo *git.Repository, branchName string) {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
-	if !refs.Primary.IsBranch() || branchName != refs.Primary.Short() {
+	if !refs.Primary.IsBranch() {
+		logging.Debug(ctx, "committed-ref mirror skipped after sync: primary metadata ref is not a branch",
+			slog.String("primary", refs.Primary.String()))
+		return
+	}
+	if branchName != refs.Primary.Short() {
+		logging.Debug(ctx, "committed-ref mirror skipped after sync: branch name does not match primary",
+			slog.String("branch_name", branchName),
+			slog.String("primary_short", refs.Primary.Short()))
 		return
 	}
 	MirrorCommittedMetadataRefBestEffort(ctx, repo)
