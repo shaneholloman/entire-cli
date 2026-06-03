@@ -52,7 +52,7 @@ func (s contextTokenStore) LoadTokens(string) (tokens.TokenSet, error) {
 		return tokens.TokenSet{}, fmt.Errorf("read access token: %w", err)
 	}
 	access, expiresAt := tokenstore.DecodeTokenWithExpiration(enc)
-	refresh, _ := tokenstore.Get(s.service+":refresh", s.handle) //nolint:errcheck // an absent refresh token is fine — treated as no-refresh
+	refresh, _ := tokenstore.Get(tokenstore.RefreshService(s.service), s.handle) //nolint:errcheck // an absent refresh token is fine — treated as no-refresh
 	return tokens.TokenSet{
 		AccessToken:  access,
 		RefreshToken: refresh,
@@ -70,22 +70,32 @@ func (s contextTokenStore) SaveTokens(_ string, t tokens.TokenSet) error {
 			expiresIn = secs
 		}
 	}
-	if err := tokenstore.Set(s.service, s.handle, tokenstore.EncodeTokenWithExpiration(t.AccessToken, expiresIn)); err != nil {
-		return fmt.Errorf("store access token: %w", err)
-	}
+	// Persist the rotated refresh token BEFORE the access token. The server
+	// single-use-rotates refresh tokens, so a partial write must never leave
+	// a fresh access token paired with a stale refresh token: that pairing
+	// looks healthy until the access token expires, then the dead refresh
+	// token trips invalid_grant/family revocation and forces a re-login.
+	// Refresh-first inverts the failure modes: a failed refresh write aborts
+	// before touching the access slot (old pair preserved), and a failed
+	// access write after a good refresh write self-heals on the next load
+	// (the new refresh token re-mints an access token).
+	//
 	// persistRefreshed carries a still-valid refresh token forward when the
 	// server doesn't rotate, so an empty value here means "leave as-is",
 	// never "clear".
 	if t.RefreshToken != "" {
-		if err := tokenstore.Set(s.service+":refresh", s.handle, t.RefreshToken); err != nil {
+		if err := tokenstore.Set(tokenstore.RefreshService(s.service), s.handle, t.RefreshToken); err != nil {
 			return fmt.Errorf("store refresh token: %w", err)
 		}
+	}
+	if err := tokenstore.Set(s.service, s.handle, tokenstore.EncodeTokenWithExpiration(t.AccessToken, expiresIn)); err != nil {
+		return fmt.Errorf("store access token: %w", err)
 	}
 	return nil
 }
 
 func (s contextTokenStore) DeleteTokens(string) error {
-	_ = tokenstore.Delete(s.service+":refresh", s.handle) //nolint:errcheck // best-effort; the access-token delete below is what matters
+	_ = tokenstore.Delete(tokenstore.RefreshService(s.service), s.handle) //nolint:errcheck // best-effort; the access-token delete below is what matters
 	if err := tokenstore.Delete(s.service, s.handle); err != nil {
 		return fmt.Errorf("delete access token: %w", err)
 	}

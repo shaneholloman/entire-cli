@@ -55,7 +55,7 @@ func TestContextTokenStore_RoundTrip(t *testing.T) {
 	if _, err := st.LoadTokens(""); !errors.Is(err, authtokenstore.ErrNotFound) {
 		t.Fatal("LoadTokens after delete: want ErrNotFound")
 	}
-	if r, _ := tokenstore.Get(st.service+":refresh", st.handle); r != "" { //nolint:errcheck // read-back; only the value matters here
+	if r, _ := tokenstore.Get(tokenstore.RefreshService(st.service), st.handle); r != "" { //nolint:errcheck // read-back; only the value matters here
 		t.Fatalf("refresh slot survived delete: %q", r)
 	}
 }
@@ -154,7 +154,7 @@ func TestNewRefreshingLoginProvider_RefreshesAndRotates(t *testing.T) {
 	if err := tokenstore.Set(svc, "alice", tokenstore.EncodeTokenWithExpiration(expired, -3600)); err != nil {
 		t.Fatalf("seed access token: %v", err)
 	}
-	if err := tokenstore.Set(svc+":refresh", "alice", "entr_old"); err != nil {
+	if err := tokenstore.Set(tokenstore.RefreshService(svc), "alice", "entr_old"); err != nil {
 		t.Fatalf("seed refresh token: %v", err)
 	}
 
@@ -174,13 +174,74 @@ func TestNewRefreshingLoginProvider_RefreshesAndRotates(t *testing.T) {
 	}
 
 	// Rotated refresh token persisted, and the new access token cached.
-	if r, _ := tokenstore.Get(svc+":refresh", "alice"); r != "entr_new" { //nolint:errcheck // read-back
+	if r, _ := tokenstore.Get(tokenstore.RefreshService(svc), "alice"); r != "entr_new" { //nolint:errcheck // read-back
 		t.Fatalf("rotated refresh token = %q, want entr_new", r)
 	}
 	enc, _ := tokenstore.Get(svc, "alice") //nolint:errcheck // read-back
 	if access, _ := tokenstore.DecodeTokenWithExpiration(enc); access != newJWT {
 		t.Fatalf("persisted access token not updated to the refreshed JWT")
 	}
+}
+
+// SaveTokens must never leave a fresh access token paired with a stale
+// refresh token: the server single-use-rotates, so that pairing looks healthy
+// until the access token expires, then the dead refresh token forces a
+// re-login. The store persists refresh-first to invert both failure modes.
+func TestContextTokenStore_SaveTokens_RefreshFirstOrdering(t *testing.T) {
+	t.Run("refresh write fails: access slot untouched", func(t *testing.T) {
+		svc := "entire-core:https://core.example"
+		path := filepath.Join(t.TempDir(), "tokens.json")
+
+		// Seed an existing good pair through a clean backend first — the fault
+		// backend installed below would reject the refresh-slot seed too.
+		oldAccess := makeJWT(t, fmt.Sprintf(`{"iss":"https://core.example","handle":"alice","exp":%d}`, time.Now().Add(time.Hour).Unix()))
+		seedRestore := tokenstore.UseFileBackendForTesting(path)
+		if err := tokenstore.Set(svc, "alice", tokenstore.EncodeTokenWithExpiration(oldAccess, 3600)); err != nil {
+			t.Fatalf("seed access: %v", err)
+		}
+		if err := tokenstore.Set(tokenstore.RefreshService(svc), "alice", "entr_old"); err != nil {
+			t.Fatalf("seed refresh: %v", err)
+		}
+		seedRestore()
+
+		// Now point at the SAME file but fail any refresh-slot write.
+		failRefresh := func(service, _ string) bool { return service == tokenstore.RefreshService(svc) }
+		restore := tokenstore.UseFailingBackendForTesting(path, failRefresh)
+		t.Cleanup(restore)
+
+		st := contextTokenStore{service: svc, handle: "alice"}
+		newAccess := makeJWT(t, fmt.Sprintf(`{"iss":"https://core.example","handle":"alice","exp":%d}`, time.Now().Add(2*time.Hour).Unix()))
+		err := st.SaveTokens("", tokens.TokenSet{AccessToken: newAccess, RefreshToken: "entr_new", ExpiresAt: time.Now().Add(2 * time.Hour)})
+		if err == nil {
+			t.Fatal("SaveTokens: want error when refresh write fails")
+		}
+		// The access slot must NOT have advanced — aborting before the access
+		// write preserves the old (still-mintable) pair.
+		enc, _ := tokenstore.Get(svc, "alice") //nolint:errcheck // read-back
+		if access, _ := tokenstore.DecodeTokenWithExpiration(enc); access != oldAccess {
+			t.Fatalf("access slot advanced despite refresh-write failure: a fresh access token is now paired with a stale refresh token")
+		}
+	})
+
+	t.Run("access write fails: refresh slot already advanced (self-heals)", func(t *testing.T) {
+		svc := "entire-core:https://core.example"
+		failAccess := func(service, _ string) bool { return service == svc }
+		restore := tokenstore.UseFailingBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"), failAccess)
+		t.Cleanup(restore)
+
+		st := contextTokenStore{service: svc, handle: "alice"}
+		newAccess := makeJWT(t, fmt.Sprintf(`{"iss":"https://core.example","handle":"alice","exp":%d}`, time.Now().Add(2*time.Hour).Unix()))
+		err := st.SaveTokens("", tokens.TokenSet{AccessToken: newAccess, RefreshToken: "entr_new", ExpiresAt: time.Now().Add(2 * time.Hour)})
+		if err == nil {
+			t.Fatal("SaveTokens: want error when access write fails")
+		}
+		// Refresh-first means the rotated refresh token is already persisted, so
+		// the next load re-mints a fresh access token rather than replaying a
+		// dead refresh token.
+		if r, _ := tokenstore.Get(tokenstore.RefreshService(svc), "alice"); r != "entr_new" { //nolint:errcheck // read-back
+			t.Fatalf("refresh slot = %q, want entr_new persisted before the access write", r)
+		}
+	})
 }
 
 func failRoundTripper(t *testing.T) http.RoundTripper {
