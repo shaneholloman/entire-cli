@@ -263,7 +263,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	// Mirror the committed write to the v1 custom ref when opted in
 	// (local-only, never pushed; failures are logged, not fatal).
-	mirrorMetadataToV1CustomRef(ctx, repo)
+	MirrorCommittedMetadataRefBestEffort(ctx, repo)
 
 	logging.Debug(logCtx, "condense timings",
 		slog.String("session_id", state.SessionID),

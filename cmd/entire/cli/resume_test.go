@@ -152,7 +152,7 @@ func setupResumeTestRepo(t *testing.T, tmpDir string, createFeatureBranch bool) 
 	}
 
 	// Ensure entire/checkpoints/v1 branch exists
-	if err := strategy.EnsureMetadataBranch(repo); err != nil {
+	if err := strategy.EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("Failed to create metadata branch: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func createCheckpointOnMetadataBranchFull(t *testing.T, repo *git.Repository, se
 	t.Helper()
 
 	// Get existing metadata branch or create it
-	if err := strategy.EnsureMetadataBranch(repo); err != nil {
+	if err := strategy.EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("Failed to ensure metadata branch: %v", err)
 	}
 
@@ -804,7 +804,7 @@ func TestResumeFromCurrentBranch_V11DoesNotSeedFromV1(t *testing.T) {
 		t.Fatalf("resume suggested v1 fetch in v1.1 mode:\n%s", combined)
 	}
 	if !strings.Contains(stderr.String(), "entire explain "+cpID.String()) {
-		t.Fatalf("resume did not suggest 'entire explain' to sync the v1.1 ref:\nstderr: %s", stderr.String())
+		t.Fatalf("resume did not suggest 'entire explain' for missing v1.1 metadata:\nstderr: %s", stderr.String())
 	}
 }
 

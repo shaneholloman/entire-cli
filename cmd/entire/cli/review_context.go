@@ -98,7 +98,6 @@ func reviewCommittedCheckpointContext(ctx context.Context, worktreeRoot string, 
 		return ""
 	}
 	defer repo.Close()
-	checkpoint.SyncCommittedReadRef(ctx, repo)
 	store := checkpoint.NewCommittedReadStore(ctx, repo)
 
 	var lines []string

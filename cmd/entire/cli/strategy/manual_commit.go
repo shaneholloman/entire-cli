@@ -56,10 +56,9 @@ func (s *ManualCommitStrategy) getCheckpointStore(repo *git.Repository) *checkpo
 
 // getCommittedReadStore returns a store for reading committed checkpoints, bound
 // to the read ref for the active checkpoints_version (the local-only v1.1 custom
-// ref when opted in, else the v1 branch) and synced first so a prior git pull is
-// reflected. Use this for committed reads; getCheckpointStore is for writes.
+// ref when opted in, else the v1 branch). Use this for committed reads;
+// getCheckpointStore is for writes.
 func (s *ManualCommitStrategy) getCommittedReadStore(ctx context.Context, repo *git.Repository) *checkpoint.GitStore {
-	checkpoint.SyncCommittedReadRef(ctx, repo)
 	return s.withBlobFetcher(checkpoint.NewCommittedReadStore(ctx, repo))
 }
 

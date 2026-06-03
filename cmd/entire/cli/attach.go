@@ -318,7 +318,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	if refs := opts.committedRefs(ctx); refs.HasMirror() {
-		if err := mirrorToV1CustomRef(refs, repo); err != nil {
+		if err := strategy.MirrorCommittedMetadataRef(ctx, repo, refs); err != nil {
 			return fmt.Errorf("checkpoint was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
 		}
 	}

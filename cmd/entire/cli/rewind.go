@@ -693,7 +693,6 @@ func restoreSessionTranscriptFromStrategy(ctx context.Context, cpID id.Checkpoin
 	}
 	defer repo.Close()
 
-	checkpoint.SyncCommittedReadRef(ctx, repo)
 	store := checkpoint.NewCommittedReadStore(ctx, repo)
 	content, returnedSessionID, err := checkpoint.ReadRawSessionLogForCheckpoint(ctx, store, cpID)
 	if err != nil {
