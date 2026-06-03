@@ -124,7 +124,7 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		fmt.Fprintf(errW, "Warning: logged in, but could not record a shareable context (clone via entire:// may need a re-login): %v\n", err)
 	}
 
-	fmt.Fprintln(outW, "✅ login complete.")
+	fmt.Fprintln(outW, "✓ Login complete.")
 	return nil
 }
 
