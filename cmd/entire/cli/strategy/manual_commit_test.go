@@ -3558,6 +3558,9 @@ func TestCondenseSession_GeminiMultiCheckpoint(t *testing.T) {
 	// what would happen after condensing checkpoint 1
 	state.CheckpointTranscriptStart = 2 // Start from message index 2 (the second user prompt)
 	state.StepCount = 1                 // Set to 1 (will be incremented to 2 by SaveStep)
+	// CheckpointsCount is now the prompt window (SessionTurnCount - PromptWindowBase),
+	// not StepCount. Simulate two counted turns so the assertion below still expects 2.
+	state.SessionTurnCount = 2
 	if err := s.saveSessionState(context.Background(), state); err != nil {
 		t.Fatalf("failed to update session state: %v", err)
 	}

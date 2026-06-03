@@ -230,6 +230,12 @@ type WriteCommittedOptions struct {
 	// CheckpointsCount is the number of checkpoints in this session
 	CheckpointsCount int
 
+	// SaveStepCount is the number of SaveStep-recorded steps (shadow-branch
+	// commits) for this session. Distinct from CheckpointsCount (the displayed
+	// prompt count): this is the honest "did real checkpoint work happen" signal
+	// used to gate combined attribution. 0 means a commit-only / fallback session.
+	SaveStepCount int
+
 	// EphemeralBranch is the shadow branch name (for manual-commit strategy)
 	EphemeralBranch string
 
@@ -465,7 +471,12 @@ type CommittedMetadata struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	Branch           string          `json:"branch,omitempty"` // Branch where checkpoint was created (empty if detached HEAD)
 	CheckpointsCount int             `json:"checkpoints_count"`
-	FilesTouched     []string        `json:"files_touched"`
+	// SaveStepCount is the number of SaveStep-recorded steps for this session.
+	// Honest "real checkpoint work happened" signal (0 = commit-only/fallback
+	// session), kept separate from the displayed CheckpointsCount prompt count.
+	// Added after CheckpointsCount stopped being a reliable did-SaveStep-run signal.
+	SaveStepCount int      `json:"save_step_count,omitempty"`
+	FilesTouched  []string `json:"files_touched"`
 
 	// Agent identifies the agent that created this checkpoint (e.g., "Claude Code", "Cursor")
 	Agent types.AgentType `json:"agent,omitempty"`

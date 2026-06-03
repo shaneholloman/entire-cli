@@ -150,6 +150,15 @@ func runAttachSurfaceReviewErrors(cmd *cobra.Command, sessionID string, agentNam
 	return err
 }
 
+// attachStepCount returns the displayed "steps" count for an attached session.
+// Attach writes exactly one checkpoint and has at most meta.FirstPrompt, so this
+// floors at 1 — it must never render as "0 steps". SaveStepCount stays 0 (no
+// SaveStep ran), keeping the combined-attribution gate conservative for this
+// fallback session.
+func attachStepCount(prompts []string) int {
+	return max(len(prompts), 1)
+}
+
 func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName types.AgentName, opts attachOptions) error {
 	// Initialize structured logger so logging.Warn/Info write to .entire/logs/ not stderr.
 	if err := logging.Init(ctx, sessionID); err != nil {
@@ -295,16 +304,17 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 
 	writeOpts := cpkg.WriteCommittedOptions{
-		CheckpointID: checkpointID,
-		SessionID:    sessionID,
-		Strategy:     strategy.StrategyNameManualCommit,
-		Transcript:   redactedTranscript,
-		Prompts:      prompts,
-		AuthorName:   author.Name,
-		AuthorEmail:  author.Email,
-		Agent:        ag.Type(),
-		Model:        meta.Model,
-		TokenUsage:   tokenUsage,
+		CheckpointID:     checkpointID,
+		SessionID:        sessionID,
+		Strategy:         strategy.StrategyNameManualCommit,
+		Transcript:       redactedTranscript,
+		Prompts:          prompts,
+		CheckpointsCount: attachStepCount(prompts),
+		AuthorName:       author.Name,
+		AuthorEmail:      author.Email,
+		Agent:            ag.Type(),
+		Model:            meta.Model,
+		TokenUsage:       tokenUsage,
 	}
 	if opts.Review {
 		writeOpts.Kind = string(session.KindAgentReview)

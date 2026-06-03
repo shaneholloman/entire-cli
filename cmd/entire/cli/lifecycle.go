@@ -1113,12 +1113,21 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 	}
 	// Use hook-reported turn count if available (take max); otherwise
 	// increment on each TurnEnd event to count turns ourselves.
+	prevTurnCount := state.SessionTurnCount
 	if event.TurnCount > 0 {
 		if event.TurnCount > state.SessionTurnCount {
 			state.SessionTurnCount = event.TurnCount
 		}
 	} else if event.Type == agent.TurnEnd {
 		state.SessionTurnCount++
+	}
+	// Deferred checkpoint-window reset: the first time a turn is counted after a
+	// checkpoint was written, re-anchor the window base to the turn count from
+	// before this turn so the current turn becomes the first prompt of the new
+	// window. Until then, back-to-back checkpoints keep reporting the same count.
+	if (event.TurnCount > 0 || event.Type == agent.TurnEnd) && state.PromptWindowResetPending {
+		state.PromptWindowBase = prevTurnCount
+		state.PromptWindowResetPending = false
 	}
 	if event.ContextTokens > 0 {
 		state.ContextTokens = event.ContextTokens

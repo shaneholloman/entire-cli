@@ -441,6 +441,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		CreatedAt:                   checkpointCreatedAt(opts),
 		Branch:                      opts.Branch,
 		CheckpointsCount:            opts.CheckpointsCount,
+		SaveStepCount:               opts.SaveStepCount,
 		FilesTouched:                opts.FilesTouched,
 		Agent:                       opts.Agent,
 		Model:                       opts.Model,

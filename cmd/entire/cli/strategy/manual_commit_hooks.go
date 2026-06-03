@@ -1072,15 +1072,18 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 	}
 
 	// Collect union of files_touched from sessions that had real checkpoints (SaveStep ran).
-	// Sessions with checkpoints_count == 0 (e.g., commit-only sessions) use a fallback that
+	// Sessions with no SaveStep steps (e.g., commit-only sessions) use a fallback that
 	// includes ALL committed files, which would incorrectly classify human-created files as agent work.
+	// Gate on SaveStepCount (the honest "SaveStep ran" signal), not CheckpointsCount —
+	// CheckpointsCount is now a prompt count floored at 1, so it's no longer 0 for these sessions.
+	// Old metadata lacks SaveStepCount → 0 → conservatively skipped, matching prior behavior.
 	agentFiles := make(map[string]struct{})
 	for i := range len(summary.Sessions) {
 		metadata, readErr := store.ReadSessionMetadata(ctx, checkpointID, i)
 		if readErr != nil || metadata == nil {
 			continue
 		}
-		if metadata.CheckpointsCount == 0 {
+		if metadata.SaveStepCount == 0 {
 			continue // Skip sessions that used the filesTouched fallback
 		}
 		for _, f := range metadata.FilesTouched {
