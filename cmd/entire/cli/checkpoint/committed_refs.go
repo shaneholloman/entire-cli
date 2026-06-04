@@ -23,6 +23,17 @@ type CommittedRefs struct {
 // HasMirror reports whether a mirror ref is configured.
 func (r CommittedRefs) HasMirror() bool { return r.Mirror != "" }
 
+// DefaultV1Refs returns the v1-only topology used by callers that have no
+// resolver context (typically tests and the resolver's default branch).
+func DefaultV1Refs() CommittedRefs {
+	v1Branch := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	return CommittedRefs{
+		Primary: v1Branch,
+		Read:    v1Branch,
+		Push:    []plumbing.ReferenceName{v1Branch},
+	}
+}
+
 // PrimaryFetchableFromOrigin reports whether Primary has an origin-tracking
 // shadow — i.e. whether bootstrap-from-origin paths can fetch it. True when
 // Primary appears in Push: we push it, so origin tracks it.
@@ -44,12 +55,7 @@ func ResolveCommittedRefsFromSettings(s *settings.EntireSettings) CommittedRefs 
 }
 
 func committedRefsFor(mirrorEnabled bool) CommittedRefs {
-	v1Branch := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	refs := CommittedRefs{
-		Primary: v1Branch,
-		Read:    v1Branch,
-		Push:    []plumbing.ReferenceName{v1Branch},
-	}
+	refs := DefaultV1Refs()
 	if mirrorEnabled {
 		custom := plumbing.ReferenceName(paths.MetadataRefName)
 		refs.Read = custom

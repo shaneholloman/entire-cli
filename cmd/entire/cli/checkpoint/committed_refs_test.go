@@ -58,6 +58,16 @@ func TestResolveCommittedRefsFromSettings(t *testing.T) {
 	}
 }
 
+func TestDefaultV1Refs(t *testing.T) {
+	t.Parallel()
+	v1 := v1BranchRef()
+	assert.Equal(t, CommittedRefs{
+		Primary: v1,
+		Read:    v1,
+		Push:    []plumbing.ReferenceName{v1},
+	}, DefaultV1Refs())
+}
+
 func TestCommittedRefs_PrimaryFetchableFromOrigin(t *testing.T) {
 	t.Parallel()
 	v1, custom := v1BranchRef(), customRef()
