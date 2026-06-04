@@ -44,7 +44,7 @@ func ValidateSessionID(id string) error {
 	}
 	// Defense in depth against platform-specific absolute forms (e.g. Windows
 	// drive paths) that the separator check above may not catch.
-	if filepath.IsAbs(id) {
+	if filepath.IsAbs(id) || filepath.VolumeName(id) != "" {
 		return fmt.Errorf("invalid session ID %q: must not be an absolute path", id)
 	}
 	return nil
