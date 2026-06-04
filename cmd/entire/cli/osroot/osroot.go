@@ -12,8 +12,13 @@
 package osroot
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"os"
+	"path"
+	"path/filepath"
+	"strings"
 )
 
 // ReadFile reads the named file relative to root using os.Root for
@@ -50,6 +55,32 @@ func WriteFile(root *os.Root, name string, data []byte, perm os.FileMode) (retEr
 
 	if _, err := f.Write(data); err != nil {
 		return err //nolint:wrapcheck // preserve original error
+	}
+	return nil
+}
+
+// MkdirAll creates the directory named by name, along with any necessary
+// parents, relative to root. Each level is created with os.Root.Mkdir so the
+// kernel enforces containment: unlike os.MkdirAll, it cannot create directories
+// outside root. A name that escapes root (absolute, or containing ".." segments
+// that climb above root) is rejected by os.Root and returns an error. Already-
+// existing directories are tolerated. name may use either OS-native or forward
+// slashes; an empty or "." name is a no-op.
+func MkdirAll(root *os.Root, name string, perm os.FileMode) error {
+	name = strings.Trim(filepath.ToSlash(name), "/")
+	if name == "" || name == "." {
+		return nil
+	}
+
+	cur := ""
+	for _, part := range strings.Split(name, "/") {
+		if part == "" {
+			continue
+		}
+		cur = path.Join(cur, part)
+		if err := root.Mkdir(cur, perm); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err //nolint:wrapcheck // preserve original error (incl. traversal rejection) for callers
+		}
 	}
 	return nil
 }

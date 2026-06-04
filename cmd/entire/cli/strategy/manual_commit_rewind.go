@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -415,12 +416,12 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, w, errW io.Writer, po
 			return fmt.Errorf("failed to read file %s: %w", f.Name, err)
 		}
 
-		// Ensure directory exists (MkdirAll not available on os.Root)
-		absPath := filepath.Join(repoRoot, f.Name)
-		dir := filepath.Dir(absPath)
-		if dir != "." {
-			//nolint:gosec // G301: Need 0o755 for user directories during rewind
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+		// Ensure parent directories exist via os.Root so a crafted tree entry
+		// name (e.g. containing "..") from an untrusted checkpoint cannot create
+		// directories outside the repo. f.Name uses forward slashes (git tree).
+		dir := path.Dir(f.Name)
+		if dir != "." && dir != "" {
+			if err := osroot.MkdirAll(repoRootHandle, dir, 0o755); err != nil {
 				return fmt.Errorf("failed to create directory %s: %w", dir, err)
 			}
 		}
