@@ -72,6 +72,24 @@ func TestValidateSessionID(t *testing.T) {
 			wantErr:   true,
 			errMsg:    "contains path separators",
 		},
+		// Bare path segments (separator-free but still traverse as a path component)
+		{
+			name:      "single dot",
+			sessionID: ".",
+			wantErr:   true,
+			errMsg:    "reserved path segment",
+		},
+		{
+			name:      "double dot",
+			sessionID: "..",
+			wantErr:   true,
+			errMsg:    "reserved path segment",
+		},
+		{
+			name:      "dot in the middle is allowed",
+			sessionID: "a..b",
+			wantErr:   false,
+		},
 	}
 
 	for _, tt := range tests {

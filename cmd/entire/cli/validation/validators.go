@@ -5,6 +5,7 @@ package validation
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -22,6 +23,16 @@ func ValidateSessionID(id string) error {
 	}
 	if strings.ContainsAny(id, "/\\") {
 		return fmt.Errorf("invalid session ID %q: contains path separators", id)
+	}
+	// A bare "." or ".." is separator-free but still traverses when used as a
+	// path segment (e.g. an agent that uses the ID as a directory component).
+	if id == "." || id == ".." {
+		return fmt.Errorf("invalid session ID %q: reserved path segment", id)
+	}
+	// Defense in depth against platform-specific absolute forms (e.g. Windows
+	// drive paths) that the separator check above may not catch.
+	if filepath.IsAbs(id) {
+		return fmt.Errorf("invalid session ID %q: must not be an absolute path", id)
 	}
 	return nil
 }
