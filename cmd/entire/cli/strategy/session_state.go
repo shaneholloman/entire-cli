@@ -640,17 +640,27 @@ func ClearSessionState(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("failed to get session state directory: %w", err)
 	}
 
-	// Remove all files for this session (state .json, .model hint, any future hint files).
-	// filepath.Glob finds matches; os.Root ensures traversal-resistant removal.
-	matches, _ := filepath.Glob(filepath.Join(stateDir, sessionID+".*")) //nolint:errcheck // pattern is always valid
+	// Remove all files for this session (state .json, .model hint, any future
+	// hint files). Match by literal prefix rather than filepath.Glob: the
+	// session ID is user-controlled, and a glob pattern would let metacharacters
+	// match and delete other sessions' files. os.Root ensures traversal-resistant
+	// removal.
+	prefix := sessionID + "."
+	entries, _ := os.ReadDir(stateDir) //nolint:errcheck // best-effort cleanup; missing dir => nothing to clear
+	var matches []string
+	for _, e := range entries {
+		if name := e.Name(); strings.HasPrefix(name, prefix) {
+			matches = append(matches, name)
+		}
+	}
 	if len(matches) > 0 {
 		root, rootErr := os.OpenRoot(stateDir)
 		if rootErr != nil {
 			return fmt.Errorf("failed to open session state directory for cleanup: %w", rootErr)
 		}
 		defer root.Close()
-		for _, f := range matches {
-			_ = osroot.Remove(root, filepath.Base(f)) //nolint:errcheck // best-effort cleanup
+		for _, name := range matches {
+			_ = osroot.Remove(root, name) //nolint:errcheck // best-effort cleanup
 		}
 	}
 

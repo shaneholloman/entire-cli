@@ -533,21 +533,43 @@ func (s *StateStore) Clear(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("invalid session ID: %w", err)
 	}
 
-	// Remove all files for this session (state .json, .model hint, any future hint files).
-	// filepath.Glob finds matches; os.Root ensures traversal-resistant removal.
-	matches, _ := filepath.Glob(filepath.Join(s.stateDir, sessionID+".*")) //nolint:errcheck // pattern is always valid
+	// Remove all files for this session (state .json, .model hint, any future
+	// hint files). Match by literal prefix rather than filepath.Glob: the
+	// session ID is user-controlled, and a glob pattern would let metacharacters
+	// match and delete other sessions' files. os.Root ensures traversal-resistant
+	// removal.
+	matches := matchSessionFiles(s.stateDir, sessionID)
 	if len(matches) > 0 {
 		root, rootErr := os.OpenRoot(s.stateDir)
 		if rootErr != nil {
 			return fmt.Errorf("failed to open session state directory for cleanup: %w", rootErr)
 		}
 		defer root.Close()
-		for _, f := range matches {
-			_ = osroot.Remove(root, filepath.Base(f)) //nolint:errcheck // best-effort cleanup
+		for _, name := range matches {
+			_ = osroot.Remove(root, name) //nolint:errcheck // best-effort cleanup
 		}
 	}
 
 	return nil
+}
+
+// matchSessionFiles returns the names (not paths) of files in dir that belong to
+// the given session ID — i.e. "<sessionID>.<ext>". It uses literal prefix
+// matching, never glob patterns, so a session ID containing glob metacharacters
+// cannot match unrelated files.
+func matchSessionFiles(dir, sessionID string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // missing/unreadable dir => nothing to clear
+	}
+	prefix := sessionID + "."
+	var matched []string
+	for _, e := range entries {
+		if name := e.Name(); strings.HasPrefix(name, prefix) {
+			matched = append(matched, name)
+		}
+	}
+	return matched
 }
 
 // RemoveAll removes the entire session state directory.
