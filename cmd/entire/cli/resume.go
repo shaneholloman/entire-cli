@@ -426,13 +426,13 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		)
 	}
 
-	// Try remote tree directly (origin/entire/checkpoints/v1)
+	// Try remote tree directly (origin's tracking ref for Primary)
 	remoteRepo, repoErr := openRepository(ctx)
 	if repoErr != nil {
 		return nil, nil, fmt.Errorf("failed to open repository: %w", repoErr)
 	}
 	logRefHash(remoteRepo, "remote-tracking")
-	remoteTree, remoteErr := strategy.GetRemoteMetadataBranchTree(remoteRepo)
+	remoteTree, remoteErr := strategy.GetRemotePrimaryTree(ctx, remoteRepo)
 	if remoteErr == nil {
 		logging.Debug(logCtx, "metadata tree obtained from remote-tracking branch")
 		return remoteTree, remoteRepo, nil

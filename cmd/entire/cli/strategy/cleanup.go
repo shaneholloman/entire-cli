@@ -258,11 +258,10 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 	}
 	defer repo.Close()
 
-	// Get sessions branch
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := repo.Reference(refName, true)
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	ref, err := repo.Reference(refs.Primary, true)
 	if err != nil {
-		return nil, nil, fmt.Errorf("sessions branch not found: %w", err)
+		return nil, nil, fmt.Errorf("primary metadata ref %s not found: %w", refs.Primary, err)
 	}
 
 	parentCommit, err := repo.CommitObject(ref.Hash())

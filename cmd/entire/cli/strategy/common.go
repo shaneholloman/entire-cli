@@ -100,11 +100,11 @@ const FetchTmpRefPrefix = "refs/entire-fetch-tmp/"
 // the tmp ref. The cleanup is deferred so the tmp ref is reaped even when
 // the advance fails.
 //
-// label is a short human-readable name used in error messages (e.g.
-// "entire/checkpoints/v1"). Typical use:
+// label is a short human-readable name used in error messages. Typical use:
 //
 //	// fetch with refspec "+<src>:<tmpRefName>"
-//	return PromoteTmpRefSafely(ctx, tmpRefName, plumbing.NewBranchReferenceName(paths.MetadataBranchName), "entire/checkpoints/v1")
+//	refs := checkpoint.ResolveCommittedRefs(ctx)
+//	return PromoteTmpRefSafely(ctx, tmpRefName, refs.Primary, refs.Primary.Short())
 func PromoteTmpRefSafely(ctx context.Context, tmpRefName, destRefName plumbing.ReferenceName, label string) error {
 	repo, err := OpenRepository(ctx)
 	if err != nil {
@@ -966,22 +966,27 @@ func ReadAllSessionPromptsFromTree(tree *object.Tree, checkpointPath string, ses
 	return prompts
 }
 
-// GetRemoteMetadataBranchTree returns the tree object for origin/entire/checkpoints/v1.
-func GetRemoteMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
-	refName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
+// GetRemotePrimaryTree returns the tree at origin's remote-tracking ref for
+// the configured Primary. Errors when Primary isn't in Push (no origin shadow).
+func GetRemotePrimaryTree(ctx context.Context, repo *git.Repository) (*object.Tree, error) {
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	if !refs.PrimaryFetchableFromOrigin() {
+		return nil, fmt.Errorf("primary metadata ref %s is not pushed to origin", refs.Primary)
+	}
+	refName := plumbing.NewRemoteReferenceName("origin", refs.Primary.Short())
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote metadata branch reference: %w", err)
+		return nil, fmt.Errorf("failed to get remote metadata reference %s: %w", refName, err)
 	}
 
 	commit, err := repo.CommitObject(ref.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote metadata branch commit: %w", err)
+		return nil, fmt.Errorf("failed to get remote metadata commit: %w", err)
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote metadata branch tree: %w", err)
+		return nil, fmt.Errorf("failed to get remote metadata tree: %w", err)
 	}
 	return tree, nil
 }

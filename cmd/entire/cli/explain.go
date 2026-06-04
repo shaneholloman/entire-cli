@@ -764,7 +764,7 @@ func loadCheckpointForExplain(ctx context.Context, lookup *explainCheckpointLook
 func prefetchCheckpointBlobs(ctx context.Context, repo *git.Repository, cpID id.CheckpointID) {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
 	loadPrimaryRoot := func(repo *git.Repository) (*object.Tree, error) {
-		return loadPrimaryMetadataRootTree(repo, refs)
+		return loadPrimaryMetadataRootTree(ctx, repo, refs)
 	}
 	v1FT := buildCheckpointFetchingTree(ctx, repo, cpID, "primary", loadPrimaryRoot)
 
@@ -828,14 +828,14 @@ func runPreFetch(ctx context.Context, ft *checkpoint.FetchingTree, cpID id.Check
 // loadPrimaryMetadataRootTree reads the tree at refs.Primary, falling back to
 // origin's remote-tracking ref when reads are bootstrappable from origin
 // (Read == Primary && Primary in Push).
-func loadPrimaryMetadataRootTree(repo *git.Repository, refs checkpoint.CommittedRefs) (*object.Tree, error) {
+func loadPrimaryMetadataRootTree(ctx context.Context, repo *git.Repository, refs checkpoint.CommittedRefs) (*object.Tree, error) {
 	if tree, err := strategy.GetMetadataRefTree(repo, refs.Primary); err == nil {
 		return tree, nil
 	}
 	if refs.Read != refs.Primary || !refs.PrimaryFetchableFromOrigin() {
 		return nil, fmt.Errorf("read primary metadata tree %s: ref not found locally", refs.Primary)
 	}
-	tree, err := strategy.GetRemoteMetadataBranchTree(repo)
+	tree, err := strategy.GetRemotePrimaryTree(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("read primary metadata tree (local + remote-tracking): %w", err)
 	}

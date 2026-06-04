@@ -15,7 +15,6 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -26,17 +25,17 @@ import (
 // disconnectedOnce ensures the disconnection warning runs at most once per process.
 var disconnectedOnce sync.Once //nolint:gochecknoglobals // intentional per-process gate
 
-// IsMetadataDisconnected checks whether the local metadata branch
-// and the provided fetched or remote-tracking ref exist but share no common
+// IsMetadataDisconnected checks whether the local primary metadata ref and
+// the provided fetched or remote-tracking ref exist but share no common
 // ancestor.
 func IsMetadataDisconnected(ctx context.Context, repo *git.Repository, remoteRefName plumbing.ReferenceName) (bool, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	localRef, err := repo.Reference(refName, true)
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	localRef, err := repo.Reference(refs.Primary, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("failed to check local metadata branch: %w", err)
+		return false, fmt.Errorf("failed to check local primary metadata ref: %w", err)
 	}
 
 	remoteRef, err := repo.Reference(remoteRefName, true)
@@ -44,7 +43,7 @@ func IsMetadataDisconnected(ctx context.Context, repo *git.Repository, remoteRef
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("failed to check remote metadata branch: %w", err)
+		return false, fmt.Errorf("failed to check remote metadata ref: %w", err)
 	}
 
 	if localRef.Hash() == remoteRef.Hash() {
@@ -76,7 +75,11 @@ func WarnIfMetadataDisconnected() {
 			return
 		}
 		defer repo.Close()
-		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName))
+		refs := checkpoint.ResolveCommittedRefs(ctx)
+		if !refs.PrimaryFetchableFromOrigin() {
+			return // origin doesn't track Primary; nothing to disconnect from
+		}
+		disconnected, err := IsMetadataDisconnected(ctx, repo, plumbing.NewRemoteReferenceName("origin", refs.Primary.Short()))
 		if err != nil {
 			logging.Debug(ctx, "metadata disconnection check failed",
 				slog.String("error", err.Error()))
@@ -109,10 +112,9 @@ func ReconcileDisconnectedMetadataBranch(
 	w io.Writer,
 ) error {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
-	// Check local branch
-	localRef, err := repo.Reference(refName, true)
+	// Check local primary ref
+	localRef, err := repo.Reference(refs.Primary, true)
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return nil // No local branch — nothing to reconcile
 	}
