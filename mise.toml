@@ -20,10 +20,10 @@ description = "Run integration tests"
 run = "gotestsum --format testname --format-icons text --hide-summary skipped -- -tags=integration,authfilestore ./cmd/entire/cli/integration_test/... ./cmd/entire/cli/auth/..."
 
 [tasks."build:e2e"]
-description = "Build the CLI for e2e tests with the file-backed auth store (-tags=authfilestore), so the spawned binary and git hooks never touch the developer's OS keychain"
+description = "Build the CLI for e2e tests with the file-backed auth store (-tags=authfilestore), so the spawned binary, the git-remote-entire helper, and git hooks never touch the developer's OS keychain"
 run = """
 go build -tags=authfilestore ./cmd/entire
-go build ./cmd/git-remote-entire
+go build -tags=authfilestore ./cmd/git-remote-entire
 """
 
 [tasks."test:ci"]
