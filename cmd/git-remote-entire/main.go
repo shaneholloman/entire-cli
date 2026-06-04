@@ -51,9 +51,10 @@ func main() {
 }
 
 func run(args []string) int {
-	// --version / --help only activate as the sole argument. Git always invokes
-	// the helper as `git-remote-entire <remote-name> <url>` (two args), so these
-	// can never collide with a real remote-helper invocation.
+	// --version / --help only activate as the sole argument (so os.Args has
+	// length 2). Git always invokes the helper as
+	// `git-remote-entire <remote-name> <url>` (os.Args length 3), so these can
+	// never collide with a real remote-helper invocation.
 	if len(args) == 2 {
 		if text, ok := infoFlagText(args[1], loadedVersion()); ok {
 			fmt.Fprint(os.Stdout, text)
