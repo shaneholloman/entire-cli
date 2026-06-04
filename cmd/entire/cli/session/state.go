@@ -478,12 +478,20 @@ func (s *StateStore) Save(ctx context.Context, state *State) error {
 		return fmt.Errorf("failed to create session state directory: %w", err)
 	}
 
+	// Scope the final rename to an os.Root so the session-ID-derived destination
+	// cannot escape the state directory even if validation were ever bypassed
+	// (defense in depth; the ID is already validated above).
+	root, err := os.OpenRoot(s.stateDir)
+	if err != nil {
+		return fmt.Errorf("failed to open session state directory: %w", err)
+	}
+	defer root.Close()
+
 	data, err := jsonutil.MarshalIndentWithNewline(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal session state: %w", err)
 	}
 
-	stateFile := s.stateFilePath(state.SessionID)
 	fileName := state.SessionID + ".json"
 
 	// Use a unique temp file per save. Concurrent hook processes can write the
@@ -508,8 +516,8 @@ func (s *StateStore) Save(ctx context.Context, state *State) error {
 		return fmt.Errorf("failed to close session state file: %w", err)
 	}
 
-	// Atomic rename into the validated final path.
-	if err := os.Rename(tmpFileName, stateFile); err != nil {
+	// Atomic rename into the validated final path, via os.Root.
+	if err := root.Rename(filepath.Base(tmpFileName), fileName); err != nil {
 		return fmt.Errorf("failed to rename session state file: %w", err)
 	}
 	removeTmp = false
@@ -582,11 +590,6 @@ func (s *StateStore) List(ctx context.Context) ([]*State, error) {
 		states = append(states, state)
 	}
 	return states, nil
-}
-
-// stateFilePath returns the path to a session state file.
-func (s *StateStore) stateFilePath(sessionID string) string {
-	return filepath.Join(s.stateDir, sessionID+".json")
 }
 
 // gitCommonDirCache caches the git common dir to avoid repeated subprocess calls.
