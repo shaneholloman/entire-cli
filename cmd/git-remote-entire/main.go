@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,17 @@ func main() {
 }
 
 func run(args []string) int {
+	// --version / --help only activate as the sole argument (so os.Args has
+	// length 2). Git always invokes the helper as
+	// `git-remote-entire <remote-name> <url>` (os.Args length 3), so these can
+	// never collide with a real remote-helper invocation.
+	if len(args) == 2 {
+		if text, ok := infoFlagText(args[1], loadedVersion()); ok {
+			fmt.Fprint(os.Stdout, text)
+			return 0
+		}
+	}
+
 	if len(args) < 3 {
 		fmt.Fprintf(os.Stderr, "usage: %s <remote-name> <url>\n", remotehelper.BinaryName)
 		return 128
@@ -130,6 +142,29 @@ func run(args []string) int {
 		return 128
 	}
 	return 0
+}
+
+// loadedVersion populates the build info and returns the resolved version.
+func loadedVersion() string {
+	versioninfo.Load()
+	return versioninfo.Version
+}
+
+// infoFlagText renders the output for the standalone --version / --help flags,
+// returning false for anything else. Kept pure (version passed in, no globals)
+// so it's unit-testable.
+func infoFlagText(flag, version string) (string, bool) {
+	switch flag {
+	case "--version":
+		return fmt.Sprintf("%s %s\nGo version: %s\nOS/Arch: %s/%s\n",
+			remotehelper.BinaryName, version, runtime.Version(), runtime.GOOS, runtime.GOARCH), true
+	case "--help":
+		return fmt.Sprintf("%s %s\n\n"+
+			"This is a helper which Git calls when encountering entire://... URLs.  "+
+			"For more information see https://github.com/entireio/cli.\n",
+			remotehelper.BinaryName, version), true
+	}
+	return "", false
 }
 
 // resolveProtocolVersion reads the effective protocol.version from
