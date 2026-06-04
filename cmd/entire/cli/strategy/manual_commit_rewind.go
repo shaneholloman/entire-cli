@@ -127,11 +127,11 @@ func (s *ManualCommitStrategy) GetRewindPoints(ctx context.Context, limit int) (
 }
 
 // GetLogsOnlyRewindPoints finds commits in the current branch's history that have
-// condensed session logs on the entire/checkpoints/v1 branch. These are commits that
+// condensed session logs in committed checkpoint storage. These are commits that
 // were created with session data but the shadow branch has been condensed.
 //
 // The function works by:
-// 1. Getting all checkpoints from the entire/checkpoints/v1 branch
+// 1. Getting all checkpoints from committed checkpoint storage
 // 2. Building a map of checkpoint ID -> checkpoint info
 // 3. Scanning the current branch history for commits with Entire-Checkpoint trailers
 // 4. Matching by checkpoint ID (stable across amend/rebase)
@@ -142,7 +142,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 	}
 	defer repo.Close()
 
-	// Get all checkpoints from entire/checkpoints/v1 branch
+	// Get all checkpoints from committed checkpoint storage
 	checkpoints, err := s.listCheckpoints(ctx)
 	if err != nil {
 		// No checkpoints yet is fine
@@ -162,8 +162,9 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		}
 	}
 
-	// Get metadata branch tree for reading session prompts (best-effort, ignore errors)
-	metadataTree, _ := GetMetadataBranchTree(repo) //nolint:errcheck // Best-effort for session prompts
+	// Get committed metadata read tree for session prompts (best-effort, ignore errors)
+	readRef := cpkg.ResolveCommittedRefs(ctx).Read
+	metadataTree, _ := GetMetadataRefTree(repo, readRef) //nolint:errcheck // Best-effort for session prompts
 
 	head, err := repo.Head()
 	if err != nil {
@@ -211,16 +212,23 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		var sessionPrompt string
 		var sessionPrompts []string
 		if metadataTree != nil {
-			checkpointPath := paths.CheckpointPath(cpInfo.CheckpointID) //nolint:staticcheck // deprecated but migration deferred
+			checkpointPath := cpInfo.CheckpointID.Path()
 			// For multi-session checkpoints, read all prompts
 			if cpInfo.SessionCount > 1 && len(cpInfo.SessionIDs) > 1 {
 				sessionPrompts = ReadAllSessionPromptsFromTree(metadataTree, checkpointPath, cpInfo.SessionCount, cpInfo.SessionIDs)
-				// Use the last (most recent) prompt as the main session prompt
-				if len(sessionPrompts) > 0 {
-					sessionPrompt = sessionPrompts[len(sessionPrompts)-1]
+				// Prefer the latest non-empty prompt: the most-recent session may
+				// have been recorded without a prompt, but an earlier one usually has one.
+				for i := len(sessionPrompts) - 1; i >= 0; i-- {
+					if sessionPrompts[i] != "" {
+						sessionPrompt = sessionPrompts[i]
+						break
+					}
 				}
 			} else {
-				sessionPrompt = ReadSessionPromptFromTree(metadataTree, checkpointPath)
+				sessionPrompt = ReadLatestSessionPromptFromCommittedTree(metadataTree, cpInfo.CheckpointID, cpInfo.SessionCount)
+				if sessionPrompt == "" {
+					sessionPrompt = ReadSessionPromptFromTree(metadataTree, checkpointPath)
+				}
 				if sessionPrompt != "" {
 					sessionPrompts = []string{sessionPrompt}
 				}
