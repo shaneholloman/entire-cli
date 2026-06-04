@@ -373,6 +373,19 @@ func TestDispatchLifecycleEvent_RejectsTraversalSessionID(t *testing.T) {
 			t.Errorf("%v event: error = %q, want \"invalid session ID\"", evType, err)
 		}
 	}
+
+	// ToolUseID and SubagentID also build filesystem paths (task metadata dir,
+	// subagent transcript path) and must be rejected too.
+	if err := DispatchLifecycleEvent(context.Background(), ag, &agent.Event{
+		Type: agent.SubagentEnd, SessionID: "ok-session", ToolUseID: "../../evil", SessionRef: "/dev/null",
+	}); err == nil || !strings.Contains(err.Error(), "invalid tool use ID") {
+		t.Errorf("traversal tool use ID: error = %v, want \"invalid tool use ID\"", err)
+	}
+	if err := DispatchLifecycleEvent(context.Background(), ag, &agent.Event{
+		Type: agent.SubagentEnd, SessionID: "ok-session", SubagentID: "../../evil", SessionRef: "/dev/null",
+	}); err == nil || !strings.Contains(err.Error(), "invalid subagent ID") {
+		t.Errorf("traversal subagent ID: error = %v, want \"invalid subagent ID\"", err)
+	}
 }
 
 // --- handleLifecycleSessionStart tests ---

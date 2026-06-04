@@ -53,16 +53,27 @@ func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Ev
 		return errors.New("event cannot be nil")
 	}
 
-	// Reject path-unsafe session IDs once, here, before any handler uses the ID
-	// to build filesystem paths. Handlers historically validated individually,
+	// Reject path-unsafe identifiers once, here, before any handler uses them to
+	// build filesystem paths. Handlers historically validated individually,
 	// which is fragile — handleLifecycleTurnEnd builds .entire/metadata/<id>/
-	// via os.MkdirAll + os.WriteFile without its own check. Centralizing the
-	// guard covers every handler (and any future one) uniformly. Empty IDs pass
-	// through: handlers apply their own empty-handling (e.g. TurnEnd falls back
-	// to a safe constant).
+	// via os.MkdirAll + os.WriteFile, and handleLifecycleSubagentEnd builds a
+	// subagent transcript path from SubagentID and reads it, without their own
+	// checks. Centralizing the guard covers every handler (and any future one)
+	// uniformly. Empty IDs pass through: handlers apply their own empty-handling
+	// (e.g. TurnEnd falls back to a safe constant; SubagentEnd skips the path).
 	if event.SessionID != "" {
 		if err := validation.ValidateSessionID(event.SessionID); err != nil {
 			return fmt.Errorf("invalid session ID in %s event: %w", event.Type, err)
+		}
+	}
+	if event.ToolUseID != "" {
+		if err := validation.ValidateToolUseID(event.ToolUseID); err != nil {
+			return fmt.Errorf("invalid tool use ID in %s event: %w", event.Type, err)
+		}
+	}
+	if event.SubagentID != "" {
+		if err := validation.ValidateAgentID(event.SubagentID); err != nil {
+			return fmt.Errorf("invalid subagent ID in %s event: %w", event.Type, err)
 		}
 	}
 
