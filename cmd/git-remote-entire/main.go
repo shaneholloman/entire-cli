@@ -279,7 +279,7 @@ func resolveEnvTokenCreds(ctx context.Context, envToken, clusterHost, clusterBas
 		return nil, err //nolint:wrapcheck // ResolveClusterCores returns a user-facing discovery error
 	}
 	if !coreTrusted(coreURL, cores) {
-		return nil, fmt.Errorf("%s aud %q is not a trusted core for cluster %s (advertised: %s); the token belongs to a different cluster",
+		return nil, fmt.Errorf("%s aud %q is not a trusted login server for cluster %s (advertised: %s); the token belongs to a different cluster",
 			auth.EnvTokenVar, coreURL, clusterHost, strings.Join(cores, ", "))
 	}
 	debuglog.Printf("authenticating via %s; core=%s", auth.EnvTokenVar, coreURL)
