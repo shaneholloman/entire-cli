@@ -95,45 +95,44 @@ func TestIsTerminalWriter_Pipe(t *testing.T) {
 	}
 }
 
-func TestTermLacksANSI(t *testing.T) {
+// TestShouldStyle_Gates exercises the pure decision with a simulated
+// terminal writer (isTerminalWriter=true) so the NO_COLOR and TERM gates are
+// actually reached — `go test` has no real terminal, so calling ShouldStyle
+// directly would short-circuit on the terminal check and pass vacuously.
+// TERM=cygwin case is the regression test for GH #1267.
+func TestShouldStyle_Gates(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
-		term string
-		want bool
+		name       string
+		noColor    string
+		term       string
+		isTerminal bool
+		want       bool
 	}{
-		{"cygwin", true},
-		{"xterm-256color", false},
-		{"dumb", false},
-		{"", false},
+		{"terminal with ANSI-capable TERM", "", "xterm-256color", true, true},
+		{"TERM=cygwin disables on a terminal", "", "cygwin", true, false},
+		{"NO_COLOR disables on a terminal", "1", "xterm-256color", true, false},
+		{"non-terminal writer disables", "", "xterm-256color", false, false},
+		{"TERM=dumb defers to the terminal check", "", "dumb", true, true},
+		{"empty TERM defers to the terminal check", "", "", true, true},
 	}
 	for _, c := range cases {
-		t.Run(c.term, func(t *testing.T) {
-			t.Setenv("TERM", c.term)
-			if got := termLacksANSI(); got != c.want {
-				t.Errorf("termLacksANSI() with TERM=%q = %v; want %v", c.term, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldStyle(c.noColor, c.term, c.isTerminal); got != c.want {
+				t.Errorf("shouldStyle(%q, %q, %v) = %v; want %v",
+					c.noColor, c.term, c.isTerminal, got, c.want)
 			}
 		})
 	}
 }
 
-// TestShouldStyle exercises the disabling gates; the enabling path needs a
-// real terminal writer, which `go test` doesn't provide.
-func TestShouldStyle(t *testing.T) {
-	t.Run("NO_COLOR disables", func(t *testing.T) {
-		t.Setenv("NO_COLOR", "1")
-		if ShouldStyle(os.Stdout) {
-			t.Error("ShouldStyle(os.Stdout) = true with NO_COLOR set; want false")
-		}
-	})
-	t.Run("TERM=cygwin disables", func(t *testing.T) {
-		t.Setenv("TERM", "cygwin")
-		if ShouldStyle(os.Stdout) {
-			t.Error("ShouldStyle(os.Stdout) = true with TERM=cygwin; want false")
-		}
-	})
-	t.Run("non-terminal writer disables", func(t *testing.T) {
-		t.Setenv("TERM", "xterm-256color")
-		if ShouldStyle(&bytes.Buffer{}) {
-			t.Error("ShouldStyle(*bytes.Buffer) = true; want false")
-		}
-	})
+// TestShouldStyle_ReadsEnv verifies the exported wrapper plumbs the process
+// env into the decision: NO_COLOR is the first gate, so it disables styling
+// regardless of whether stdout is a terminal.
+func TestShouldStyle_ReadsEnv(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	if ShouldStyle(os.Stdout) {
+		t.Error("ShouldStyle(os.Stdout) = true with NO_COLOR set; want false")
+	}
 }

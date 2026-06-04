@@ -97,20 +97,28 @@ func IsTerminalWriter(w io.Writer) bool {
 // legacy consoles that can't handle ANSI escapes are excluded, and otherwise
 // the answer is whether w is a terminal.
 func ShouldStyle(w io.Writer) bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	if termLacksANSI() {
-		return false
-	}
-	return IsTerminalWriter(w)
+	return shouldStyle(os.Getenv("NO_COLOR"), os.Getenv("TERM"), IsTerminalWriter(w))
 }
 
-// termLacksANSI reports whether the current TERM identifies a legacy console
-// that does not reliably handle ANSI escape sequences. The canonical case is
+// shouldStyle is the pure decision behind ShouldStyle, split out so tests can
+// exercise the NO_COLOR/TERM gates with a simulated terminal writer — `go
+// test` never has a real one, so testing through ShouldStyle would
+// short-circuit on the terminal check and never reach the earlier gates.
+func shouldStyle(noColor, term string, isTerminalWriter bool) bool {
+	if noColor != "" {
+		return false
+	}
+	if termLacksANSI(term) {
+		return false
+	}
+	return isTerminalWriter
+}
+
+// termLacksANSI reports whether term identifies a legacy console that does
+// not reliably handle ANSI escape sequences. The canonical case is
 // TERM=cygwin: writing the ESC byte (0x1B) ends up rendered as the CP437
 // glyph U+2190 LEFTWARDS ARROW ("←") instead of starting an SGR sequence, so
 // styled output appears as literal text like "←[32m●←[m" (see GH #1267).
-func termLacksANSI() bool {
-	return os.Getenv("TERM") == "cygwin"
+func termLacksANSI(term string) bool {
+	return term == "cygwin"
 }

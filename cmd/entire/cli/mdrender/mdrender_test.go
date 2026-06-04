@@ -107,21 +107,6 @@ func TestRenderForWriter_NoColorEnvForcesRaw(t *testing.T) {
 	}
 }
 
-// TERM=cygwin must fall back to raw markdown; see interactive.termLacksANSI.
-// Regression test for GH #1267.
-func TestRenderForWriter_TermCygwinForcesRaw(t *testing.T) {
-	t.Setenv("TERM", "cygwin")
-
-	const md = "# Heading"
-	out, err := mdrender.RenderForWriter(&bytes.Buffer{}, md)
-	if err != nil {
-		t.Fatalf("RenderForWriter: %v", err)
-	}
-	if out != md {
-		t.Errorf("expected raw markdown when TERM=cygwin, got: %q", out)
-	}
-}
-
 // TestRender_EmptyInputDoesNotPanic verifies the renderer handles edge cases
 // (empty string, whitespace-only) without erroring.
 func TestRender_EmptyInputDoesNotPanic(t *testing.T) {
