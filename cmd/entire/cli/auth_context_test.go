@@ -11,6 +11,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/auth"
 	"github.com/entireio/cli/internal/entireclient/tokenstore"
+	"github.com/spf13/cobra"
 )
 
 // TestResolveStatusTarget_PrefersActiveContext pins the multi-core fix: status
@@ -86,6 +87,74 @@ func TestRunAuthContexts(t *testing.T) {
 	}
 	if !strings.Contains(got, "alice") {
 		t.Fatalf("listing = %q, want handle alice", got)
+	}
+}
+
+func TestCompleteContextNames(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", cfgDir)
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	exp := time.Now().Add(time.Hour).Unix()
+
+	// Two contexts; the second one recorded with activate=true is current.
+	if _, err := auth.RecordLoginContext(makeContextJWT(t, fmt.Sprintf(`{"iss":"https://core-a.example.com","handle":"alice","exp":%d}`, exp)), "", false); err != nil {
+		t.Fatalf("record core-a: %v", err)
+	}
+	currentName, err := auth.RecordLoginContext(makeContextJWT(t, fmt.Sprintf(`{"iss":"https://core-b.example.com","handle":"bob","exp":%d}`, exp)), "", true)
+	if err != nil {
+		t.Fatalf("record core-b: %v", err)
+	}
+
+	got, directive := completeContextNames(nil, nil, "")
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("directive = %v, want NoFileComp", directive)
+	}
+	if len(got) != 2 {
+		t.Fatalf("completions = %v, want 2 entries", got)
+	}
+
+	// Each entry is "name\tdescription" carrying handle and core URL; the
+	// active context is annotated "(active)" and no other entry is.
+	var activeCount int
+	for _, entry := range got {
+		name, desc, found := strings.Cut(entry, "\t")
+		if !found {
+			t.Fatalf("entry %q missing tab-separated description", entry)
+		}
+		if name == currentName {
+			if !strings.Contains(desc, "(active)") {
+				t.Fatalf("active entry %q missing (active) marker", entry)
+			}
+			if !strings.Contains(desc, "bob") || !strings.Contains(desc, "core-b.example.com") {
+				t.Fatalf("active entry %q missing handle/core URL", entry)
+			}
+			activeCount++
+		} else if strings.Contains(desc, "(active)") {
+			t.Fatalf("non-active entry %q wrongly marked (active)", entry)
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("want exactly one (active) entry, got %d", activeCount)
+	}
+
+	// Past the single positional: nothing to complete.
+	got, directive = completeContextNames(nil, []string{"already"}, "")
+	if got != nil || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("with an arg present, want (nil, NoFileComp), got (%v, %v)", got, directive)
+	}
+}
+
+func TestCompleteContextNames_NoContexts(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("ENTIRE_CONFIG_DIR", cfgDir)
+	restore := tokenstore.UseFileBackendForTesting(filepath.Join(t.TempDir(), "tokens.json"))
+	t.Cleanup(restore)
+
+	got, directive := completeContextNames(nil, nil, "")
+	if len(got) != 0 || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("no contexts: want (empty, NoFileComp), got (%v, %v)", got, directive)
 	}
 }
 

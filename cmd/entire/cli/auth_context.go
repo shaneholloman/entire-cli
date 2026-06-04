@@ -31,7 +31,8 @@ func newAuthUseCmd() *cobra.Command {
 			"Control-plane commands (auth status/list/revoke, org/project/repo/grant) still\n" +
 			"target the configured auth host (ENTIRE_AUTH_BASE_URL / the default), so\n" +
 			"switching to a context on a different login server does not retarget them yet.",
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeContextNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := auth.SetCurrentContext(args[0]); err != nil {
 				return err //nolint:wrapcheck // already a user-facing message
@@ -41,6 +42,34 @@ func newAuthUseCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// completeContextNames is the ValidArgsFunction for commands taking a single
+// <context> positional. It offers the stored context names, each annotated
+// (shell-completion descriptions, after a tab) with handle, core URL, and an
+// "(active)" marker for the current context. Errors are swallowed because
+// completion runs on every TAB press; a failed read just yields no suggestions.
+func completeContextNames(_ *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+	if len(args) != 0 {
+		// <context> is a single positional; nothing to complete past it.
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	all, current, err := auth.Contexts()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	out := make([]string, 0, len(all))
+	for _, c := range all {
+		desc := c.Handle
+		if c.CoreURL != "" {
+			desc += " " + c.CoreURL
+		}
+		if c.Name == current {
+			desc += " (active)"
+		}
+		out = append(out, c.Name+"\t"+desc)
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
 // warnIfCrossCoreContext warns when the now-active context authenticates
