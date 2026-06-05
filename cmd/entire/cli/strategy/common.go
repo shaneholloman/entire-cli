@@ -77,7 +77,7 @@ func EnsureSetup(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize vercel settings: %w", err)
 	}
 	if err := EnsurePrimaryRef(ctx, repo); err != nil {
-		return fmt.Errorf("failed to ensure metadata branch: %w", err)
+		return fmt.Errorf("failed to ensure primary metadata ref: %w", err)
 	}
 
 	// Install generic hooks (they delegate to strategy at runtime)

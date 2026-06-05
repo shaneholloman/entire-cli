@@ -33,7 +33,7 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 
 	// Thread the span's context into the push so the network push and any
 	// fetch+rebase recovery nest beneath it as child steps in the perf trace.
-	pushCtx, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoints_branch")
+	pushCtx, pushCheckpointsSpan := perf.Start(ctx, "push_checkpoint_refs")
 	defer pushCheckpointsSpan.End()
 	for _, ref := range refs.Push {
 		if err := pushRefIfNeeded(pushCtx, ps.pushTarget(), ref); err != nil {
