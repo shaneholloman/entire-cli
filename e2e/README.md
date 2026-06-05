@@ -25,6 +25,7 @@ e2e/
 ├── agents/       # Agent abstraction (Agent interface, tmux sessions, concurrency gates)
 ├── bootstrap/    # CI pre-test setup (auth config, warmup)
 ├── entire/       # `entire` CLI wrapper (enable, rewind, etc.)
+├── examples/     # Manual golden-path scripts, not run by CI
 ├── exploratory/  # Experimental tests, not run by CI
 ├── tests/        # Blessed test files (run by CI)
 └── testutil/     # Repo setup, assertions, artifact capture
@@ -36,6 +37,7 @@ e2e/
 - All operations go through `RepoState` (`s.RunPrompt`, `s.Git`) so they're logged to `console.log`.
 - Use the `entire` package for CLI interactions, not raw `exec.Command`.
 - Skip tests pending CLI fixes with `t.Skip("ENT-XXX: reason")`.
+- Put manual, service-backed golden paths under `e2e/examples/`; they are documentation and release-verification scripts, not CI tests.
 
 ## Adding a New Agent
 

@@ -2,33 +2,6 @@ package api
 
 import "time"
 
-// TrailReviewStartRequest is the body for POST /api/v1/trails/{trail_id}/reviews.
-type TrailReviewStartRequest struct {
-	HeadSHA *string `json:"head_sha,omitempty"`
-	BaseSHA *string `json:"base_sha,omitempty"`
-	BaseRef *string `json:"base_ref,omitempty"`
-	HeadRef *string `json:"head_ref,omitempty"`
-}
-
-// TrailReviewStartResponse is returned after creating or reusing a code review.
-type TrailReviewStartResponse struct {
-	ReviewID       string                 `json:"review_id"`
-	TrailID        string                 `json:"trail_id"`
-	RepositoryID   string                 `json:"repository_id"`
-	CodeVersionID  string                 `json:"code_version_id"`
-	BaseSHA        *string                `json:"base_sha"`
-	HeadSHA        *string                `json:"head_sha"`
-	EventStreamURL string                 `json:"event_stream_url"`
-	DiffURL        string                 `json:"diff_url"`
-	FilesURL       string                 `json:"files_url"`
-	Limits         TrailReviewStartLimits `json:"limits"`
-}
-
-// TrailReviewStartLimits describes per-review API limits.
-type TrailReviewStartLimits struct {
-	MaxCommentsPerBatch int `json:"max_comments_per_batch"`
-}
-
 // TrailReviewStateResponse is returned by GET /api/v1/trails/{trail_id}/reviews/{id}.
 type TrailReviewStateResponse struct {
 	Review      TrailReview            `json:"review"`
@@ -105,6 +78,42 @@ type TrailReviewComment struct {
 	OutgoingLinks             []TrailReviewOutgoingLink    `json:"outgoing_links,omitempty"`
 }
 
+// TrailReviewCommentCreateRequest creates an agent-native review finding on a trail.
+type TrailReviewCommentCreateRequest struct {
+	Title            *string                                   `json:"title,omitempty"`
+	Body             string                                    `json:"body"`
+	Severity         *string                                   `json:"severity,omitempty"`
+	Confidence       *float64                                  `json:"confidence,omitempty"`
+	ClientID         *string                                   `json:"client_id,omitempty"`
+	Location         TrailReviewLocationCreateRequest          `json:"location"`
+	SuggestedChanges []TrailReviewSuggestedChangeCreateRequest `json:"suggested_changes,omitempty"`
+}
+
+// TrailReviewLocationCreateRequest identifies where a new finding applies.
+type TrailReviewLocationCreateRequest struct {
+	Granularity  string  `json:"granularity"`
+	FilePath     *string `json:"file_path,omitempty"`
+	StartLine    *int    `json:"start_line,omitempty"`
+	StartColumn  *int    `json:"start_column,omitempty"`
+	EndLine      *int    `json:"end_line,omitempty"`
+	EndColumn    *int    `json:"end_column,omitempty"`
+	SelectedText *string `json:"selected_text,omitempty"`
+	NearbyText   *string `json:"nearby_text,omitempty"`
+	Language     *string `json:"language,omitempty"`
+}
+
+// TrailReviewSuggestedChangeCreateRequest attaches a suggested fix to a new finding.
+type TrailReviewSuggestedChangeCreateRequest struct {
+	ChangeType        string  `json:"change_type"`
+	Patch             *string `json:"patch,omitempty"`
+	Instruction       *string `json:"instruction,omitempty"`
+	ExpectedFilePath  *string `json:"expected_file_path,omitempty"`
+	ExpectedFileHash  *string `json:"expected_file_hash,omitempty"`
+	ExpectedStartLine *int    `json:"expected_start_line,omitempty"`
+	ExpectedEndLine   *int    `json:"expected_end_line,omitempty"`
+	ExpectedLines     *string `json:"expected_lines,omitempty"`
+}
+
 // TrailReviewLocation identifies where a finding applies.
 type TrailReviewLocation struct {
 	ID              string  `json:"id"`
@@ -154,26 +163,4 @@ type TrailReviewCommentPatchRequest struct {
 	Confidence   *float64 `json:"confidence,omitempty"`
 	Status       string   `json:"status,omitempty"`
 	StatusReason *string  `json:"status_reason,omitempty"`
-}
-
-// TrailSubmitReviewRequest is the body for POST /api/v1/trails/{host}/{owner}/{repo}/{number}/review.
-type TrailSubmitReviewRequest struct {
-	Event string `json:"event"`
-	Body  string `json:"body,omitempty"`
-}
-
-// TrailSubmitReviewResponse is returned after approving or requesting changes on a trail.
-type TrailSubmitReviewResponse struct {
-	OK     bool              `json:"ok"`
-	Review TrailSubmitReview `json:"review"`
-}
-
-// TrailSubmitReview is a human trail review verdict.
-type TrailSubmitReview struct {
-	ID        string    `json:"id"`
-	Author    string    `json:"author"`
-	Event     string    `json:"event"`
-	Body      *string   `json:"body"`
-	CommitSHA string    `json:"commit_sha"`
-	CreatedAt time.Time `json:"created_at"`
 }

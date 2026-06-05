@@ -48,7 +48,7 @@ func (s *ManualCommitStrategy) getCheckpointStore(repo *git.Repository) *checkpo
 	return store
 }
 
-func (s *ManualCommitStrategy) committedCheckpointStore(ctx context.Context, repo *git.Repository) (checkpoint.CommittedListReader, error) { //nolint:ireturn // Strategy callers need the selected committed checkpoint reader implementation.
+func (s *ManualCommitStrategy) committedCheckpointStore(ctx context.Context, repo *git.Repository) (checkpoint.CommittedListReader, error) {
 	WarnIfMetadataDisconnected()
 	store, err := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{
 		BlobFetcher: s.blobFetcher,
