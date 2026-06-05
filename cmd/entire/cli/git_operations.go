@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/remote"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 
 	"github.com/go-git/go-git/v6"
@@ -428,7 +428,11 @@ type fetchMetadataOpts struct {
 }
 
 func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error {
-	branchName := paths.MetadataBranchName
+	refs := checkpoint.ResolveCommittedRefs(ctx)
+	if !refs.Primary.IsBranch() {
+		return fmt.Errorf("primary metadata ref %s is not a branch", refs.Primary)
+	}
+	branchName := refs.Primary.Short()
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -465,77 +469,10 @@ func fetchMetadataFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error
 	if err != nil {
 		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
 	}
-	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, plumbing.NewBranchReferenceName(branchName), remoteRef.Hash()); err != nil {
+	if err := strategy.SafelyAdvanceLocalRef(ctx, repo, refs.Primary, remoteRef.Hash()); err != nil {
 		return fmt.Errorf("failed to advance local %s branch: %w", branchName, err)
 	}
-	return nil
-}
-
-// FetchV2MainTreeOnly fetches the v2 /main ref for read-only lookup paths.
-//
-// Unlike the v1 metadata branch, v2 custom refs do not have a remote-tracking
-// fallback tree. Avoid --depth=1 here: a shallow fetch can make a remote
-// descendant look unrelated to go-git, causing SafelyAdvanceLocalRef to
-// preserve a stale local ref and explain/resume to miss freshly fetched
-// checkpoints.
-func FetchV2MainTreeOnly(ctx context.Context) error {
-	return fetchV2MainFromOrigin(ctx, fetchMetadataOpts{})
-}
-
-// FetchV2MainRef fetches the v2 /main ref from origin with full blob content.
-// Does NOT --unshallow: see FetchMetadataBranch for the reasoning.
-func FetchV2MainRef(ctx context.Context) error {
-	return fetchV2MainFromOrigin(ctx, fetchMetadataOpts{NoFilter: true})
-}
-
-func fetchV2MainFromOrigin(ctx context.Context, fopts fetchMetadataOpts) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	fetchTarget, err := remote.ResolveFetchTarget(ctx, "origin")
-	if err != nil {
-		return fmt.Errorf("failed to resolve fetch target: %w", err)
-	}
-
-	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, strategy.V2MainFetchTmpRef)
-
-	output, fetchErr := remote.Fetch(ctx, remote.FetchOptions{
-		Remote:    fetchTarget,
-		RefSpecs:  []string{refSpec},
-		NoTags:    true,
-		NoFilter:  fopts.NoFilter,
-		Shallow:   fopts.Shallow,
-		Unshallow: fopts.Unshallow,
-	})
-	if fetchErr != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("v2 fetch timed out after 2 minutes")
-		}
-		return formatFilteredFetchError("failed to fetch v2 /main", fetchTarget, output, fetchErr)
-	}
-
-	if err := strategy.PromoteTmpRefSafely(ctx, strategy.V2MainFetchTmpRef, paths.V2MainRefName, "v2 /main"); err != nil {
-		return fmt.Errorf("origin v2 /main fetch: %w", err)
-	}
-	return nil
-}
-
-// FetchV2MetadataFromCheckpointRemote fetches the v2 /main ref from the
-// configured checkpoint_remote URL.
-// Returns an error if the fetch fails or no checkpoint_remote is configured.
-func FetchV2MetadataFromCheckpointRemote(ctx context.Context) error {
-	configured := remote.Configured(ctx)
-	if !configured {
-		return errors.New("no checkpoint_remote configured")
-	}
-	checkpointURL, err := remote.FetchURL(ctx)
-	if err != nil {
-		return fmt.Errorf("checkpoint_remote configured but could not resolve URL: %w", err)
-	}
-
-	if err := strategy.FetchV2MainFromURL(ctx, checkpointURL); err != nil {
-		return fmt.Errorf("failed to fetch v2 /main from checkpoint remote: %w", err)
-	}
+	strategy.MirrorCommittedMetadataRefBestEffort(ctx, repo)
 	return nil
 }
 

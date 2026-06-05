@@ -1155,6 +1155,10 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 		return fmt.Errorf("persisting combined attribution: %w", err)
 	}
 
+	// Combined attribution is a committed write in the post-commit hook, so the
+	// v1 custom ref must track it too when opted in (local-only, never pushed).
+	MirrorCommittedMetadataRefBestEffort(ctx, repo)
+
 	return nil
 }
 
@@ -2740,6 +2744,9 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		prompts = readPromptsFromFilesystem(ctx, state.SessionID)
 	}
 
+	ag, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; ExtractSkillEvents handles nil
+	skillEvents := mergeSkillEvents(state.SkillEvents, withSkillEventTurnID(agent.ExtractSkillEvents(ctx, ag, fullTranscript, 0), state.TurnID))
+
 	// Redact secrets before writing. Checkpoint store methods require
 	// pre-redacted in-memory transcript content from callers. The live
 	// transcript on disk is still treated as raw/untrusted input, so redact it
@@ -2785,6 +2792,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			Transcript:       redactedTranscript,
 			Prompts:          prompts,
 			Agent:            state.AgentType,
+			SkillEvents:      skillEvents,
 			PrecomputedBlobs: precomputed,
 		}
 
@@ -2803,6 +2811,11 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			slog.String("session_id", state.SessionID),
 		)
 	}
+
+	// Mirror the finalized v1 metadata to the v1 custom ref when opted in
+	// (local-only, never pushed; failures are logged, not fatal). Once after the
+	// loop is enough — it tracks v1's final commit.
+	MirrorCommittedMetadataRefBestEffort(ctx, repo)
 
 	// Clear turn checkpoint IDs. Do NOT update CheckpointTranscriptStart here — it was
 	// already set correctly by PostCommit: condenseAndUpdateState sets it to the total

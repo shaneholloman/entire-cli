@@ -156,23 +156,6 @@ func (env *TestEnv) RunCLIWithError(args ...string) (string, error) {
 	return string(output), err
 }
 
-// RunCLIWithStdin runs the CLI with stdin input.
-func (env *TestEnv) RunCLIWithStdin(stdin string, args ...string) string {
-	env.T.Helper()
-
-	// Run CLI with stdin using the shared binary, detached from controlling TTY.
-	cmd := execx.NonInteractive(context.Background(), getTestBinary(), args...)
-	cmd.Dir = env.RepoDir
-	cmd.Env = env.cliEnv()
-	cmd.Stdin = strings.NewReader(stdin)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		env.T.Fatalf("CLI command failed: %v\nArgs: %v\nOutput: %s", err, args, output)
-	}
-	return string(output)
-}
-
 // NewRepoEnv creates a TestEnv with an initialized git repo and Entire.
 // This is a convenience factory for tests that need a basic repo setup.
 func NewRepoEnv(t *testing.T) *TestEnv {
@@ -339,12 +322,6 @@ func (env *TestEnv) InitEntireWithAgent(_ types.AgentName) {
 	env.initEntireInternal(nil)
 }
 
-// InitEntireWithAgentAndOptions initializes Entire with the specified strategy, agent, and options.
-func (env *TestEnv) InitEntireWithAgentAndOptions(_ types.AgentName, strategyOptions map[string]any) {
-	env.T.Helper()
-	env.initEntireInternal(strategyOptions)
-}
-
 // initEntireInternal is the common implementation for InitEntire variants.
 func (env *TestEnv) initEntireInternal(strategyOptions map[string]any) {
 	env.T.Helper()
@@ -487,37 +464,6 @@ func (env *TestEnv) GitCommit(message string) {
 	}
 }
 
-// GitCommitWithMetadata creates a commit with Entire-Metadata trailer.
-// This simulates commits created by the commit strategy.
-func (env *TestEnv) GitCommitWithMetadata(message, metadataDir string) {
-	env.T.Helper()
-
-	// Format message with metadata trailer
-	fullMessage := message + "\n\nEntire-Metadata: " + metadataDir + "\n"
-
-	repo, err := gitrepo.OpenPath(env.RepoDir)
-	if err != nil {
-		env.T.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	worktree, err := repo.Worktree()
-	if err != nil {
-		env.T.Fatalf("failed to get worktree: %v", err)
-	}
-
-	_, err = worktree.Commit(fullMessage, &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-	})
-	if err != nil {
-		env.T.Fatalf("failed to commit: %v", err)
-	}
-}
-
 // GitCommitWithCheckpointID creates a commit with Entire-Checkpoint trailer.
 // This simulates commits.
 func (env *TestEnv) GitCommitWithCheckpointID(message, checkpointID string) {
@@ -525,42 +471,6 @@ func (env *TestEnv) GitCommitWithCheckpointID(message, checkpointID string) {
 
 	// Format message with checkpoint trailer
 	fullMessage := message + "\n\nEntire-Checkpoint: " + checkpointID + "\n"
-
-	repo, err := gitrepo.OpenPath(env.RepoDir)
-	if err != nil {
-		env.T.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	worktree, err := repo.Worktree()
-	if err != nil {
-		env.T.Fatalf("failed to get worktree: %v", err)
-	}
-
-	_, err = worktree.Commit(fullMessage, &git.CommitOptions{
-		Author: &object.Signature{
-			Name:  "Test User",
-			Email: "test@example.com",
-			When:  time.Now(),
-		},
-	})
-	if err != nil {
-		env.T.Fatalf("failed to commit: %v", err)
-	}
-}
-
-// GitCommitWithMultipleSessions creates a commit with multiple Entire-Session trailers.
-// This simulates merge commits that combine work from multiple sessions.
-func (env *TestEnv) GitCommitWithMultipleSessions(message string, sessionIDs []string) {
-	env.T.Helper()
-
-	// Format message with multiple session trailers
-	fullMessage := message + "\n\n"
-	var fullMessageSb404 strings.Builder
-	for _, sessionID := range sessionIDs {
-		fullMessageSb404.WriteString("Entire-Session: " + sessionID + "\n")
-	}
-	fullMessage += fullMessageSb404.String()
 
 	repo, err := gitrepo.OpenPath(env.RepoDir)
 	if err != nil {
@@ -1000,47 +910,6 @@ func (env *TestEnv) ReadFileFromBranch(branchName, filePath string) (string, boo
 	return content, true
 }
 
-// ReadFileFromRef reads a file's content from a specific ref's tree.
-// Unlike ReadFileFromBranch, this takes a full ref name (e.g., "refs/entire/checkpoints/v2/main")
-// and does not prepend "refs/heads/".
-// Returns the content and true if found, empty string and false if not found.
-func (env *TestEnv) ReadFileFromRef(refName, filePath string) (string, bool) {
-	env.T.Helper()
-
-	repo, err := gitrepo.OpenPath(env.RepoDir)
-	if err != nil {
-		env.T.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	ref, err := repo.Reference(plumbing.ReferenceName(refName), true)
-	if err != nil {
-		return "", false
-	}
-
-	commit, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		return "", false
-	}
-
-	tree, err := commit.Tree()
-	if err != nil {
-		return "", false
-	}
-
-	file, err := tree.File(filePath)
-	if err != nil {
-		return "", false
-	}
-
-	content, err := file.Contents()
-	if err != nil {
-		return "", false
-	}
-
-	return content, true
-}
-
 // AssertCheckpointContainsSession verifies that the checkpoint summary includes
 // a session with the given session ID by reading per-session metadata from the
 // metadata branch.
@@ -1080,20 +949,6 @@ func (env *TestEnv) sessionMetadataMatchesID(metadataPath, sessionID string) boo
 		return false
 	}
 	return meta.SessionID == sessionID
-}
-
-// RefExists checks if a ref exists in the repository.
-func (env *TestEnv) RefExists(refName string) bool {
-	env.T.Helper()
-
-	repo, err := gitrepo.OpenPath(env.RepoDir)
-	if err != nil {
-		env.T.Fatalf("failed to open git repo: %v", err)
-	}
-	defer repo.Close()
-
-	_, err = repo.Reference(plumbing.ReferenceName(refName), true)
-	return err == nil
 }
 
 // GetLatestCommitMessageOnBranch returns the commit message of the latest commit on the given branch.

@@ -451,6 +451,8 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 		CheckpointTranscriptStart:   opts.CheckpointTranscriptStart,
 		TranscriptLinesAtStart:      opts.CheckpointTranscriptStart, // Deprecated: kept for backward compat
 		TokenUsage:                  opts.TokenUsage,
+		SkillEventsVersion:          skillEventsVersion(opts.SkillEvents),
+		SkillEvents:                 opts.SkillEvents,
 		SessionMetrics:              opts.SessionMetrics,
 		InitialAttribution:          opts.InitialAttribution,
 		PromptAttributions:          opts.PromptAttributionsJSON,
@@ -666,6 +668,13 @@ func checkpointCreatedAt(opts WriteCommittedOptions) time.Time {
 		return time.Now().UTC()
 	}
 	return opts.CreatedAt.UTC()
+}
+
+func skillEventsVersion(events []agent.SkillEvent) int {
+	if len(events) == 0 {
+		return 0
+	}
+	return 1
 }
 
 // readJSONFromBlob reads JSON from a blob hash and decodes it to the given type.
@@ -1526,6 +1535,12 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		}
 	}
 
+	if len(opts.SkillEvents) > 0 {
+		if err := s.replaceSkillEvents(opts.SkillEvents, sessionPath, entries); err != nil {
+			return fmt.Errorf("failed to replace skill events: %w", err)
+		}
+	}
+
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
 	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
 	if err != nil {
@@ -1549,6 +1564,36 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 
+	return nil
+}
+
+func (s *GitStore) replaceSkillEvents(skillEvents []agent.SkillEvent, sessionPath string, entries map[string]object.TreeEntry) error {
+	metadataPath := sessionPath + paths.MetadataFileName
+	entry, exists := entries[metadataPath]
+	if !exists {
+		return fmt.Errorf("session metadata not found at %s", metadataPath)
+	}
+
+	metadata, err := s.readMetadataFromBlob(entry.Hash)
+	if err != nil {
+		return fmt.Errorf("read session metadata: %w", err)
+	}
+	metadata.SkillEventsVersion = skillEventsVersion(skillEvents)
+	metadata.SkillEvents = skillEvents
+
+	metadataJSON, err := jsonutil.MarshalIndentWithNewline(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal session metadata: %w", err)
+	}
+	metadataHash, err := CreateBlobFromContent(s.repo, metadataJSON)
+	if err != nil {
+		return err
+	}
+	entries[metadataPath] = object.TreeEntry{
+		Name: metadataPath,
+		Mode: filemode.Regular,
+		Hash: metadataHash,
+	}
 	return nil
 }
 
@@ -1736,13 +1781,18 @@ func (s *GitStore) getFetchingTree(ctx context.Context) (*FetchingTree, error) {
 	return NewFetchingTree(ctx, tree, s.repo.Storer, s.blobFetcher), nil
 }
 
-// getSessionsBranchTree returns the tree object for the entire/checkpoints/v1 branch.
-// Falls back to origin/entire/checkpoints/v1 if the local branch doesn't exist.
+// getSessionsBranchTree returns the tree object for the configured committed
+// ref (the v1 branch by default, or the v1.1 custom ref for v1.1 read stores).
+// For the default v1 branch it falls back to origin/entire/checkpoints/v1 when
+// the local branch is missing; the v1.1 custom ref is local-only, so no remote
+// fallback applies there.
 func (s *GitStore) getSessionsBranchTree() (*object.Tree, error) {
-	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := s.repo.Reference(refName, true)
+	ref, err := s.repo.Reference(s.committedReadRef, true)
 	if err != nil {
-		// Local branch doesn't exist, try remote-tracking branch
+		if s.committedReadRef != defaultCommittedReadRef() {
+			return nil, fmt.Errorf("sessions ref %s not found: %w", s.committedReadRef, err)
+		}
+		// Local v1 branch doesn't exist, try remote-tracking branch
 		remoteRefName := plumbing.NewRemoteReferenceName("origin", paths.MetadataBranchName)
 		ref, err = s.repo.Reference(remoteRefName, true)
 		if err != nil {
@@ -2148,11 +2198,12 @@ type Author struct {
 	Email string
 }
 
-// GetCheckpointAuthor retrieves the author of a checkpoint from the entire/checkpoints/v1 commit history.
+// GetCheckpointAuthor retrieves the author of a checkpoint from the configured
+// committed-read ref history.
 // Finds the commit whose subject matches "Checkpoint: <id>" and returns its author.
 // Returns empty Author if the checkpoint is not found or the sessions branch doesn't exist.
 func (s *GitStore) GetCheckpointAuthor(ctx context.Context, checkpointID id.CheckpointID) (Author, error) {
-	return getCheckpointAuthorFromRef(ctx, s.repo, plumbing.NewBranchReferenceName(paths.MetadataBranchName), checkpointID)
+	return getCheckpointAuthorFromRef(ctx, s.repo, s.committedReadRef, checkpointID)
 }
 
 func getCheckpointAuthorFromRef(ctx context.Context, repo *git.Repository, refName plumbing.ReferenceName, checkpointID id.CheckpointID) (Author, error) {

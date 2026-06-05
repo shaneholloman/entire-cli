@@ -144,36 +144,6 @@ func TestPushBranchIfNeeded_UnreachableTarget_ReturnsNil(t *testing.T) {
 	assert.NoError(t, err, "pushBranchIfNeeded should return nil when target is unreachable")
 }
 
-// TestPrePush_WarnsForDisallowedV2Settings verifies that push-time keeps
-// telling users legacy v2 settings fall back to v1 until they remove them.
-//
-// Not parallel: uses t.Chdir() and os.Stderr redirection.
-func TestPrePush_WarnsForDisallowedV2Settings(t *testing.T) {
-	tmpDir := t.TempDir()
-	testutil.InitRepo(t, tmpDir)
-	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".entire"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(tmpDir, ".entire", "settings.json"),
-		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
-		0o644,
-	))
-	t.Chdir(tmpDir)
-
-	restore := captureStderr(t)
-	err := (&ManualCommitStrategy{}).PrePush(context.Background(), "origin")
-	output := restore()
-
-	require.NoError(t, err)
-	assert.Contains(t, output, "[entire] strategy_options.checkpoints_version 2 is no longer supported. Falling back to version 1")
-
-	restore = captureStderr(t)
-	err = (&ManualCommitStrategy{}).PrePush(context.Background(), "origin")
-	output = restore()
-
-	require.NoError(t, err)
-	assert.Contains(t, output, "[entire] strategy_options.checkpoints_version 2 is no longer supported. Falling back to version 1")
-}
-
 // TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully verifies that
 // pushBranchIfNeeded works with a local bare repo path as the target.
 // This exercises the same code path that PrePush uses when pushTarget()
@@ -218,6 +188,7 @@ func TestPushBranchIfNeeded_LocalBareRepo_PushesSuccessfully(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_DivergedBranches(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	// 1. Create bare origin with a metadata branch containing a base checkpoint
@@ -344,6 +315,7 @@ func TestFetchAndRebase_DivergedBranches(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_SharedCloneLocalCommitInAlternate(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -422,6 +394,7 @@ func TestFetchAndRebase_SharedCloneLocalCommitInAlternate(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_LocalBehind(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -502,6 +475,7 @@ func TestFetchAndRebase_LocalBehind(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_MergeBaseOnSecondParent_DoesNotReplayAncestors(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -633,6 +607,7 @@ func TestFetchAndRebase_MergeBaseOnSecondParent_DoesNotReplayAncestors(t *testin
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_DoesNotResurrectRemoteOnlyCheckpointFromMerge(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -748,6 +723,7 @@ func TestFetchAndRebase_DoesNotResurrectRemoteOnlyCheckpointFromMerge(t *testing
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_NonOriginRemote_ReconcilesFetchedRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -848,6 +824,7 @@ func TestFetchAndRebase_NonOriginRemote_ReconcilesFetchedRef(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -945,6 +922,7 @@ func TestFetchAndRebase_URLTarget_ReconcilesFetchedTempRef(t *testing.T) {
 // Not parallel: uses t.Chdir() (required for OpenRepository).
 func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 	ctx := context.Background()
+	testutil.IsolateGitConfigEnv(t)
 	branchName := paths.MetadataBranchName
 
 	bareDir := t.TempDir()
@@ -986,12 +964,6 @@ func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 	gitRun(cloneDir, "config", "user.name", "Test User")
 	gitRun(cloneDir, "config", "commit.gpgsign", "false")
 	gitRun(cloneDir, "branch", branchName, "origin/"+branchName)
-	require.NoError(t, os.MkdirAll(filepath.Join(cloneDir, ".entire"), 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(cloneDir, ".entire", "settings.json"),
-		[]byte(`{"enabled": true, "strategy_options": {"filtered_fetches": true}}`),
-		0o644,
-	))
 
 	gitRun(cloneDir, "checkout", "--orphan", "temp-orphan")
 	gitRun(cloneDir, "rm", "-rf", ".")
@@ -1003,6 +975,12 @@ func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 	gitRun(cloneDir, "commit", "-m", "Checkpoint: cccccccccccc")
 	gitRun(cloneDir, "branch", "-f", branchName, "temp-orphan")
 	gitRun(cloneDir, "checkout", "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(cloneDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cloneDir, ".entire", "settings.json"),
+		[]byte(`{"enabled": true, "strategy_options": {"filtered_fetches": true, "checkpoints_version": "1.1"}}`),
+		0o644,
+	))
 
 	repo, err := git.PlainOpen(cloneDir)
 	require.NoError(t, err)
@@ -1015,6 +993,7 @@ func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 	require.NoError(t, repo.Storer.SetReference(staleOriginRef))
 
 	t.Chdir(cloneDir)
+	paths.ClearWorktreeRootCache()
 
 	err = fetchAndRebaseSessionsCommon(ctx, "origin", branchName)
 	require.NoError(t, err)
@@ -1024,6 +1003,9 @@ func TestFetchAndRebase_FlaggedOriginTarget_UsesTempRef(t *testing.T) {
 
 	localRef, err := repo.Reference(plumbing.NewBranchReferenceName(branchName), true)
 	require.NoError(t, err)
+	customRef, err := repo.Reference(plumbing.ReferenceName(paths.MetadataRefName), true)
+	require.NoError(t, err)
+	assert.Equal(t, localRef.Hash(), customRef.Hash(), "fetchAndRebaseSessionsCommon should mirror synced v1 metadata to the v1.1 custom ref")
 
 	tipCommit, err := repo.CommitObject(localRef.Hash())
 	require.NoError(t, err)

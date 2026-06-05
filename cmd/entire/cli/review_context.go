@@ -98,11 +98,7 @@ func reviewCommittedCheckpointContext(ctx context.Context, worktreeRoot string, 
 		return ""
 	}
 	defer repo.Close()
-	store, storeErr := checkpoint.NewCommittedReader(ctx, repo, checkpoint.CommittedReaderOptions{})
-	if storeErr != nil {
-		logging.Debug(ctx, "review checkpoint context: checkpoint store unavailable", slog.String("error", storeErr.Error()))
-		return ""
-	}
+	store := checkpoint.NewCommittedReadStore(ctx, repo)
 
 	var lines []string
 	seen := map[checkpointid.CheckpointID]bool{}

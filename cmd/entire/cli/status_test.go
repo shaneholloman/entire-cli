@@ -1862,7 +1862,7 @@ func TestRunStatusJSON_DeduplicatesSessions(t *testing.T) {
 	}
 }
 
-// writeStatusHeadCheckpoint writes a v2 checkpoint with the requested
+// writeStatusHeadCheckpoint writes a v1 checkpoint with the requested
 // review/investigation flags, then amends HEAD to carry the
 // Entire-Checkpoint trailer. Mirrors the helper used in
 // head_checkpoint_flags_test.go but inlined to keep status_test.go
@@ -1913,7 +1913,7 @@ func TestRunStatus_PrintsInvestigationLine(t *testing.T) {
 	testutil.WriteFile(t, ".", "init.txt", "init")
 	testutil.GitAdd(t, ".", "init.txt")
 	testutil.GitCommit(t, ".", "init")
-	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`)
+	writeSettings(t, `{"enabled": true}`)
 	writeStatusHeadCheckpoint(t, false, true)
 
 	var stdout bytes.Buffer
@@ -1935,7 +1935,7 @@ func TestRunStatus_PrintsBothReviewAndInvestigation(t *testing.T) {
 	testutil.WriteFile(t, ".", "init.txt", "init")
 	testutil.GitAdd(t, ".", "init.txt")
 	testutil.GitCommit(t, ".", "init")
-	writeSettings(t, `{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`)
+	writeSettings(t, `{"enabled": true}`)
 	writeStatusHeadCheckpoint(t, true, true)
 
 	var stdout bytes.Buffer

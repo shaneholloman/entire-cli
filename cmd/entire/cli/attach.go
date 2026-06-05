@@ -22,6 +22,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
@@ -55,6 +56,16 @@ type attachOptions struct {
 	// transcript's first user prompt. Used by `entire review attach` when a
 	// pending-review marker has the exact prompt the user was asked to run.
 	ReviewPromptOverride string
+	// entireSettings, when non-nil, supplies already-resolved settings.
+	entireSettings *settings.EntireSettings
+}
+
+// committedRefs resolves the topology, honoring an injected EntireSettings.
+func (opts attachOptions) committedRefs(ctx context.Context) cpkg.CommittedRefs {
+	if opts.entireSettings != nil {
+		return cpkg.ResolveCommittedRefsFromSettings(opts.entireSettings)
+	}
+	return cpkg.ResolveCommittedRefs(ctx)
 }
 
 func newAttachCmd() *cobra.Command {
@@ -148,7 +159,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	// Flush the 8KB buffered log writer on exit. Without this, any
 	// Warn/Info calls during attach (including the overwrite tripwire)
 	// get silently dropped when the process exits, matching the pattern
-	// already used by resume/clean/reset/rewind/migrate/explain.
+	// already used by resume/clean/reset/rewind/explain.
 	defer logging.Close()
 
 	logCtx := logging.WithComponent(ctx, "attach")
@@ -304,6 +315,12 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	if err := store.WriteCommitted(ctx, writeOpts); err != nil {
 		return fmt.Errorf("failed to write checkpoint: %w", err)
+	}
+
+	if refs := opts.committedRefs(ctx); refs.HasMirror() {
+		if err := strategy.MirrorCommittedMetadataRef(ctx, repo, refs); err != nil {
+			return fmt.Errorf("checkpoint was written to %s, but failed to mirror to %s: %w", refs.Primary, refs.Mirror, err)
+		}
 	}
 
 	// Create or update session state.

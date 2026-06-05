@@ -347,6 +347,47 @@ func TestDispatchLifecycleEvent_UnknownEventType(t *testing.T) {
 	}
 }
 
+// TestDispatchLifecycleEvent_RejectsTraversalSessionID verifies the dispatcher
+// rejects a path-unsafe session ID for every event type, before routing to a
+// handler. This guards handlers that build filesystem paths from the ID without
+// their own check (notably handleLifecycleTurnEnd's .entire/metadata/<id>/
+// MkdirAll + WriteFile). The guard runs before any repo/FS access, so no repo
+// setup is needed.
+func TestDispatchLifecycleEvent_RejectsTraversalSessionID(t *testing.T) {
+	t.Parallel()
+
+	ag := newMockAgent()
+	for _, evType := range []agent.EventType{
+		agent.TurnEnd, agent.ModelUpdate, agent.Compaction, agent.SubagentEnd, agent.SessionEnd,
+	} {
+		err := DispatchLifecycleEvent(context.Background(), ag, &agent.Event{
+			Type:       evType,
+			SessionID:  "../../etc/evil",
+			SessionRef: "/dev/null",
+			Model:      "x",
+		})
+		if err == nil {
+			t.Fatalf("%v event with traversal session ID: got nil error, want rejection", evType)
+		}
+		if !strings.Contains(err.Error(), "invalid session ID") {
+			t.Errorf("%v event: error = %q, want \"invalid session ID\"", evType, err)
+		}
+	}
+
+	// ToolUseID and SubagentID also build filesystem paths (task metadata dir,
+	// subagent transcript path) and must be rejected too.
+	if err := DispatchLifecycleEvent(context.Background(), ag, &agent.Event{
+		Type: agent.SubagentEnd, SessionID: "ok-session", ToolUseID: "../../evil", SessionRef: "/dev/null",
+	}); err == nil || !strings.Contains(err.Error(), "invalid tool use ID") {
+		t.Errorf("traversal tool use ID: error = %v, want \"invalid tool use ID\"", err)
+	}
+	if err := DispatchLifecycleEvent(context.Background(), ag, &agent.Event{
+		Type: agent.SubagentEnd, SessionID: "ok-session", SubagentID: "../../evil", SessionRef: "/dev/null",
+	}); err == nil || !strings.Contains(err.Error(), "invalid subagent ID") {
+		t.Errorf("traversal subagent ID: error = %v, want \"invalid subagent ID\"", err)
+	}
+}
+
 // --- handleLifecycleSessionStart tests ---
 
 func TestHandleLifecycleSessionStart_EmptySessionID(t *testing.T) {
@@ -1097,6 +1138,85 @@ func TestHandleLifecycleTurnStart_WritesPromptContent(t *testing.T) {
 	if string(data) != "create a file called hello.txt" {
 		t.Errorf("expected prompt content 'create a file called hello.txt', got %q", string(data))
 	}
+}
+
+func TestHandleLifecycleTurnStart_RecordsGenericSkillSlashEvent(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	ag := newMockAgent()
+	sessionID := "test-generic-skill-slash"
+	event := &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: sessionID,
+		Prompt:    "/skill:trigger-analysis inspect the implementation",
+		Timestamp: time.Date(2026, 5, 25, 12, 34, 56, 0, time.UTC),
+	}
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ag, event))
+
+	state, err := strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Len(t, state.SkillEvents, 1)
+
+	skillEvent := state.SkillEvents[0]
+	require.Equal(t, agent.SkillEventTypePromptInvocation, skillEvent.EventType)
+	require.Equal(t, "trigger-analysis", skillEvent.Skill.Name)
+	require.Equal(t, string(ag.Name()), skillEvent.Source.Agent)
+	require.Equal(t, agent.SkillSignalPromptSlashCommand, skillEvent.Source.Signal)
+	require.Equal(t, agent.SkillConfidenceExplicit, skillEvent.Source.Confidence)
+	require.Equal(t, state.TurnID, skillEvent.TurnID)
+	require.Equal(t, "2026-05-25T12:34:56Z", skillEvent.Timestamp)
+	require.Equal(t, "/skill:trigger-analysis", skillEvent.Native["command"])
+	require.Equal(t, agent.SkillCollapseTargetUserMessage, skillEvent.Collapse.Target)
+	require.True(t, skillEvent.Collapse.DefaultCollapsed)
+}
+
+func TestHandleLifecycleTurnStart_DoesNotDuplicateGenericSkillSlashEventFromForwardedHook(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir()
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "init.txt", "init")
+	testutil.GitAdd(t, tmpDir, "init.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+
+	sessionID := "test-generic-skill-forwarded"
+	ownerAgent := newMockAgent()
+	forwardedAgent := &mockLifecycleAgent{
+		name:           "forwarded-agent",
+		agentType:      "Forwarded Agent",
+		transcriptData: []byte(`{"type":"user","message":"test"}`),
+	}
+	prompt := "/skill:trigger-analysis inspect the implementation"
+
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), ownerAgent, &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: sessionID,
+		Prompt:    prompt,
+		Timestamp: time.Date(2026, 5, 25, 12, 34, 56, 0, time.UTC),
+	}))
+	require.NoError(t, handleLifecycleTurnStart(context.Background(), forwardedAgent, &agent.Event{
+		Type:      agent.TurnStart,
+		SessionID: sessionID,
+		Prompt:    prompt,
+		Timestamp: time.Date(2026, 5, 25, 12, 34, 57, 0, time.UTC),
+	}))
+
+	state, err := strategy.LoadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	require.Equal(t, ownerAgent.Type(), state.AgentType)
+	require.Len(t, state.SkillEvents, 1)
+	require.Equal(t, string(ownerAgent.Name()), state.SkillEvents[0].Source.Agent)
 }
 
 func TestHandleLifecycleTurnEnd_BackfillsPromptFromTranscript(t *testing.T) {

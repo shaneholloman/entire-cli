@@ -800,30 +800,6 @@ func SetupBareRemote(t *testing.T, s *RepoState) string {
 	return bareDir
 }
 
-// CloneAndEnableEntire clones a bare remote into a fresh temp dir, configures
-// a test git identity, enables Entire for the given agent, and commits the
-// enable changes if needed.
-func CloneAndEnableEntire(t *testing.T, bareDir string, agentName string) string {
-	t.Helper()
-
-	cloneDir := t.TempDir()
-	if resolved, symErr := filepath.EvalSymlinks(cloneDir); symErr == nil {
-		cloneDir = resolved
-	}
-	if err := os.RemoveAll(cloneDir); err != nil {
-		t.Fatalf("remove clone dir %s: %v", cloneDir, err)
-	}
-
-	Git(t, "", "clone", bareDir, cloneDir)
-	Git(t, cloneDir, "config", "user.name", "E2E Clone")
-	Git(t, cloneDir, "config", "user.email", "e2e-clone@test.local")
-
-	entire.Enable(t, cloneDir, agentName)
-	CommitIfDirty(t, cloneDir, "Enable entire in clone")
-
-	return cloneDir
-}
-
 // GitOutputErr runs a git command and returns (output, error) without
 // failing the test. For commands expected to fail.
 func GitOutputErr(dir string, args ...string) (string, error) {

@@ -7,11 +7,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -770,16 +770,6 @@ func TestIsOnDefaultBranch(t *testing.T) {
 	})
 }
 
-// resetProtectedDirsForTest resets the cached protected dirs so tests that
-// manipulate the agent registry can get fresh results. Call this in any test
-// that registers/unregisters agents and then checks isProtectedPath behavior.
-//
-//nolint:unused // Intentionally kept as a test utility for future tests that mutate the agent registry.
-func resetProtectedDirsForTest() {
-	protectedDirsOnce = sync.Once{}
-	protectedDirsCache = nil
-}
-
 func TestGetGitAuthorFromRepo(t *testing.T) {
 	// Cannot use t.Parallel() because subtests use t.Setenv to isolate global git config.
 
@@ -978,7 +968,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to open repo: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1042,7 +1032,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("failed to set ref: %v", err)
 		}
 
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1064,7 +1054,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to open repo: %v", err)
 		}
-		if err := EnsureMetadataBranch(repo); err != nil {
+		if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 		}
 
@@ -1108,7 +1098,7 @@ func TestEnsureMetadataBranch_WritesVercelConfigWhenEnabled(t *testing.T) {
 		t.Fatalf("InitSettings() failed: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1139,6 +1129,33 @@ func TestEnsureMetadataBranch_WritesVercelConfigWhenEnabled(t *testing.T) {
 	if !vercelconfig.DeploymentDisabled(config) {
 		t.Fatalf("expected %s to disable %s, got %s", vercelconfig.FileName, vercelconfig.BranchPattern, content)
 	}
+}
+
+// Not parallel: uses t.Chdir so settings.Load picks up the v1.1 opt-in.
+func TestEnsureMetadataBranch_MirrorsV11WhenSeedingFromRemote(t *testing.T) {
+	bareDir := initBareWithMetadataBranch(t)
+	cloneDir, _ := cloneWithConfig(t, bareDir)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(cloneDir, ".entire"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cloneDir, ".entire", paths.SettingsFileName),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_version": "1.1"}}`),
+		0o644,
+	))
+	t.Chdir(cloneDir)
+	paths.ClearWorktreeRootCache()
+
+	repo, err := git.PlainOpen(cloneDir)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureMetadataBranch(t.Context(), repo))
+
+	v1Ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err, "local v1 branch should be seeded from origin")
+
+	mirrorRef, err := repo.Reference(plumbing.ReferenceName(paths.MetadataRefName), true)
+	require.NoError(t, err, "v1.1 mirror should track the v1 write performed by EnsureMetadataBranch")
+	assert.Equal(t, v1Ref.Hash(), mirrorRef.Hash())
 }
 
 // cloneWithConfig clones bareDir into a new temp directory, configures git identity,
@@ -1198,7 +1215,7 @@ func TestEnsureMetadataBranch_DisconnectedBranchesNotReconciledInEnable(t *testi
 		t.Fatalf("local branch not found: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1225,7 +1242,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open repo: %v", err)
 	}
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("first EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1265,7 +1282,7 @@ func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
 		t.Fatalf("failed to reopen repo: %v", err)
 	}
 
-	if err := EnsureMetadataBranch(repo); err != nil {
+	if err := EnsureMetadataBranch(t.Context(), repo); err != nil {
 		t.Fatalf("second EnsureMetadataBranch() failed: %v", err)
 	}
 
@@ -1582,6 +1599,18 @@ func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
 	})
 }
 
+func TestReadAllSessionPromptsFromTree(t *testing.T) {
+	t.Parallel()
+
+	tree := buildCommittedTree(t, map[string]string{
+		"a3/b2c4d5e6f7/0/prompt.txt": "First session prompt",
+		"a3/b2c4d5e6f7/1/prompt.txt": "Second session prompt",
+	})
+
+	got := ReadAllSessionPromptsFromTree(tree, "a3/b2c4d5e6f7", 2, []string{"session-1", "session-2"})
+	assert.Equal(t, []string{"First session prompt", "Second session prompt"}, got)
+}
+
 func TestIsEmptyRepository(t *testing.T) {
 	t.Parallel()
 	t.Run("empty repo returns true", func(t *testing.T) {
@@ -1642,120 +1671,41 @@ func openRepoHeadTree(t *testing.T, dir string) *object.Tree {
 	return tree
 }
 
-func TestReadAgentTypeFromTree_OnlyClaude(t *testing.T) {
+func TestReadAgentTypeFromTree(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.GitCommit(t, dir, "init")
+	tests := []struct {
+		name  string
+		files []string // committed before resolution
+		want  types.AgentType
+	}{
+		{"only claude", []string{".claude/settings.json"}, agent.AgentTypeClaudeCode},
+		{"only gemini", []string{".gemini/settings.json"}, agent.AgentTypeGemini},
+		{"only codex", []string{".codex/config.json"}, agent.AgentTypeCodex},
+		{"only cursor", []string{".cursor/settings.json"}, agent.AgentTypeCursor},
+		{"only factory", []string{".factory/settings.json"}, agent.AgentTypeFactoryAIDroid},
+		{"claude and codex is ambiguous", []string{".claude/settings.json", ".codex/config.json"}, agent.AgentTypeUnknown},
+		{"claude and gemini is ambiguous", []string{".claude/settings.json", ".gemini/settings.json"}, agent.AgentTypeUnknown},
+		{"no agent dirs", []string{"f.txt"}, agent.AgentTypeUnknown},
+	}
 
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeClaudeCode, result)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestReadAgentTypeFromTree_OnlyGemini(t *testing.T) {
-	t.Parallel()
+			dir := t.TempDir()
+			testutil.InitRepo(t, dir)
+			for _, f := range tt.files {
+				testutil.WriteFile(t, dir, f, `{}`)
+				testutil.GitAdd(t, dir, f)
+			}
+			testutil.GitCommit(t, dir, "init")
 
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".gemini/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".gemini/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeGemini, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyCodex(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".codex/config.json", `{}`)
-	testutil.GitAdd(t, dir, ".codex/config.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeCodex, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyCursor(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".cursor/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".cursor/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeCursor, result)
-}
-
-func TestReadAgentTypeFromTree_OnlyFactory(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".factory/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".factory/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeFactoryAIDroid, result)
-}
-
-func TestReadAgentTypeFromTree_ClaudeAndCodex_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.WriteFile(t, dir, ".codex/config.json", `{}`)
-	testutil.GitAdd(t, dir, ".codex/config.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
-}
-
-func TestReadAgentTypeFromTree_ClaudeAndGemini_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, ".claude/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".claude/settings.json")
-	testutil.WriteFile(t, dir, ".gemini/settings.json", `{}`)
-	testutil.GitAdd(t, dir, ".gemini/settings.json")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
-}
-
-func TestReadAgentTypeFromTree_NoAgentDirs_ReturnsUnknown(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	testutil.InitRepo(t, dir)
-	testutil.WriteFile(t, dir, "f.txt", "init")
-	testutil.GitAdd(t, dir, "f.txt")
-	testutil.GitCommit(t, dir, "init")
-
-	tree := openRepoHeadTree(t, dir)
-	result := ReadAgentTypeFromTree(tree, "nonexistent-path")
-	assert.Equal(t, agent.AgentTypeUnknown, result)
+			tree := openRepoHeadTree(t, dir)
+			result := ReadAgentTypeFromTree(tree, "nonexistent-path")
+			assert.Equal(t, tt.want, result)
+		})
+	}
 }
 
 func TestReadAgentTypeFromTree_MetadataJSON_OverridesDir(t *testing.T) {

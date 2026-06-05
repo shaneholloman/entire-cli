@@ -26,6 +26,7 @@ import (
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/copilotcli"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/pi"
 )
 
 // calculateTokenUsage is a test helper that looks up an agent by type and
@@ -63,20 +64,35 @@ esac
 	}
 }
 
-func TestCalculateTokenUsage_CursorReturnsNil(t *testing.T) {
+func TestCalculateTokenUsage_CursorAlwaysNil(t *testing.T) {
 	t.Parallel()
 
 	// Cursor transcripts don't contain token usage data, so CalculateTokenUsage
-	// should return nil (not an empty struct) to signal "no data available".
-	transcript := []byte(`{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}`)
-
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+	// should always return nil (not an empty struct) to signal "no data
+	// available" — regardless of transcript shape or offset.
+	tests := []struct {
+		name       string
+		transcript []byte
+		offset     int
+	}{
+		{"single-line transcript", []byte(`{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}`), 0},
+		{"multi-line real transcript", []byte(cursorSampleTranscript), 0},
+		{"real transcript with offset", []byte(cursorSampleTranscript), 3},
 	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, transcript, 0, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor) = %+v, want nil", result)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
+			if err != nil {
+				t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+			}
+			result := agent.CalculateTokenUsage(context.Background(), ag, tt.transcript, tt.offset, "")
+			if result != nil {
+				t.Errorf("CalculateTokenUsage(Cursor) = %+v, want nil", result)
+			}
+		})
 	}
 }
 
@@ -265,34 +281,6 @@ func TestExtractUserPrompts_CursorEmpty(t *testing.T) {
 	}
 }
 
-func TestCalculateTokenUsage_CursorRealTranscript(t *testing.T) {
-	t.Parallel()
-
-	// Even with a multi-line real transcript, Cursor should return nil
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
-	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 0, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor, real transcript) = %+v, want nil", result)
-	}
-}
-
-func TestCalculateTokenUsage_CursorWithOffset(t *testing.T) {
-	t.Parallel()
-
-	// Offset should not matter — Cursor always returns nil
-	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
-	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
-	}
-	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 3, "")
-	if result != nil {
-		t.Errorf("CalculateTokenUsage(Cursor, offset=3) = %+v, want nil", result)
-	}
-}
-
 func TestSessionStateBackfillTokenUsage_CopilotUsesZeroInputSessionAggregate(t *testing.T) {
 	t.Parallel()
 
@@ -317,6 +305,44 @@ func TestSessionStateBackfillTokenUsage_CopilotUsesZeroInputSessionAggregate(t *
 	require.Equal(t, 20, backfillUsage.CacheReadTokens)
 	require.Equal(t, 10, backfillUsage.CacheCreationTokens)
 	require.Equal(t, 3, backfillUsage.APICallCount)
+}
+
+func TestSessionStateBackfillModel_PiReadsModelFromTranscript(t *testing.T) {
+	t.Parallel()
+
+	// Pi records the model on message.model but never reports it through hooks,
+	// so the model is backfilled from the transcript at condensation time.
+	transcript := []byte(strings.Join([]string{
+		`{"type":"session","version":3,"id":"pi-uuid","cwd":"/tmp"}`,
+		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"Hi"}]}}`,
+		`{"type":"message","id":"m2","parentId":"m1","message":{"role":"assistant","content":[{"type":"text","text":"Hello"}],"model":"gpt-5.5","provider":"openai-codex","usage":{"input":100,"output":50,"cacheRead":0,"cacheWrite":0}}}`,
+	}, "\n") + "\n")
+
+	ag, err := agent.GetByAgentType(agent.AgentTypePi)
+	require.NoError(t, err)
+
+	model := sessionStateBackfillModel(context.Background(), ag, transcript)
+	require.Equal(t, "gpt-5.5", model)
+}
+
+func TestSessionStateBackfillModel_EmptyTranscript(t *testing.T) {
+	t.Parallel()
+
+	ag, err := agent.GetByAgentType(agent.AgentTypePi)
+	require.NoError(t, err)
+
+	require.Empty(t, sessionStateBackfillModel(context.Background(), ag, nil))
+}
+
+func TestSessionStateBackfillModel_AgentWithoutSupport(t *testing.T) {
+	t.Parallel()
+
+	// Cursor doesn't implement ModelExtractor, so backfill is a no-op even with
+	// transcript data present.
+	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
+	require.NoError(t, err)
+
+	require.Empty(t, sessionStateBackfillModel(context.Background(), ag, []byte("{}\n")))
 }
 
 // droidMessage builds a Droid JSONL "message" line with the given id, role, and optional usage.

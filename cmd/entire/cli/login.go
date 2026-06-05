@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/entireio/auth-go/tokens"
 	"github.com/entireio/cli/cmd/entire/cli/api"
 	"github.com/entireio/cli/cmd/entire/cli/auth"
@@ -41,9 +40,6 @@ func chooseApprovalURL(start *auth.DeviceAuthStart) string {
 	return start.VerificationURI
 }
 
-// clipboardWriteFunc is the signature for copying text to the user's clipboard.
-type clipboardWriteFunc func(text string) error
-
 // deviceAuthClient abstracts the auth client so runLogin and waitForApproval can be unit-tested.
 type deviceAuthClient interface {
 	StartDeviceAuth(ctx context.Context) (*auth.DeviceAuthStart, error)
@@ -60,14 +56,14 @@ func newLoginCmd() *cobra.Command {
 			if err := requireSecureBaseURL(insecureHTTPAuth); err != nil {
 				return err
 			}
-			return runLogin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), auth.NewClient(nil, insecureHTTPAuth), openBrowser, copyToClipboard)
+			return runLogin(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), auth.NewClient(nil, insecureHTTPAuth), openBrowser)
 		},
 	}
 	addInsecureHTTPAuthFlag(cmd, &insecureHTTPAuth)
 	return cmd
 }
 
-func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc, writeClipboard clipboardWriteFunc) error {
+func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient, openURL browserOpenFunc) error {
 	start, err := client.StartDeviceAuth(ctx)
 	if err != nil {
 		return fmt.Errorf("start login: %w", err)
@@ -78,7 +74,12 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 	approvalURL := chooseApprovalURL(start)
 
 	if interactive.CanPromptInteractively() {
-		fmt.Fprintf(outW, "Press Enter to copy the code to your clipboard, open %s in your browser, and enter the generated device code...", approvalURL)
+		// chooseApprovalURL prefers the code-embedded verification_uri_complete,
+		// so opening the URL is usually all the user needs to do. The device
+		// code is printed above regardless, so it's still available to confirm
+		// against the page (RFC 8628 §3.3.1) or to enter on the bare-URI fallback.
+		fmt.Fprintf(outW, "Login URL:   %s\n\n", approvalURL)
+		fmt.Fprintf(outW, "Press Enter to open in browser...")
 
 		// Read from /dev/tty so we get a real keypress and don't consume piped stdin.
 		if err := waitForEnter(ctx); err != nil {
@@ -86,21 +87,17 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		}
 
 		fmt.Fprintln(outW)
-		if copied := copyDeviceCodeToClipboard(errW, start.UserCode, writeClipboard); copied {
-			fmt.Fprintln(outW, "Device code copied to clipboard.")
-		}
-
 		if err := openURL(ctx, approvalURL); err != nil {
 			fmt.Fprintf(errW, "Warning: failed to open browser: %v\n", err)
-			fmt.Fprintf(outW, "Open the approval URL in your browser to continue and enter the generated device code: %s\n", approvalURL)
+			fmt.Fprintf(outW, "Open this URL in your browser to approve this login: %s\n", approvalURL)
 		}
 	} else {
-		fmt.Fprintf(outW, "Approval URL: %s\n", approvalURL)
+		fmt.Fprintf(outW, "Login URL:   %s\n\n", approvalURL)
 	}
 
-	fmt.Fprintln(outW, "Waiting for approval...")
+	fmt.Fprint(outW, "Waiting for approval... ")
 
-	token, err := waitForApproval(ctx, client, start.DeviceCode, start.ExpiresIn, time.Duration(start.Interval)*time.Second, defaultSlowDownBackoff)
+	token, refreshToken, err := waitForApproval(ctx, client, start.DeviceCode, start.ExpiresIn, time.Duration(start.Interval)*time.Second, defaultSlowDownBackoff)
 	if err != nil {
 		return fmt.Errorf("complete login: %w", err)
 	}
@@ -118,7 +115,16 @@ func runLogin(ctx context.Context, outW, errW io.Writer, client deviceAuthClient
 		return fmt.Errorf("save auth token: %w", err)
 	}
 
-	fmt.Fprintln(outW, "Login complete.")
+	// Dual-write the shared contexts.json credential model so the git
+	// remote helper (and entiredb's CLIs) can authenticate against any
+	// entitled cluster from this login. Best-effort: the legacy entry
+	// above remains the control-plane source of truth, so a failure here
+	// must not fail the login — warn and continue.
+	if _, err := auth.RecordLoginContext(token, refreshToken, true); err != nil {
+		fmt.Fprintf(errW, "Warning: logged in, but could not record a shareable context (clone via entire:// may need a re-login): %v\n", err)
+	}
+
+	fmt.Fprintln(outW, "✓ Login complete.")
 	return nil
 }
 
@@ -178,25 +184,7 @@ func issMatches(claimed, expected string) error {
 	return nil
 }
 
-func copyDeviceCodeToClipboard(errW io.Writer, userCode string, writeClipboard clipboardWriteFunc) bool {
-	if writeClipboard == nil {
-		return false
-	}
-	if err := writeClipboard(userCode); err != nil {
-		fmt.Fprintf(errW, "Warning: failed to copy device code to clipboard: %v\n", err)
-		return false
-	}
-	return true
-}
-
-func copyToClipboard(text string) error {
-	if err := clipboard.WriteAll(text); err != nil {
-		return fmt.Errorf("write clipboard: %w", err)
-	}
-	return nil
-}
-
-func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode string, expiresIn int, interval, slowDownBackoff time.Duration) (string, error) {
+func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode string, expiresIn int, interval, slowDownBackoff time.Duration) (accessToken, refreshToken string, err error) {
 	expiry := time.Duration(expiresIn) * time.Second
 	if expiry <= 0 || expiry > maxExpiresIn {
 		expiry = maxExpiresIn
@@ -211,19 +199,19 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 
 	for {
 		if time.Now().After(deadline) {
-			return "", errors.New("device authorization expired")
+			return "", "", errors.New("device authorization expired")
 		}
 
 		result, err := poller.PollDeviceAuth(ctx, deviceCode)
 		if err != nil {
 			consecutiveErrors++
 			if consecutiveErrors >= maxTransientErrors {
-				return "", fmt.Errorf("poll approval status (after %d consecutive failures): %w", consecutiveErrors, err)
+				return "", "", fmt.Errorf("poll approval status (after %d consecutive failures): %w", consecutiveErrors, err)
 			}
 			// Transient error — wait and retry.
 			select {
 			case <-ctx.Done():
-				return "", fmt.Errorf("wait for approval: %w", ctx.Err())
+				return "", "", fmt.Errorf("wait for approval: %w", ctx.Err())
 			case <-time.After(pollInterval):
 			}
 			continue
@@ -233,9 +221,9 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 		switch result.Error {
 		case "":
 			if result.AccessToken == "" {
-				return "", errors.New("device authorization completed without a token")
+				return "", "", errors.New("device authorization completed without a token")
 			}
-			return result.AccessToken, nil
+			return result.AccessToken, result.RefreshToken, nil
 		case "authorization_pending":
 			// no-op, will sleep and retry below
 		case "slow_down":
@@ -244,19 +232,19 @@ func waitForApproval(ctx context.Context, poller deviceAuthClient, deviceCode st
 				pollInterval = maxPollInterval
 			}
 		case "access_denied":
-			return "", errors.New("device authorization denied")
+			return "", "", errors.New("device authorization denied")
 		case "expired_token":
-			return "", errors.New("device authorization expired")
+			return "", "", errors.New("device authorization expired")
 		default:
 			if result.ErrorDescription != "" {
-				return "", fmt.Errorf("device authorization failed: %s: %s", result.Error, result.ErrorDescription)
+				return "", "", fmt.Errorf("device authorization failed: %s: %s", result.Error, result.ErrorDescription)
 			}
-			return "", fmt.Errorf("device authorization failed: %s", result.Error)
+			return "", "", fmt.Errorf("device authorization failed: %s", result.Error)
 		}
 
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("wait for approval: %w", ctx.Err())
+			return "", "", fmt.Errorf("wait for approval: %w", ctx.Err())
 		case <-time.After(pollInterval):
 		}
 	}

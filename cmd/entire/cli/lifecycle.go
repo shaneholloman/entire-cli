@@ -53,6 +53,30 @@ func DispatchLifecycleEvent(ctx context.Context, ag agent.Agent, event *agent.Ev
 		return errors.New("event cannot be nil")
 	}
 
+	// Reject path-unsafe identifiers once, here, before any handler uses them to
+	// build filesystem paths. Handlers historically validated individually,
+	// which is fragile — handleLifecycleTurnEnd builds .entire/metadata/<id>/
+	// via os.MkdirAll + os.WriteFile, and handleLifecycleSubagentEnd builds a
+	// subagent transcript path from SubagentID and reads it, without their own
+	// checks. Centralizing the guard covers every handler (and any future one)
+	// uniformly. Empty IDs pass through: handlers apply their own empty-handling
+	// (e.g. TurnEnd falls back to a safe constant; SubagentEnd skips the path).
+	if event.SessionID != "" {
+		if err := validation.ValidateSessionID(event.SessionID); err != nil {
+			return fmt.Errorf("invalid session ID in %s event: %w", event.Type, err)
+		}
+	}
+	if event.ToolUseID != "" {
+		if err := validation.ValidateToolUseID(event.ToolUseID); err != nil {
+			return fmt.Errorf("invalid tool use ID in %s event: %w", event.Type, err)
+		}
+	}
+	if event.SubagentID != "" {
+		if err := validation.ValidateAgentID(event.SubagentID); err != nil {
+			return fmt.Errorf("invalid subagent ID in %s event: %w", event.Type, err)
+		}
+	}
+
 	// Filter forwarded hooks: when Cursor IDE forwards events to both
 	// .cursor/hooks.json and .claude/settings.json, only the agent that owns
 	// the session should process them — otherwise checkpoints, metadata
@@ -430,11 +454,26 @@ func handleLifecycleTurnStart(ctx context.Context, ag agent.Agent, event *agent.
 		before.ReviewSkills = slices.Clone(state.ReviewSkills)
 		adoptReviewEnv(logCtx, state, string(ag.Name()))
 		adoptInvestigateEnv(logCtx, state, string(ag.Name()))
+
+		skillEventSource := *event
+		// Record a skill event for a leading "/<command>" in the raw prompt. Only
+		// once ownership is known — TurnStart bypasses the owner filter so
+		// InitializeSession can repair it — and never overriding native adapter events.
+		if state.AgentType == "" || state.AgentType == ag.Type() {
+			skillEventSource.SkillEvents = agent.AppendPromptSlashCommandSkillEvent(
+				skillEventSource.SkillEvents,
+				string(ag.Name()),
+				event.Prompt,
+				event.Timestamp,
+			)
+		}
+		skillEventsChanged := appendEventSkillEventsToState(&skillEventSource, state)
 		if state.Kind == before.Kind &&
 			state.ReviewPrompt == before.ReviewPrompt &&
 			slices.Equal(state.ReviewSkills, before.ReviewSkills) &&
 			state.InvestigateRunID == before.InvestigateRunID &&
-			state.InvestigateTopic == before.InvestigateTopic {
+			state.InvestigateTopic == before.InvestigateTopic &&
+			!skillEventsChanged {
 			return strategy.ErrMutationSkip
 		}
 		return nil
@@ -1090,6 +1129,7 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 	if event.Model != "" {
 		state.ModelName = event.Model
 	}
+	appendEventSkillEventsToState(event, state)
 
 	// Persist hook-provided session metrics (e.g., from Cursor hooks)
 	if event.DurationMs > 0 {
@@ -1110,6 +1150,43 @@ func persistEventMetadataToState(event *agent.Event, state *strategy.SessionStat
 	if event.ContextWindowSize > 0 {
 		state.ContextWindowSize = event.ContextWindowSize
 	}
+}
+
+func appendEventSkillEventsToState(event *agent.Event, state *strategy.SessionState) bool {
+	if event == nil || state == nil || len(event.SkillEvents) == 0 {
+		return false
+	}
+	changed := false
+	for _, skillEvent := range event.SkillEvents {
+		if skillEvent.TurnID == "" {
+			skillEvent.TurnID = state.TurnID
+		}
+		if skillEventExists(state.SkillEvents, skillEvent) {
+			continue
+		}
+		state.SkillEvents = append(state.SkillEvents, skillEvent)
+		changed = true
+	}
+	return changed
+}
+
+func skillEventExists(events []agent.SkillEvent, candidate agent.SkillEvent) bool {
+	for _, existing := range events {
+		if existing.ID != "" && candidate.ID != "" {
+			if existing.ID == candidate.ID {
+				return true
+			}
+			continue
+		}
+		if existing.EventType == candidate.EventType &&
+			existing.Skill.Name == candidate.Skill.Name &&
+			existing.Source.Agent == candidate.Source.Agent &&
+			existing.Source.Signal == candidate.Source.Signal &&
+			existing.TurnID == candidate.TurnID {
+			return true
+		}
+	}
+	return false
 }
 
 // envAdoptionSpec carries the kind-specific bits of env-driven session

@@ -54,6 +54,14 @@ func EnableInsecureHTTP() {
 	insecureHTTPOverride.Store(true)
 }
 
+// insecureHTTPEnabled reports whether EnableInsecureHTTP was called. The
+// per-context control-plane provider (which bypasses the singleton manager)
+// reads this so --insecure-http-auth still relaxes the HTTPS guard for a
+// non-loopback http:// core, mirroring the singleton's AllowInsecureHTTP.
+func insecureHTTPEnabled() bool {
+	return insecureHTTPOverride.Load()
+}
+
 // SetManagerForTest installs mgr as the manager returned by
 // defaultManager() and returns a cleanup function. Test-only.
 func SetManagerForTest(t interface{ Helper() }, mgr *tokenmanager.Manager) func() {
@@ -86,10 +94,13 @@ func defaultManager() (*tokenmanager.Manager, error) {
 		provider := CurrentProvider()
 		issuer := api.AuthBaseURL()
 		m, err := tokenmanager.New(tokenmanager.Config{
-			Issuer:    issuer,
-			ClientID:  provider.ClientID,
-			STSPath:   provider.STSPath,
-			Store:     NewStore(),
+			Issuer:   issuer,
+			ClientID: provider.ClientID,
+			STSPath:  provider.STSPath,
+			// Context-preferring store: the manager reads the active
+			// contexts.json login (falling back to the legacy entry) so a
+			// single login authenticates every control-plane command.
+			Store:     NewContextStore(),
 			UserAgent: provider.ClientID,
 			Scope:     "cli",
 			// Auto-permit loopback http:// for local development. The
@@ -118,17 +129,6 @@ func TokenForResource(ctx context.Context, resourceBaseURL string) (string, erro
 		return "", err
 	}
 	return m.TokenForResource(ctx, resourceBaseURL) //nolint:wrapcheck // shim returns the lib error verbatim
-}
-
-// Token is the full-control entry point. Use TokenForResource for the
-// common case; this exists so callers can override the wire-level
-// Audience, RequestedTokenType, or Scope per call.
-func Token(ctx context.Context, req TokenRequest) (string, error) {
-	m, err := defaultManager()
-	if err != nil {
-		return "", err
-	}
-	return m.Token(ctx, req) //nolint:wrapcheck // shim returns the lib error verbatim
 }
 
 // isLoopbackHTTP reports whether u is an http:// URL pointing at a

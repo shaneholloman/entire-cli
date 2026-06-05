@@ -3,14 +3,17 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/redact"
 	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,8 +24,7 @@ const (
 
 // setupHeadFlagsRepo creates a git repo with an initial commit, switches the
 // process CWD to it (cannot t.Parallel — t.Chdir conflicts), and returns the
-// opened *git.Repository. Settings have v2 enabled so the v2 store also
-// resolves the checkpoint summary.
+// opened *git.Repository.
 func setupHeadFlagsRepo(t *testing.T) *git.Repository {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -31,13 +33,7 @@ func setupHeadFlagsRepo(t *testing.T) *git.Repository {
 	testutil.GitAdd(t, tmpDir, "init.txt")
 	testutil.GitCommit(t, tmpDir, "init")
 	t.Chdir(tmpDir)
-
-	require.NoError(t, os.MkdirAll(".entire", 0o750))
-	require.NoError(t, os.WriteFile(
-		".entire/settings.json",
-		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_v2": true}}`),
-		0o600,
-	))
+	paths.ClearWorktreeRootCache()
 
 	repo, err := git.PlainOpen(tmpDir)
 	require.NoError(t, err)
@@ -139,4 +135,28 @@ func TestHeadHasInvestigateCheckpoint_WrapperPreservesContract(t *testing.T) {
 	hasInvestigation, info := headHasInvestigateCheckpoint(context.Background())
 	require.False(t, hasInvestigation, "wrapper must not piggyback on HasReview")
 	require.Empty(t, info, "info must be empty when the wrapper returns false")
+}
+
+func TestHeadCheckpointFlags_V11ReadsCustomRefAsIs(t *testing.T) {
+	repo := setupHeadFlagsRepo(t)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(cwd, paths.EntireDir), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cwd, paths.EntireDir, paths.SettingsFileName),
+		[]byte(`{"enabled": true, "strategy_options": {"checkpoints_version": "1.1"}}`),
+		0o644,
+	))
+
+	cpID := writeHeadCheckpointWithFlags(t, repo, true, true)
+	v1Ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), v1Ref.Hash())))
+
+	writeHeadCheckpointWithFlags(t, repo, false, false)
+
+	hasReview, hasInvestigation, info := headCheckpointFlags(context.Background())
+	require.True(t, hasReview, "v1.1 reads must use the custom ref, not the diverged v1 branch")
+	require.True(t, hasInvestigation, "v1.1 reads must use the custom ref, not the diverged v1 branch")
+	require.Contains(t, info, cpID.String())
 }

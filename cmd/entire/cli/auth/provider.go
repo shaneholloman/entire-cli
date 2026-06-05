@@ -4,18 +4,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/entireio/cli/cmd/entire/cli/api"
 )
 
-// ProviderVersionEnvVar selects which OAuth surface this CLI talks to.
-//
-// Recognised values:
-//
-//   - "v1" (or unset / unrecognised) — current device-flow surface
-//   - "v2"                            — next-generation device-flow surface
-//
-// Read once at process startup via CurrentProvider; later flips within
-// the same process are intentionally ignored. Tests inject via
-// SetProviderForTest rather than mutating the env mid-run.
+// ProviderVersionEnvVar overrides the auto-detected provider version.
+// Set to "v1" or "v2"; see effectiveProviderVersion for resolution.
+// Read once at process startup via CurrentProvider.
 const ProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION"
 
 // Provider captures the per-surface bits of OAuth wiring.
@@ -26,17 +21,11 @@ const ProviderVersionEnvVar = "ENTIRE_AUTH_PROVIDER_VERSION"
 // STS is never invoked, so v1.STSPath is left empty. v2 exposes a
 // dedicated STS path because it's used in split-host deployments
 // (e.g. us.auth.partial.to mints, partial.to consumes).
-//
-// AuthTokensPath is the base path for the auth-tokens management
-// endpoint family (list / revoke). Routed at the api.Client layer via
-// (*api.Client).WithAuthTokensPath so the provider table is the single
-// source of truth — no env-var duplication between auth/ and api/.
 type Provider struct {
 	ClientID       string
 	DeviceCodePath string
 	TokenPath      string
 	STSPath        string
-	AuthTokensPath string
 }
 
 var providers = map[string]Provider{
@@ -44,7 +33,6 @@ var providers = map[string]Provider{
 		ClientID:       "entire-cli",
 		DeviceCodePath: "/oauth/device/code",
 		TokenPath:      "/oauth/token",
-		AuthTokensPath: "/api/v1/auth/tokens",
 	},
 	"v2": { //nolint:gosec // OAuth client_id and endpoint paths, not credentials
 		// Matches an OIDC-standard auth server's discovery doc — confirmed
@@ -56,11 +44,6 @@ var providers = map[string]Provider{
 		DeviceCodePath: "/device_authorization",
 		TokenPath:      "/oauth/token",
 		STSPath:        "/oauth/token",
-		// API token management lives on the data API (not the auth host).
-		// auth.go / logout.go pass api.AuthBaseURL() for the keyring key,
-		// but the AuthTokensPath calls should route to api.BaseURL() in
-		// split-host setups — see TODO in auth.go's newAuthHostAPIClient.
-		AuthTokensPath: "/api/v1/auth/tokens",
 	},
 }
 
@@ -77,6 +60,23 @@ func resolveProvider(version string) Provider {
 	}
 }
 
+// effectiveProviderVersion resolves the version string fed into
+// resolveProvider. Order: explicit env var > split-host auto-detect > v1.
+//
+// The CLI is split-host by default (us.auth.entire.io for auth, entire.io
+// for data), so unset env vars take the auto-detect branch and resolve to
+// v2 — the OIDC surface us.auth.entire.io serves. v1 only kicks in when a
+// caller explicitly collapses both origins onto a single non-OIDC host.
+func effectiveProviderVersion() string {
+	if v := strings.TrimSpace(os.Getenv(ProviderVersionEnvVar)); v != "" {
+		return v
+	}
+	if api.IsSplitHost() {
+		return "v2"
+	}
+	return "v1"
+}
+
 var (
 	providerOnce     sync.Once
 	resolvedProvider Provider
@@ -91,11 +91,8 @@ var (
 )
 
 // CurrentProvider returns the active Provider for this process.
-//
-// Resolution: read ENTIRE_AUTH_PROVIDER_VERSION exactly once on first
-// call, freeze the result, and return the same Provider on every
-// subsequent call. Tests that need a different provider must use
-// SetProviderForTest before any auth call constructs the singleton.
+// Resolution freezes on the first call (env vars must be set before
+// then). Tests bypass the singleton via SetProviderForTest.
 func CurrentProvider() Provider {
 	providerTestMu.Lock()
 	override := providerForTest
@@ -104,7 +101,7 @@ func CurrentProvider() Provider {
 		return *override
 	}
 	providerOnce.Do(func() {
-		resolvedProvider = resolveProvider(os.Getenv(ProviderVersionEnvVar))
+		resolvedProvider = resolveProvider(effectiveProviderVersion())
 	})
 	return resolvedProvider
 }
