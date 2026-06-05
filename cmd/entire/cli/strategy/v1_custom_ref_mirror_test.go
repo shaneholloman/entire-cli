@@ -343,12 +343,11 @@ func TestMirrorCommittedMetadataRef_SetReferenceErrorNamesTarget(t *testing.T) {
 func TestAdvanceCommittedPrimary_NoMirror(t *testing.T) {
 	repo := setupV1CustomRefRepo(t, "") // v1 only
 	hash := setV1MetadataBranch(t, repo)
-	primary := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 
-	refs := checkpoint.CommittedRefs{Primary: primary, Read: primary, Push: []plumbing.ReferenceName{primary}}
+	refs := checkpoint.DefaultV1Refs()
 	require.NoError(t, AdvanceCommittedPrimary(t.Context(), repo, refs, hash))
 
-	ref, err := repo.Reference(primary, true)
+	ref, err := repo.Reference(refs.Primary, true)
 	require.NoError(t, err)
 	assert.Equal(t, hash, ref.Hash())
 

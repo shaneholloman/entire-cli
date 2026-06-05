@@ -414,19 +414,10 @@ func fetchAndRebaseRefCommon(ctx context.Context, target string, ref plumbing.Re
 		return fmt.Errorf("failed to get remote ref: %w", err)
 	}
 
-	// Helper to advance ref and clean up the temp fetch ref. When ref is the
-	// configured Primary, the mirror is advanced too (best-effort); otherwise
-	// the mirror step is skipped because origin doesn't track this ref.
 	refs := checkpoint.ResolveCommittedRefs(ctx)
 	advance := func(hash plumbing.Hash) error {
-		var setErr error
-		if ref == refs.Primary {
-			setErr = AdvanceCommittedPrimary(ctx, repo, refs, hash)
-		} else {
-			setErr = repo.Storer.SetReference(plumbing.NewHashReference(ref, hash))
-		}
-		if setErr != nil {
-			return fmt.Errorf("failed to update ref %s: %w", ref, setErr)
+		if err := AdvanceLocalRef(ctx, repo, refs, ref, hash); err != nil {
+			return err
 		}
 		if usedTempRef {
 			_ = repo.Storer.RemoveReference(fetchedRefName) //nolint:errcheck // cleanup is best-effort

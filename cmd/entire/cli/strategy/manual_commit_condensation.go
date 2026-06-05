@@ -263,7 +263,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 	// Mirror the committed write to refs.Mirror when configured (best-effort;
 	// failures are logged, not fatal).
-	mirrorCommittedMetadataRefBestEffort(ctx, repo, cpkg.ResolveCommittedRefs(ctx))
+	mirrorCommittedMetadataRefBestEffort(ctx, repo, store.Refs())
 
 	logging.Debug(logCtx, "condense timings",
 		slog.String("session_id", state.SessionID),

@@ -348,9 +348,7 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 // at Primary. Reads target Primary directly, not refs.Read, because this guard
 // must reflect what the next write would target.
 func checkpointHasSessionMetadata(ctx context.Context, repo *git.Repository, refs cpkg.CommittedRefs, checkpointID id.CheckpointID, sessionID string) (bool, error) {
-	primaryRefs := refs
-	primaryRefs.Read = refs.Primary
-	store := cpkg.NewGitStore(repo, primaryRefs)
+	store := cpkg.NewGitStore(repo, refs.PrimaryAsRead())
 	summary, err := store.ReadCommitted(ctx, checkpointID)
 	if err != nil {
 		return false, fmt.Errorf("read checkpoint summary: %w", err)
@@ -450,9 +448,7 @@ func checkpointPresentLocally(ctx context.Context, repo *git.Repository, refs cp
 	if _, err := repo.Reference(refs.Primary, true); err != nil {
 		return false, nil //nolint:nilerr // Missing ref is the "absent" signal, not an error.
 	}
-	primaryRefs := refs
-	primaryRefs.Read = refs.Primary
-	summary, err := cpkg.NewGitStore(repo, primaryRefs).ReadCommitted(ctx, checkpointID)
+	summary, err := cpkg.NewGitStore(repo, refs.PrimaryAsRead()).ReadCommitted(ctx, checkpointID)
 	if err != nil {
 		return false, err //nolint:wrapcheck // Caller wraps with checkpoint ID context
 	}

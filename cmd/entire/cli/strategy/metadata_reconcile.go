@@ -114,10 +114,7 @@ func ReconcileDisconnectedMetadataRef(
 ) error {
 	refs := checkpoint.ResolveCommittedRefs(ctx)
 	advance := func(hash plumbing.Hash) error {
-		if localRefName == refs.Primary {
-			return AdvanceCommittedPrimary(ctx, repo, refs, hash)
-		}
-		return repo.Storer.SetReference(plumbing.NewHashReference(localRefName, hash))
+		return AdvanceLocalRef(ctx, repo, refs, localRefName, hash)
 	}
 
 	// Check local ref

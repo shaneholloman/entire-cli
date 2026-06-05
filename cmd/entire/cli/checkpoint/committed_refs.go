@@ -48,6 +48,12 @@ func (r CommittedRefs) ReadBootstrappableFromOrigin() bool {
 	return r.Read == r.Primary && r.PrimaryFetchableFromOrigin()
 }
 
+// PrimaryAsRead returns a copy of r with Read pinned to Primary.
+func (r CommittedRefs) PrimaryAsRead() CommittedRefs {
+	r.Read = r.Primary
+	return r
+}
+
 // ResolveCommittedRefs returns the topology for the settings on disk, falling
 // back to v1-branch-only when settings cannot be loaded.
 func ResolveCommittedRefs(ctx context.Context) CommittedRefs {

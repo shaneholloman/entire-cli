@@ -123,13 +123,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 		return err
 	}
 
-	refName := s.refs.Primary
-	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to set branch reference: %w", err)
-	}
-
-	return nil
+	return s.setPrimaryRef(newCommitHash)
 }
 
 // flattenCheckpointEntries reads only the entries under a specific checkpoint path
@@ -601,13 +595,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 		return err
 	}
 
-	refName := s.refs.Primary
-	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to set branch reference: %w", err)
-	}
-
-	return nil
+	return s.setPrimaryRef(newCommitHash)
 }
 
 // findSessionIndex returns the index of an existing session with the given ID,
@@ -1433,13 +1421,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 		return err
 	}
 
-	refName := s.refs.Primary
-	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to set branch reference: %w", err)
-	}
-
-	return nil
+	return s.setPrimaryRef(newCommitHash)
 }
 
 // UpdateCommitted replaces the transcript, prompts, and context for an existing
@@ -1558,13 +1540,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return err
 	}
 
-	refName := s.refs.Primary
-	newRef := plumbing.NewHashReference(refName, newCommitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to set branch reference: %w", err)
-	}
-
-	return nil
+	return s.setPrimaryRef(newCommitHash)
 }
 
 func (s *GitStore) replaceSkillEvents(skillEvents []agent.SkillEvent, sessionPath string, entries map[string]object.TreeEntry) error {
@@ -1725,10 +1701,9 @@ func PrecomputeTranscriptBlobs(ctx context.Context, repo *git.Repository, transc
 	}, nil
 }
 
-// ensureSessionsBranch ensures the entire/checkpoints/v1 branch exists.
+// ensureSessionsBranch ensures the primary metadata ref exists.
 func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
-	refName := s.refs.Primary
-	_, err := s.repo.Reference(refName, true)
+	_, err := s.repo.Reference(s.refs.Primary, true)
 	if err == nil {
 		return nil // Branch exists
 	}
@@ -1752,11 +1727,7 @@ func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 		return err
 	}
 
-	newRef := plumbing.NewHashReference(refName, commitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to set branch reference: %w", err)
-	}
-	return nil
+	return s.setPrimaryRef(commitHash)
 }
 
 func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plumbing.Hash) (plumbing.Hash, error) {
