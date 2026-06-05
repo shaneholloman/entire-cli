@@ -766,11 +766,11 @@ func prefetchCheckpointBlobs(ctx context.Context, repo *git.Repository, cpID id.
 	loadPrimaryRoot := func(repo *git.Repository) (*object.Tree, error) {
 		return loadPrimaryMetadataRootTree(ctx, repo, refs)
 	}
-	v1FT := buildCheckpointFetchingTree(ctx, repo, cpID, "primary", loadPrimaryRoot)
+	primaryFT := buildCheckpointFetchingTree(ctx, repo, cpID, "primary", loadPrimaryRoot)
 
 	missingCount := 0
-	if v1FT != nil {
-		missingCount += len(v1FT.CollectMissingBlobs())
+	if primaryFT != nil {
+		missingCount += len(primaryFT.CollectMissingBlobs())
 	}
 	if missingCount == 0 {
 		return
@@ -780,7 +780,7 @@ func prefetchCheckpointBlobs(ctx context.Context, repo *git.Repository, cpID id.
 		slog.Int("blob_count", missingCount),
 	)
 
-	runPreFetch(ctx, v1FT, cpID, "v1")
+	runPreFetch(ctx, primaryFT, cpID, "primary")
 }
 
 // buildCheckpointFetchingTree navigates to the checkpoint subtree using

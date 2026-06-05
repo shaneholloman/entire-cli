@@ -45,16 +45,16 @@ func pushRefIfNeeded(ctx context.Context, target string, ref plumbing.ReferenceN
 		return nil
 	}
 
-	if ref.IsBranch() && !remote.IsURL(target) && !hasUnpushedSessionsCommon(repo, target, localRef.Hash(), ref.Short()) {
+	if ref.IsBranch() && !remote.IsURL(target) && !hasUnpushedBranchRef(repo, target, localRef.Hash(), ref.Short()) {
 		return nil
 	}
 
 	return doPushRef(ctx, target, ref)
 }
 
-// hasUnpushedSessionsCommon checks if the local branch differs from the remote.
+// hasUnpushedBranchRef checks if the local branch differs from the remote.
 // Returns true if there's any difference that needs syncing (local ahead, remote ahead, or diverged).
-func hasUnpushedSessionsCommon(repo *git.Repository, remoteName string, localHash plumbing.Hash, branchName string) bool {
+func hasUnpushedBranchRef(repo *git.Repository, remoteName string, localHash plumbing.Hash, branchName string) bool {
 	// Check for remote tracking ref: refs/remotes/<remoteName>/<branch>
 	remoteRefName := plumbing.NewRemoteReferenceName(remoteName, branchName)
 	remoteRef, err := repo.Reference(remoteRefName, true)
@@ -80,7 +80,7 @@ func displayPushTarget(target string) string {
 // can shrink it.
 var checkpointPushBudget = 2 * time.Minute
 
-// doPushRef pushes the given ref to the target with fetch+merge recovery.
+// doPushRef pushes the given ref to the target with fetch+rebase recovery.
 // The target can be a remote name or a URL.
 func doPushRef(ctx context.Context, target string, ref plumbing.ReferenceName) error {
 	ctx, cancel := context.WithTimeout(ctx, checkpointPushBudget)
@@ -93,7 +93,7 @@ func doPushRef(ctx context.Context, target string, ref plumbing.ReferenceName) e
 	stop := startProgressDots(os.Stderr)
 
 	// Try pushing first
-	result, err := tryPushSessionsCommon(ctx, target, ref)
+	result, err := tryPushRefCommon(ctx, target, ref)
 	if err == nil {
 		finishPush(ctx, stop, result, target)
 		return nil
@@ -114,7 +114,7 @@ func doPushRef(ctx context.Context, target string, ref plumbing.ReferenceName) e
 	stop = startProgressDots(os.Stderr)
 
 	frCtx, fetchRebaseSpan := perf.Start(ctx, "fetch_and_rebase")
-	syncErr := fetchAndRebaseSessionsCommon(frCtx, target, ref)
+	syncErr := fetchAndRebaseRefCommon(frCtx, target, ref)
 	fetchRebaseSpan.RecordError(syncErr)
 	fetchRebaseSpan.End()
 	if syncErr != nil {
@@ -129,7 +129,7 @@ func doPushRef(ctx context.Context, target string, ref plumbing.ReferenceName) e
 	fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", refLabel, displayTarget)
 	stop = startProgressDots(os.Stderr)
 
-	if result, err := tryPushSessionsCommon(ctx, target, ref); err != nil {
+	if result, err := tryPushRefCommon(ctx, target, ref); err != nil {
 		stop("")
 		fmt.Fprintf(os.Stderr, "[entire] Warning: failed to push %s after sync: %v\n", refLabel, err)
 		printCheckpointRemoteHint(target)
@@ -233,11 +233,11 @@ func finishPush(ctx context.Context, stop func(string), result pushResult, targe
 	}
 }
 
-// tryPushSessionsCommon attempts to push a ref. No timeout of its own —
+// tryPushRefCommon attempts to push a ref. No timeout of its own —
 // runs under doPushRef's shared budget. Branch refs use a bare branch-name
 // refSpec so existing remote-tracking works; non-branch refs use a force
 // refspec ("+refs/...:refs/...") with no tracking shadow.
-func tryPushSessionsCommon(ctx context.Context, remoteName string, ref plumbing.ReferenceName) (pushResult, error) {
+func tryPushRefCommon(ctx context.Context, remoteName string, ref plumbing.ReferenceName) (pushResult, error) {
 	refSpec := ref.Short()
 	if !ref.IsBranch() {
 		refSpec = "+" + ref.String() + ":" + ref.String()
@@ -339,11 +339,11 @@ func printProtectedRefBlock(w io.Writer, ref, target string) {
 	fmt.Fprintln(w, banner)
 }
 
-// fetchAndRebaseSessionsCommon fetches remote sessions and rebases local commits
-// on top of the remote tip. Since checkpoint shards use unique paths, rebases
-// always apply cleanly.
+// fetchAndRebaseRefCommon fetches a remote ref and rebases local commits on top
+// of the remote tip. Since checkpoint shards use unique paths, rebases always
+// apply cleanly.
 // The target can be a remote name or a URL.
-func fetchAndRebaseSessionsCommon(ctx context.Context, target string, ref plumbing.ReferenceName) error {
+func fetchAndRebaseRefCommon(ctx context.Context, target string, ref plumbing.ReferenceName) error {
 	// No timeout: runs under doPushRef's shared budget.
 	fetchTarget, err := remote.ResolveFetchTarget(ctx, target)
 	if err != nil {
@@ -397,8 +397,8 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target string, ref plumbi
 	// can compare fresh local vs remote. If disconnected (empty-orphan bug),
 	// this cherry-picks local commits onto remote tip, updating the local ref.
 	// If reconciliation fails, abort — proceeding to rebase on disconnected
-	// branches would silently combine unrelated histories.
-	if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, fetchedRefName, os.Stderr); reconcileErr != nil {
+	// refs would silently combine unrelated histories.
+	if reconcileErr := ReconcileDisconnectedMetadataRef(ctx, repo, ref, fetchedRefName, os.Stderr); reconcileErr != nil {
 		return fmt.Errorf("metadata reconciliation failed: %w", reconcileErr)
 	}
 
