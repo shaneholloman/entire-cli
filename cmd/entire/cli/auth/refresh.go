@@ -216,6 +216,28 @@ func NewRefreshingLoginProvider(c *contexts.Context, transport http.RoundTripper
 	}, nil
 }
 
+// RefreshedLoginToken returns context c's login JWT, transparently re-minting
+// an expired one from the stored refresh token. It is the convenience form of
+// NewRefreshingLoginProvider for callers that want a single token now (e.g.
+// `auth status` / `logout`, which must report a refreshable session as alive
+// rather than telling the user to re-login). The insecure-HTTP decision mirrors
+// the control-plane resolver: loopback cores and the --insecure-http-auth
+// opt-in are permitted, everything else requires https.
+//
+// Errors preserve the tokenmanager sentinels (ErrReauthRequired when the
+// session is genuinely dead, ErrNotLoggedIn when no credential is usable) so
+// callers can branch on errors.Is.
+func RefreshedLoginToken(ctx context.Context, c *contexts.Context) (string, error) {
+	if c == nil {
+		return "", errors.New("nil context")
+	}
+	provider, err := NewRefreshingLoginProvider(c, nil, insecureHTTPEnabled() || isLoopbackHTTP(c.CoreURL))
+	if err != nil {
+		return "", err
+	}
+	return provider(ctx)
+}
+
 // NewRefreshingResourceProvider returns a provider that mints a bearer valid
 // for resourceOrigin carrying the given audience, by exchanging context c's
 // login JWT at c's own core (RFC 8693). It is NewRefreshingLoginProvider's

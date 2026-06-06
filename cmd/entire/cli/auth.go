@@ -167,7 +167,7 @@ func newAuthStatusCmd() *cobra.Command {
 			if err := requireSecureBaseURL(insecureHTTPAuth); err != nil {
 				return err
 			}
-			target, err := resolveStatusTarget(auth.NewContextStore(), auth.Contexts, api.AuthBaseURL())
+			target, err := resolveStatusTarget(cmd.Context(), auth.NewContextStore(), auth.Contexts, auth.RefreshedLoginToken, api.AuthBaseURL())
 			if err != nil {
 				return err
 			}
@@ -208,6 +208,11 @@ type authSessionLister func(ctx context.Context, coreURL, token string) ([]api.A
 // name. Injected for testability; production wires auth.Contexts.
 type contextsProvider func() ([]*contexts.Context, string, error)
 
+// loginTokenResolver returns a usable login JWT for a context, transparently
+// re-minting an expired one from the stored refresh token. Injected so status
+// tests don't reach the network; production wires auth.RefreshedLoginToken.
+type loginTokenResolver func(ctx context.Context, c *contexts.Context) (string, error)
+
 // statusTarget is the resolved core to act against: the active context's
 // CoreURL + its session token, or (no active context) the configured
 // AuthBaseURL + legacy keyring entry. Shared by `auth status` (profile +
@@ -219,17 +224,29 @@ type statusTarget struct {
 	totalContexts int
 }
 
-// resolveStatusTarget picks the core + token for `entire auth status`. The
-// active contexts.json context wins (so `auth use` retargets status onto that
-// login server); otherwise it falls back to the legacy keyring entry keyed by
-// the configured auth host.
+// resolveStatusTarget picks the core + token for `entire auth status` (and
+// `logout`). The active contexts.json context wins (so `auth use` retargets
+// status onto that login server); otherwise it falls back to the legacy keyring
+// entry keyed by the configured auth host.
+//
+// For the active context the token is resolved through resolveLogin, which
+// transparently re-mints an expired login JWT from the stored refresh token.
+// This is the point of the refresh: an expired-but-refreshable session must
+// report "logged in", not "re-login" — the same false negative
+// auth.ResolveControlPlaneTarget already avoids for org/repo/project/grant.
+// `logout` benefits too: the refreshed bearer can authenticate the revoke call
+// instead of failing on an expired token. When refresh fails (revoked family,
+// network, opaque token), we fall back to the stored token and let the /me
+// liveness probe be the arbiter — preserving the accurate "no longer valid"
+// outcome for a genuinely dead session (ErrReauthRequired → expired token →
+// 401 → re-login).
 //
 // A genuine contexts.json read/parse error is surfaced, not swallowed — a
 // missing file reads as "no contexts" (no error), so an error here means the
 // file is corrupt or unreadable, which the user must see. This keeps status
 // symmetric with the control-plane commands (auth.ResolveControlPlaneTarget),
 // which fail the same way rather than silently degrading to a stale identity.
-func resolveStatusTarget(store tokenStore, listContexts contextsProvider, fallbackBaseURL string) (statusTarget, error) {
+func resolveStatusTarget(ctx context.Context, store tokenStore, listContexts contextsProvider, resolveLogin loginTokenResolver, fallbackBaseURL string) (statusTarget, error) {
 	all, current, err := listContexts()
 	if err != nil {
 		return statusTarget{}, fmt.Errorf("load contexts: %w", err)
@@ -238,6 +255,12 @@ func resolveStatusTarget(store tokenStore, listContexts contextsProvider, fallba
 	for _, c := range all {
 		if c.Name != current || c.CoreURL == "" {
 			continue
+		}
+		// Prefer a refreshed token; fall back to the raw stored token so a
+		// refresh failure degrades to today's behaviour rather than dropping
+		// to the legacy entry.
+		if tok, terr := resolveLogin(ctx, c); terr == nil && tok != "" {
+			return statusTarget{coreURL: c.CoreURL, token: tok, activeContext: c.Name, totalContexts: total}, nil
 		}
 		if tok, terr := auth.LoginTokenForContext(c); terr == nil && tok != "" {
 			return statusTarget{coreURL: c.CoreURL, token: tok, activeContext: c.Name, totalContexts: total}, nil
