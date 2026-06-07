@@ -71,6 +71,55 @@ func TestParseHookEvent_BeforeAgentStart_WithSkillEvent(t *testing.T) {
 	}
 }
 
+// TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents locks the live-capture
+// guarantee for more than one invocation in a single turn: every reported
+// /skill:<name> must surface as its own SkillEvent. This is the path that backs
+// invoked-skill capture for ALL live Pi sessions, including `entire review
+// --agent pi`.
+func TestParseHookEvent_BeforeAgentStart_MultipleSkillEvents(t *testing.T) {
+	t.Parallel()
+	a := &PiAgent{}
+	stdin := strings.NewReader(`{"type":"before_agent_start","session_file":"/tmp/2026-05-09T12-00-00-000Z_abc-123.jsonl","prompt":"expanded","skill_events":[{"skill_name":"review-pr","invocation":"/skill:review-pr","timestamp":"2026-05-25T12:34:56Z"},{"skill_name":"test-auditor","invocation":"/skill:test-auditor","timestamp":"2026-05-25T12:35:10Z"}]}`)
+	ev, err := a.ParseHookEvent(context.Background(), HookNameBeforeAgentStart, stdin)
+	if err != nil {
+		t.Fatalf("ParseHookEvent: %v", err)
+	}
+	got := make(map[string]bool)
+	for _, se := range ev.SkillEvents {
+		got[se.Skill.Name] = true
+		if se.Source.Agent != string(agent.AgentNamePi) {
+			t.Errorf("Source.Agent = %q, want pi", se.Source.Agent)
+		}
+	}
+	for _, want := range []string{"review-pr", "test-auditor"} {
+		if !got[want] {
+			t.Errorf("missing live skill event for %q; got %v", want, got)
+		}
+	}
+}
+
+// TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction is an architectural
+// guard. Pi captures invoked skills LIVE via the extension's input handler
+// (see piSkillEvents), which is mutually exclusive with the transcript-
+// extraction model claude-code uses. PiAgent must therefore NOT implement
+// agent.SkillEventExtractor: condensation merges any extractor output with the
+// live state.SkillEvents, and the keys cannot dedup cleanly across the
+// live/transcript boundary (per-invocation vs current TurnID), so adding an
+// extractor would double-count earlier-turn skills in checkpoint metadata.
+//
+// If you are here because this test failed: you likely added an ExtractSkillEvents
+// method to PiAgent. Don't — Pi already captures invoked skills live. Reconcile
+// the dedup model first (make skill-event identity stable across the boundary)
+// before reintroducing transcript extraction.
+func TestPiAgent_UsesLiveSkillCaptureNotTranscriptExtraction(t *testing.T) {
+	t.Parallel()
+	if _, ok := agent.AsSkillEventExtractor(NewPiAgent()); ok {
+		t.Fatal("PiAgent implements SkillEventExtractor: Pi uses live skill capture; " +
+			"a transcript extractor would double-count live-captured events at condensation. " +
+			"See piSkillEvents and this test's doc comment.")
+	}
+}
+
 func TestParseHookEvent_SessionShutdown_NoLifecycleEvent(t *testing.T) {
 	t.Parallel()
 	a := &PiAgent{}
