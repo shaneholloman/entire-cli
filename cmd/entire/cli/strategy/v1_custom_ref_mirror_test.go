@@ -101,10 +101,12 @@ func enableV1CustomRefMirror(t *testing.T, dir string) {
 }
 
 func v1CustomRefsForTest() checkpoint.CommittedRefs {
+	v1Branch := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	return checkpoint.CommittedRefs{
-		Primary: plumbing.NewBranchReferenceName(paths.MetadataBranchName),
+		Primary: v1Branch,
 		Read:    plumbing.ReferenceName(paths.MetadataRefName),
 		Mirror:  plumbing.ReferenceName(paths.MetadataRefName),
+		Push:    []plumbing.ReferenceName{v1Branch},
 	}
 }
 
@@ -338,13 +340,74 @@ func TestMirrorCommittedMetadataRef_SetReferenceErrorNamesTarget(t *testing.T) {
 }
 
 // Not parallel: uses t.Chdir().
-func TestMirrorCommittedMetadataRefBestEffort_V1MissingNoOp(t *testing.T) {
-	repo := setupV1CustomRefRepo(t, `"1.1"`) // no v1 metadata branch created
+func TestAdvanceCommittedPrimary_NoMirror(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, "") // v1 only
+	hash := setV1MetadataBranch(t, repo)
 
-	MirrorCommittedMetadataRefBestEffort(t.Context(), repo)
+	refs := checkpoint.DefaultV1Refs()
+	require.NoError(t, AdvanceCommittedPrimary(t.Context(), repo, refs, hash))
+
+	ref, err := repo.Reference(refs.Primary, true)
+	require.NoError(t, err)
+	assert.Equal(t, hash, ref.Hash())
 
 	_, ok := v1CustomRefHash(t, repo)
-	assert.False(t, ok, "v1 custom ref must not be created when v1 metadata branch is absent")
+	assert.False(t, ok, "no mirror configured; v1.1 ref must not exist")
+}
+
+// Not parallel: uses t.Chdir().
+func TestAdvanceCommittedPrimary_AdvancesBothRefs(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	require.NoError(t, AdvanceCommittedPrimary(t.Context(), repo, v1CustomRefsForTest(), head.Hash()))
+
+	primaryRef, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	assert.Equal(t, head.Hash(), primaryRef.Hash())
+
+	mirror, ok := v1CustomRefHash(t, repo)
+	require.True(t, ok)
+	assert.Equal(t, head.Hash(), mirror, "mirror must track primary after advance")
+}
+
+type selectiveSetReferenceErrorStorer struct {
+	storage.Storer
+
+	failRef plumbing.ReferenceName
+	err     error
+}
+
+func (s selectiveSetReferenceErrorStorer) SetReference(ref *plumbing.Reference) error {
+	if ref.Name() == s.failRef {
+		return s.err
+	}
+	return s.Storer.SetReference(ref)
+}
+
+// Not parallel: uses t.Chdir().
+func TestAdvanceCommittedPrimary_MirrorFailureDoesNotFailPrimary(t *testing.T) {
+	repo := setupV1CustomRefRepo(t, `"1.1"`)
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	mirrorRef := plumbing.ReferenceName(paths.MetadataRefName)
+	repo.Storer = selectiveSetReferenceErrorStorer{
+		Storer:  repo.Storer,
+		failRef: mirrorRef,
+		err:     errors.New("mirror set failed"),
+	}
+
+	require.NoError(t, AdvanceCommittedPrimary(t.Context(), repo, v1CustomRefsForTest(), head.Hash()),
+		"mirror failure must be swallowed; only Primary failure should surface")
+
+	primaryRef, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	assert.Equal(t, head.Hash(), primaryRef.Hash())
+
+	_, ok := v1CustomRefHash(t, repo)
+	assert.False(t, ok, "mirror write was rejected, so the ref must not exist")
 }
 
 // Not parallel: uses t.Chdir().
@@ -386,12 +449,98 @@ func TestUpdateCombinedAttribution_MirrorsV1CustomRefWhenEnabled(t *testing.T) {
 	assert.Equal(t, v1Hash, got, "custom ref must track v1 after combined-attribution write")
 }
 
-// TestPrePush_DoesNotPushV1CustomRef proves the phase-1 invariant: even with the
-// mirror opted in and both refs present locally, pre-push pushes only the v1
-// branch and never the v1 custom ref.
+// Not parallel: uses t.Chdir(). Setup returns the expected diagnosis fields.
+func TestDiagnoseCommittedMetadataMirror(t *testing.T) {
+	setMirror := func(t *testing.T, repo *git.Repository, hash plumbing.Hash) {
+		t.Helper()
+		require.NoError(t, repo.Storer.SetReference(
+			plumbing.NewHashReference(plumbing.ReferenceName(paths.MetadataRefName), hash)))
+	}
+	secondCommit := func(t *testing.T, repo *git.Repository) plumbing.Hash {
+		t.Helper()
+		cwd, err := os.Getwd()
+		require.NoError(t, err)
+		testutil.WriteFile(t, cwd, "f2.txt", "more")
+		testutil.GitAdd(t, cwd, "f2.txt")
+		testutil.GitCommit(t, cwd, "second")
+		head, err := repo.Head()
+		require.NoError(t, err)
+		return head.Hash()
+	}
+
+	type want struct {
+		status  MirrorStatus
+		primary plumbing.Hash
+		mirror  plumbing.Hash
+	}
+	tests := []struct {
+		name    string
+		version string
+		setup   func(t *testing.T, repo *git.Repository) want
+	}{
+		{"not configured in v1 mode", "", func(t *testing.T, repo *git.Repository) want {
+			setV1MetadataBranch(t, repo)
+			return want{status: MirrorNotConfigured}
+		}},
+		{"ok when mirror matches v1", `"1.1"`, func(t *testing.T, repo *git.Repository) want {
+			v1 := setV1MetadataBranch(t, repo)
+			setMirror(t, repo, v1)
+			return want{status: MirrorOK, primary: v1, mirror: v1}
+		}},
+		{"missing when mirror ref absent", `"1.1"`, func(t *testing.T, repo *git.Repository) want {
+			v1 := setV1MetadataBranch(t, repo)
+			return want{status: MirrorMissing, primary: v1}
+		}},
+		{"behind when mirror is an ancestor of v1", `"1.1"`, func(t *testing.T, repo *git.Repository) want {
+			old := setV1MetadataBranch(t, repo)
+			setMirror(t, repo, old)
+			secondCommit(t, repo)
+			newHash := setV1MetadataBranch(t, repo)
+			require.NotEqual(t, old, newHash)
+			return want{status: MirrorBehind, primary: newHash, mirror: old}
+		}},
+		{"diverged when mirror is not an ancestor of v1", `"1.1"`, func(t *testing.T, repo *git.Repository) want {
+			v1 := setV1MetadataBranch(t, repo)
+			ahead := secondCommit(t, repo)
+			setMirror(t, repo, ahead)
+			return want{status: MirrorDiverged, primary: v1, mirror: ahead}
+		}},
+		{"no metadata when neither ref exists", `"1.1"`, func(_ *testing.T, _ *git.Repository) want {
+			return want{status: MirrorNoMetadata}
+		}},
+		{"primary missing when mirror outlives v1", `"1.1"`, func(t *testing.T, repo *git.Repository) want {
+			head, err := repo.Head()
+			require.NoError(t, err)
+			setMirror(t, repo, head.Hash())
+			return want{status: MirrorPrimaryMissing, mirror: head.Hash()}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := setupV1CustomRefRepo(t, tt.version)
+			expected := tt.setup(t, repo)
+			mirrorBefore, mirrorExistedBefore := v1CustomRefHash(t, repo)
+
+			diag, err := DiagnoseCommittedMetadataMirror(t.Context(), repo)
+			require.NoError(t, err)
+			assert.Equal(t, expected.status, diag.Status)
+			assert.Equal(t, expected.primary, diag.Primary)
+			assert.Equal(t, expected.mirror, diag.Mirror)
+			assert.Equal(t, expected.status != MirrorNotConfigured, diag.Refs.HasMirror(),
+				"Refs must carry the topology for repair")
+
+			mirrorAfter, mirrorExistsAfter := v1CustomRefHash(t, repo)
+			require.Equal(t, mirrorExistedBefore, mirrorExistsAfter, "diagnosis must not create or delete the mirror ref")
+			assert.Equal(t, mirrorBefore, mirrorAfter, "diagnosis must not move the mirror ref")
+		})
+	}
+}
+
+// TestPrePush_PushesV1CustomRefWhenOptedIn proves that with the mirror opted
+// in, pre-push pushes the v1 branch and the v1 custom ref alongside it.
 //
 // Not parallel: uses t.Chdir().
-func TestPrePush_DoesNotPushV1CustomRef(t *testing.T) {
+func TestPrePush_PushesV1CustomRefWhenOptedIn(t *testing.T) {
 	ctx := t.Context()
 	repo := setupV1CustomRefRepo(t, `"1.1"`)
 	head := setV1MetadataBranch(t, repo)
@@ -408,6 +557,6 @@ func TestPrePush_DoesNotPushV1CustomRef(t *testing.T) {
 
 	assert.True(t, localRefExists(t, bareDir, "refs/heads/"+paths.MetadataBranchName),
 		"v1 metadata branch should be pushed")
-	assert.False(t, localRefExists(t, bareDir, paths.MetadataRefName),
-		"v1 custom ref must never be pushed")
+	assert.True(t, localRefExists(t, bareDir, paths.MetadataRefName),
+		"v1 custom ref should be pushed alongside v1 when opted in")
 }
