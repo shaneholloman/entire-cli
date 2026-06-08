@@ -19,7 +19,7 @@ type EnableRepoResponse struct {
 	InstallURL string `json:"install_url,omitempty"`
 	Repo       *struct {
 		FullName string `json:"full_name"`
-		GithubID int64  `json:"github_id"`
+		GitHubID int64  `json:"github_id"`
 		Private  bool   `json:"private"`
 	} `json:"repo,omitempty"`
 }

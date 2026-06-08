@@ -777,7 +777,7 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 				if runErr != nil {
 					return
 				}
-				reportRepoEnabled(ctx, cmd.OutOrStdout(), insecureHTTPAuth)
+				reportRepoEnabled(ctx, cmd.ErrOrStderr(), insecureHTTPAuth)
 			}()
 			// Check if we're in a git repository first. If not, offer to
 			// bootstrap one (git init + optional GitHub repo). If the user
@@ -936,13 +936,24 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 // reportRepoEnabled records the `entire enable` against the backend so the web
 // onboarding can reflect it. It is strictly best-effort: enabling works fully
 // offline, so any failure (no origin remote, not logged in, network error) is
-// swallowed except for the actionable "App can't reach this repo" hint.
-func reportRepoEnabled(ctx context.Context, w io.Writer, insecureHTTPAuth bool) {
-	remoteURL, err := gitremote.GetRemoteURL(ctx, "origin")
-	if err != nil || strings.TrimSpace(remoteURL) == "" {
+// swallowed except for the actionable "App can't reach this repo" hint, which
+// is written to errW (a warning, not piped output).
+func reportRepoEnabled(ctx context.Context, errW io.Writer, insecureHTTPAuth bool) {
+	rawURL, err := gitremote.GetRemoteURL(ctx, "origin")
+	if err != nil || strings.TrimSpace(rawURL) == "" {
 		// Local-only repo with no origin yet — nothing to report.
 		return
 	}
+
+	// Never send the raw remote: it can carry embedded credentials
+	// (https://token@host/...) or query params. Parse and rebuild a clean,
+	// credential-free URL; skip entirely if it isn't parseable.
+	info, err := gitremote.ParseURL(rawURL)
+	if err != nil {
+		logging.Debug(ctx, "skipping enable report: unparseable origin remote", "error", err)
+		return
+	}
+	cleanURL := fmt.Sprintf("https://%s/%s/%s.git", info.Host, info.Owner, info.Repo)
 
 	client, err := NewAuthenticatedAPIClient(ctx, insecureHTTPAuth)
 	if err != nil {
@@ -951,14 +962,14 @@ func reportRepoEnabled(ctx context.Context, w io.Writer, insecureHTTPAuth bool) 
 		return
 	}
 
-	resp, err := client.ReportEnable(ctx, remoteURL)
+	resp, err := client.ReportEnable(ctx, cleanURL)
 	if err != nil {
 		logging.Debug(ctx, "enable report failed", "error", err)
 		return
 	}
 
 	if !resp.Connected && resp.InstallURL != "" {
-		fmt.Fprintf(w, "\nEntire can't access this repository yet. Install the GitHub App so checkpoints can sync:\n  %s\n", resp.InstallURL)
+		fmt.Fprintf(errW, "\nEntire can't access this repository yet. Install the GitHub App so checkpoints can sync:\n  %s\n", resp.InstallURL)
 	}
 }
 
