@@ -5,8 +5,10 @@ import (
 	"fmt"
 )
 
-// EnableRepoRequest is the body of POST /api/v1/cli/enable. The server parses
-// the raw remote URL itself, so the CLI only needs to send what it knows.
+// EnableRepoRequest is the body of POST /api/v1/cli/enable. RemoteURL is a
+// clean, credential-free remote URL (the CLI strips any embedded credentials
+// and query params before sending — see reportRepoEnabled); the server
+// resolves it to a repo on its end.
 type EnableRepoRequest struct {
 	RemoteURL string `json:"remote_url"`
 }
@@ -14,6 +16,10 @@ type EnableRepoRequest struct {
 // EnableRepoResponse is the result of recording an `entire enable`. Connected
 // reports whether the GitHub App can currently reach the repo; when it can't,
 // InstallURL points at the App installation page.
+//
+// The CLI deliberately ignores these fields today: reporting is best-effort and
+// the "install the GitHub App" nudge is surfaced by the web onboarding, not the
+// CLI. They are decoded for the API contract and potential future use.
 type EnableRepoResponse struct {
 	Connected  bool   `json:"connected"`
 	InstallURL string `json:"install_url,omitempty"`

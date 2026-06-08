@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/external"
@@ -939,6 +940,12 @@ for you and (optionally) create a matching GitHub repository via the gh CLI.`,
 // network error, App-can't-reach-repo) is swallowed — the web onboarding
 // surfaces the "install the GitHub App" nudge, so the CLI stays quiet.
 func reportRepoEnabled(ctx context.Context, insecureHTTPAuth bool) {
+	// This runs synchronously on the enable success path, so bound it: a backend
+	// that accepts the connection but never responds must not hang the command
+	// after it has already printed success.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	rawURL, err := gitremote.GetRemoteURL(ctx, "origin")
 	if err != nil || strings.TrimSpace(rawURL) == "" {
 		// Local-only repo with no origin yet — nothing to report.
