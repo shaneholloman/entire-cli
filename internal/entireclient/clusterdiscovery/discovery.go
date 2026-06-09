@@ -136,10 +136,10 @@ func Discover(ctx context.Context, clusterHost string, c *http.Client, debugf De
 	return &body, nil
 }
 
-// RenderLoginHint formats a fatal-ready message describing which
-// entire-core URLs an operator can log into to gain credentials for
-// clusterHost. The output is stable (one indented URL per line) so
-// callers can pattern-match in tests.
+// RenderLoginHint formats a fatal-ready "no auth context for cluster X"
+// message telling the operator to run `entire login`. coreURLs (the cluster's
+// advertised login servers) is accepted but intentionally not yet surfaced —
+// see renderLoginHint.
 func RenderLoginHint(clusterHost string, coreURLs []string) string {
 	return renderLoginHint("cluster "+clusterHost, coreURLs)
 }
