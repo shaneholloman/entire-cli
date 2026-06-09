@@ -80,48 +80,72 @@ func ResolveClusterCores(ctx context.Context, cacheDir, clusterHost string, http
 	return resolveClusterCores(ctx, cacheDir, clusterHost, httpClient, debugf)
 }
 
-// resolveClusterCores returns the control-plane core URLs that front
-// clusterHost, from cluster_cores.json when fresh, otherwise via a live
-// /.well-known fetch (which is then cached). A stale-but-present cache
-// entry is used as a fallback when the live fetch fails, so a brief
-// cluster outage doesn't break an operation whose cores we already knew.
-func resolveClusterCores(ctx context.Context, cacheDir, clusterHost string, httpClient *http.Client, debugf DebugFunc) ([]string, error) {
-	cache, err := discovery.LoadClusterCores(cacheDir)
+// resolveCachedCores is the shared cache-then-/.well-known resolution behind
+// both resolveClusterCores (git clusters) and resolveAPICores (data APIs):
+// read the host→cores cache, return it when fresh, otherwise discover live and
+// rewrite the cache. A stale-but-present entry is used as a fallback when the
+// live fetch fails, so a brief outage doesn't break a host whose cores we
+// already knew. load/modify select the cache file; discover wraps the
+// host-specific /.well-known fetch (and any host-specific error formatting);
+// label names the resource in debug output ("cluster" / "api host").
+func resolveCachedCores(
+	cacheDir, host, label string,
+	load func(string) (discovery.ClusterCoresCache, error),
+	modify func(string, func(discovery.ClusterCoresCache) error) error,
+	discover func() ([]string, error),
+	debugf DebugFunc,
+) ([]string, error) {
+	cache, err := load(cacheDir)
 	if err != nil {
 		// A cache read problem must not block resolution — discover live.
-		debugf("cluster-cores cache load failed: %v; discovering live", err)
+		debugf("%s cache load failed: %v; discovering live", label, err)
 		cache = nil
 	}
 
 	var stale []string
 	if cache != nil {
-		if urls, fresh, ok := cache.Get(clusterHost); ok {
+		if urls, fresh, ok := cache.Get(host); ok {
 			if fresh {
-				debugf("cluster %s cores from cache: %v", clusterHost, urls)
+				debugf("%s %s cores from cache: %v", label, host, urls)
 				return urls, nil
 			}
 			stale = urls
-			debugf("cluster %s cores cache expired; re-fetching /.well-known", clusterHost)
+			debugf("%s %s cores cache expired; re-fetching /.well-known", label, host)
 		}
 	}
 
-	body, err := Discover(ctx, clusterHost, httpClient, debugf)
+	cores, err := discover()
 	if err != nil {
 		if stale != nil {
-			debugf("discovery for %s failed (%v); falling back to stale cached cores %v", clusterHost, err, stale)
+			debugf("%s discovery for %s failed (%v); falling back to stale cached cores %v", label, host, err, stale)
 			return stale, nil
 		}
-		return nil, formatDiscoveryError(clusterHost, err)
+		return nil, err
 	}
 
-	if mErr := discovery.ModifyClusterCores(cacheDir, func(c discovery.ClusterCoresCache) error {
-		c.Set(clusterHost, body.CoreURLs)
+	if mErr := modify(cacheDir, func(c discovery.ClusterCoresCache) error {
+		c.Set(host, cores)
 		return nil
 	}); mErr != nil {
 		// Non-fatal: we resolved the cores, the next call just re-fetches.
-		debugf("cluster-cores cache write for %s failed: %v", clusterHost, mErr)
+		debugf("%s cache write for %s failed: %v", label, host, mErr)
 	}
-	return body.CoreURLs, nil
+	return cores, nil
+}
+
+// resolveClusterCores returns the control-plane core URLs that front
+// clusterHost, from cluster_cores.json when fresh, otherwise via a live
+// /.well-known fetch (cached, with stale fallback on failure).
+func resolveClusterCores(ctx context.Context, cacheDir, clusterHost string, httpClient *http.Client, debugf DebugFunc) ([]string, error) {
+	return resolveCachedCores(cacheDir, clusterHost, "cluster",
+		discovery.LoadClusterCores, discovery.ModifyClusterCores,
+		func() ([]string, error) {
+			body, err := Discover(ctx, clusterHost, httpClient, debugf)
+			if err != nil {
+				return nil, formatDiscoveryError(clusterHost, err)
+			}
+			return body.CoreURLs, nil
+		}, debugf)
 }
 
 // selectContext applies the account-selection rules over a resource's

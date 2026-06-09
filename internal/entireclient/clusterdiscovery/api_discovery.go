@@ -62,49 +62,21 @@ func DiscoverAPI(ctx context.Context, apiHost string, c *http.Client, debugf Deb
 
 // resolveAPICores returns apiHost's trusted issuer URLs, from
 // api_discovery.json when fresh, otherwise via a live
-// /.well-known/entire-api.json fetch (which is then cached). A stale-but-present
-// cache entry is used as a fallback when the live fetch fails, so a brief outage
-// doesn't break a command whose trust roots we already knew. Mirrors
-// resolveClusterCores exactly — the data-API trusted issuers ARE core URLs, so
-// they share the cores cache (different file). Cold failures stay folded under
+// /.well-known/entire-api.json fetch (cached, with stale fallback on failure).
+// Shares the cache-then-discover logic with resolveClusterCores via
+// resolveCachedCores — the data-API trusted issuers ARE core URLs, so they
+// reuse the cores cache (different file). Cold failures stay folded under
 // ErrDiscoveryUnavailable (from DiscoverAPI) for the caller's static fallback.
 func resolveAPICores(ctx context.Context, cacheDir, apiHost string, httpClient *http.Client, debugf DebugFunc) ([]string, error) {
-	cache, err := discovery.LoadAPICores(cacheDir)
-	if err != nil {
-		// A cache read problem must not block resolution — discover live.
-		debugf("api-discovery cache load failed: %v; discovering live", err)
-		cache = nil
-	}
-
-	var stale []string
-	if cache != nil {
-		if urls, fresh, ok := cache.Get(apiHost); ok {
-			if fresh {
-				debugf("api host %s trusted issuers from cache: %v", apiHost, urls)
-				return urls, nil
+	return resolveCachedCores(cacheDir, apiHost, "api host",
+		discovery.LoadAPICores, discovery.ModifyAPICores,
+		func() ([]string, error) {
+			body, err := DiscoverAPI(ctx, apiHost, httpClient, debugf)
+			if err != nil {
+				return nil, err
 			}
-			stale = urls
-			debugf("api host %s trusted-issuers cache expired; re-fetching %s", apiHost, APIPath)
-		}
-	}
-
-	body, err := DiscoverAPI(ctx, apiHost, httpClient, debugf)
-	if err != nil {
-		if stale != nil {
-			debugf("api discovery for %s failed (%v); falling back to stale cached trusted issuers %v", apiHost, err, stale)
-			return stale, nil
-		}
-		return nil, err
-	}
-
-	if mErr := discovery.ModifyAPICores(cacheDir, func(c discovery.ClusterCoresCache) error {
-		c.Set(apiHost, body.TrustedIssuers)
-		return nil
-	}); mErr != nil {
-		// Non-fatal: we resolved the issuers, the next command just re-fetches.
-		debugf("api-discovery cache write for %s failed: %v", apiHost, mErr)
-	}
-	return body.TrustedIssuers, nil
+			return body.TrustedIssuers, nil
+		}, debugf)
 }
 
 // ResolveContextForAPI picks the local login context to authenticate data-API
