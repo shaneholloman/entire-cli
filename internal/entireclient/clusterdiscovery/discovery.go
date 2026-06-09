@@ -150,11 +150,7 @@ func RenderLoginHint(clusterHost string, coreURLs []string) string {
 // resolvers.
 func renderLoginHint(subject string, coreURLs []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "no auth context for %s. Accepts logins from:\n", subject)
-	for _, u := range coreURLs {
-		fmt.Fprintf(&b, "  %s\n", u)
-	}
-	fmt.Fprint(&b, "\nLog in with `entire login`, then re-run your command.\n"+
-		"If you already have a login on one of those servers, switch to it with `entire auth use <context>`.")
+	fmt.Fprintf(&b, "no auth context for %s.\n", subject)
+	fmt.Fprint(&b, "Log in with `entire login`, then re-run your command.")
 	return b.String()
 }
